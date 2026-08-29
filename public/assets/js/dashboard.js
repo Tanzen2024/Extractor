@@ -1,0 +1,721 @@
+/**
+ * CUSTOMERS_LIST analytics dashboard — live against Oracle.
+ *
+ * The page shell ships no data. On load this fetches, in parallel:
+ *   - GET /dashboard/filter-options  (region→division→agence tree + value lists)
+ *   - GET /dashboard/stats           (KPIs + 4 chart datasets)
+ *   - GET /dashboard/rows            (first server-side page of the table)
+ *
+ * Filters are staged in the form and only sent on "Appliquer". The exact
+ * same criteria drive the KPIs, the charts, the table and the export.
+ */
+(function () {
+    'use strict';
+
+    var boot = JSON.parse(document.getElementById('bscd-dashboard-data').textContent || '{}');
+    var EP = boot.endpoints;
+
+    var PALETTE = ['#1f6fb2', '#7c3aed', '#d97706', '#1a7f4d', '#c0392b', '#0891b2', '#db2777', '#ca8a04', '#475569', '#94a3b8'];
+    var OTHER_COLOR = '#c7ccd6';
+
+    var COLUMN_LABELS = {
+        REGION: 'Région', DIVISION: 'Division', AGENCE: 'Agence', COD_CLI: 'Code client',
+        CONTRACT: 'Contrat', STATUS: 'Statut', METER_NO: 'N° compteur', CUST_NAME: 'Client',
+        PHONE_NUMBERS: 'Téléphone', E_MAIL: 'E-mail', DATE_AB: 'Date abo.',
+        DATE_RESILIATION: 'Date résil.', SEGMENTATION: 'Segmentation'
+    };
+
+    var MS_DIMS = ['region', 'division', 'agence', 'status', 'segmentation', 'segment_tresor', 'meter', 'voltage'];
+
+    var state = {
+        options: null,
+        applied: {},                 // criteria last sent to the server
+        charts: {},
+        table: { page: 1, perPage: 50, sort: 'CONTRACT', dir: 'asc', search: '' },
+        hiddenColumns: loadHiddenColumns(),
+        lastStatsAt: null,
+        exporting: false
+    };
+
+    var els = {
+        form: document.getElementById('bscdFilters'),
+        dateFrom: document.getElementById('bscdDateFrom'),
+        dateTo: document.getElementById('bscdDateTo'),
+        niuQc: document.getElementById('bscdNiuQc'),
+        chips: document.getElementById('bscdChips'),
+        globalError: document.getElementById('bscdGlobalError'),
+        globalErrorRef: document.getElementById('bscdGlobalErrorRef'),
+        cacheNote: document.getElementById('bscdCacheNote'),
+        rowCount: document.getElementById('bscdRowCount'),
+        tableHead: document.getElementById('bscdTableHead'),
+        tableBody: document.getElementById('bscdTableBody'),
+        tableEmpty: document.getElementById('bscdTableEmpty'),
+        pagination: document.getElementById('bscdPagination'),
+        search: document.getElementById('bscdSearch'),
+        perPage: document.getElementById('bscdPerPage'),
+        columnsMenu: document.getElementById('bscdColumnsMenu')
+    };
+
+    // ── helpers ────────────────────────────────────────────────────────
+    function fmt(n) { return (Number(n) || 0).toLocaleString('fr-FR'); }
+    function pct(v) { return (Number(v) || 0).toFixed(1).replace('.', ',') + ' %'; }
+    function debounce(fn, ms) { var t; return function () { var a = arguments, c = this; clearTimeout(t); t = setTimeout(function () { fn.apply(c, a); }, ms); }; }
+    function colorFor(i) { return PALETTE[i % PALETTE.length]; }
+
+    function json(url, options) {
+        return bscdFetch(url, options).then(function (data) { return data; });
+    }
+
+    function showGlobalError(ref) {
+        els.globalErrorRef.textContent = ref ? ('Référence : ' + ref) : '';
+        els.globalError.classList.remove('d-none');
+    }
+    function hideGlobalError() { els.globalError.classList.add('d-none'); }
+
+    function loadHiddenColumns() {
+        try { return JSON.parse(localStorage.getItem('bscd_hidden_cols') || '[]'); } catch (e) { return []; }
+    }
+    function saveHiddenColumns() {
+        try { localStorage.setItem('bscd_hidden_cols', JSON.stringify(state.hiddenColumns)); } catch (e) { /* private mode */ }
+    }
+
+    // ── multi-select component ─────────────────────────────────────────
+    function MultiSelect(root) {
+        this.root = root;
+        this.dim = root.dataset.dim;
+        this.values = [];
+        this.selected = [];
+        this.onChange = null;
+
+        root.innerHTML =
+            '<button type="button" class="bscd-ms__button"><span class="bscd-ms__label">Toutes</span><i class="fas fa-chevron-down"></i></button>' +
+            '<div class="bscd-ms__panel">' +
+            '  <input type="search" class="bscd-ms__filter" placeholder="Filtrer…">' +
+            '  <div class="bscd-ms__list"></div>' +
+            '</div>';
+
+        this.button = root.querySelector('.bscd-ms__button');
+        this.labelEl = root.querySelector('.bscd-ms__label');
+        this.panel = root.querySelector('.bscd-ms__panel');
+        this.list = root.querySelector('.bscd-ms__list');
+        this.filterInput = root.querySelector('.bscd-ms__filter');
+
+        var self = this;
+        this.button.addEventListener('click', function (e) { e.stopPropagation(); self.toggle(); });
+        this.filterInput.addEventListener('input', function () { self.renderList(); });
+        document.addEventListener('click', function (e) { if (!root.contains(e.target)) self.close(); });
+    }
+    MultiSelect.prototype.setOptions = function (pairs) {
+        this.values = (pairs || []).map(function (p) { return { value: p.value, count: p.count }; });
+        this.selected = this.selected.filter(function (v) { return this.values.some(function (o) { return o.value === v; }); }, this);
+        this.renderList();
+        this.renderLabel();
+    };
+    MultiSelect.prototype.renderList = function () {
+        var q = (this.filterInput.value || '').toLowerCase();
+        var self = this;
+        this.list.innerHTML = this.values
+            .filter(function (o) { return !q || o.value.toLowerCase().indexOf(q) !== -1; })
+            .map(function (o) {
+                var checked = self.selected.indexOf(o.value) !== -1 ? 'checked' : '';
+                return '<label class="bscd-ms__opt"><input type="checkbox" value="' + escapeAttr(o.value) + '" ' + checked + '>' +
+                    '<span>' + escapeHtml(o.value) + '</span><em>' + fmt(o.count) + '</em></label>';
+            }).join('') || '<div class="bscd-ms__none">Aucune valeur</div>';
+
+        this.list.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
+            cb.addEventListener('change', function () {
+                if (cb.checked) { if (self.selected.indexOf(cb.value) === -1) self.selected.push(cb.value); }
+                else { self.selected = self.selected.filter(function (v) { return v !== cb.value; }); }
+                self.renderLabel();
+                if (self.onChange) self.onChange();
+            });
+        });
+    };
+    MultiSelect.prototype.renderLabel = function () {
+        if (this.selected.length === 0) { this.labelEl.textContent = 'Toutes'; this.root.classList.remove('is-active'); }
+        else if (this.selected.length === 1) { this.labelEl.textContent = this.selected[0]; this.root.classList.add('is-active'); }
+        else { this.labelEl.textContent = this.selected.length + ' sélectionnées'; this.root.classList.add('is-active'); }
+    };
+    MultiSelect.prototype.toggle = function () { this.panel.classList.toggle('is-open'); };
+    MultiSelect.prototype.close = function () { this.panel.classList.remove('is-open'); };
+    MultiSelect.prototype.getValues = function () { return this.selected.slice(); };
+    MultiSelect.prototype.setValues = function (vals) { this.selected = (vals || []).slice(); this.renderList(); this.renderLabel(); };
+    MultiSelect.prototype.clear = function () { this.selected = []; this.renderList(); this.renderLabel(); };
+
+    function escapeHtml(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+    function escapeAttr(s) { return escapeHtml(s); }
+
+    var ms = {};
+    MS_DIMS.forEach(function (dim) {
+        var root = document.querySelector('.bscd-ms[data-dim="' + dim + '"]');
+        if (root) ms[dim] = new MultiSelect(root);
+    });
+
+    // ── geo cascade ───────────────────────────────────────────────────
+    function refreshCascade() {
+        if (!state.options) return;
+        var tree = state.options.geoTree || {};
+        var regions = ms.region.getValues();
+        var scopeRegions = regions.length ? regions : Object.keys(tree);
+
+        var divisionPairs = [];
+        var seenDiv = {};
+        scopeRegions.forEach(function (r) {
+            Object.keys(tree[r] || {}).forEach(function (d) {
+                if (!seenDiv[d]) { seenDiv[d] = 0; }
+                (tree[r][d] || []).forEach(function (a) { seenDiv[d] += a.count; });
+            });
+        });
+        Object.keys(seenDiv).forEach(function (d) { divisionPairs.push({ value: d, count: seenDiv[d] }); });
+        divisionPairs.sort(function (a, b) { return b.count - a.count; });
+        ms.division.setOptions(divisionPairs);
+
+        var divisions = ms.division.getValues();
+        var scopeDivisions = divisions.length ? divisions : Object.keys(seenDiv);
+        var agencePairs = [];
+        var seenAg = {};
+        scopeRegions.forEach(function (r) {
+            Object.keys(tree[r] || {}).forEach(function (d) {
+                if (scopeDivisions.indexOf(d) === -1) return;
+                (tree[r][d] || []).forEach(function (a) { seenAg[a.value] = (seenAg[a.value] || 0) + a.count; });
+            });
+        });
+        Object.keys(seenAg).forEach(function (a) { agencePairs.push({ value: a, count: seenAg[a] }); });
+        agencePairs.sort(function (a, b) { return b.count - a.count; });
+        ms.agence.setOptions(agencePairs);
+    }
+
+    ms.region.onChange = function () { refreshCascade(); };
+    ms.division.onChange = function () { refreshCascade(); };
+
+    // ── filter form <-> criteria ──────────────────────────────────────
+    function readForm() {
+        var c = {};
+        if (els.dateFrom.value) c.date_from = els.dateFrom.value;
+        if (els.dateTo.value) c.date_to = els.dateTo.value;
+        MS_DIMS.forEach(function (dim) {
+            var v = ms[dim].getValues();
+            if (v.length) c[dim] = v;
+        });
+        if (els.niuQc.value) c.niu_qc = els.niuQc.value;
+        return c;
+    }
+
+    function toParams(c) {
+        var p = new URLSearchParams();
+        Object.keys(c).forEach(function (k) {
+            var v = c[k];
+            // Bracket notation so PHP/CI4 parses repeated values as an array
+            // (a bare "region=A&region=B" collapses to the last value).
+            if (Array.isArray(v)) v.forEach(function (x) { p.append(k + '[]', x); });
+            else p.append(k, v);
+        });
+        return p;
+    }
+
+    var FILTER_LABELS = {
+        date_from: 'Depuis', date_to: "Jusqu'au", region: 'Région', division: 'Division',
+        agence: 'Agence', status: 'Statut', segmentation: 'Segmentation',
+        segment_tresor: 'Segment trésor', meter: 'Compteur', voltage: 'Tension', niu_qc: 'NIU_QC'
+    };
+
+    function filterText(k, v) {
+        if (k === 'niu_qc') return v === '0' ? 'Valide' : 'À contrôler';
+        return Array.isArray(v) ? v.join(', ') : v;
+    }
+
+    function renderChips() {
+        var c = state.applied;
+        var chips = [];
+        Object.keys(c).forEach(function (k) {
+            var text = filterText(k, c[k]);
+            chips.push('<span class="bscd-chip" data-chip="' + k + '">' + escapeHtml(FILTER_LABELS[k] || k) + ' : ' +
+                escapeHtml(text) + '<button type="button" aria-label="Retirer">&times;</button></span>');
+        });
+        els.chips.innerHTML = chips.join('');
+        els.chips.querySelectorAll('.bscd-chip button').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var key = btn.parentNode.dataset.chip;
+                if (key === 'date_from') els.dateFrom.value = '';
+                else if (key === 'date_to') els.dateTo.value = '';
+                else if (key === 'niu_qc') els.niuQc.value = '';
+                else if (ms[key]) ms[key].clear();
+                refreshCascade();
+                apply();
+            });
+        });
+    }
+
+    // ── data loads ────────────────────────────────────────────────────
+    function loadFilterOptions(fresh) {
+        return json(EP.filterOptions + (fresh ? '?fresh=1' : '')).then(function (data) {
+            if (data.error) throw data;
+            state.options = data;
+
+            var bounds = data.dateBounds || {};
+            [els.dateFrom, els.dateTo].forEach(function (input) {
+                if (bounds.min) input.min = bounds.min;
+                if (bounds.max) input.max = bounds.max;
+            });
+
+            ms.region.setOptions(data.regions);
+            ms.status.setOptions(data.statuses);
+            ms.segmentation.setOptions(data.segmentations);
+            ms.segment_tresor.setOptions(data.segmentsTresor);
+            ms.meter.setOptions(data.meters);
+            ms.voltage.setOptions(data.voltages);
+            refreshCascade();
+        });
+    }
+
+    function loadStats(fresh) {
+        setKpiSkeleton(true);
+        var url = EP.stats + '?' + toParams(state.applied).toString() + (fresh ? '&fresh=1' : '');
+        return json(url).then(function (data) {
+            if (data.error) throw data;
+            renderKpis(data);
+            renderCharts(data);
+            state.lastStatsAt = Date.now();
+            updateCacheNote();
+        });
+    }
+
+    var rowsSeq = 0;
+
+    function loadRows(fresh) {
+        var params = toParams(state.applied);
+        params.set('page', state.table.page);
+        params.set('per_page', state.table.perPage);
+        params.set('sort', state.table.sort);
+        params.set('dir', state.table.dir);
+        if (state.table.search) params.set('search', state.table.search);
+        if (fresh) params.set('fresh', '1');
+
+        var seq = ++rowsSeq; // only the most recent call is allowed to render
+        els.rowCount.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>';
+        els.tableBody.classList.add('is-loading');
+
+        return json(EP.rows + '?' + params.toString()).then(function (data) {
+            if (seq !== rowsSeq) return; // superseded by a newer request
+            els.tableBody.classList.remove('is-loading');
+            if (data.error) {
+                if (data.error === 'filter') { els.rowCount.textContent = data.message; return; }
+                throw data;
+            }
+            renderTable(data);
+        });
+    }
+
+    // ── renderers ─────────────────────────────────────────────────────
+    function setKpiSkeleton(on) {
+        ['total', 'actifs', 'avecCompteur', 'contacts'].forEach(function (k) {
+            var v = document.querySelector('[data-kpi="' + k + '"]');
+            var s = document.querySelector('[data-kpi-sub="' + k + '"]');
+            if (on) { v.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>'; s.innerHTML = '&nbsp;'; }
+        });
+    }
+
+    function renderKpis(stats) {
+        var k = stats.kpis;
+        state.filterTotal = stats.totalRows; // filter-only count (no search) — used by the export modal
+        document.querySelector('[data-kpi="total"]').textContent = fmt(k.total);
+        document.querySelector('[data-kpi-sub="total"]').textContent = 'contrats correspondant aux filtres';
+        [['actifs', k.actifs], ['avecCompteur', k.avecCompteur], ['contacts', k.contacts]].forEach(function (pair) {
+            document.querySelector('[data-kpi="' + pair[0] + '"]').textContent = fmt(pair[1].value);
+            document.querySelector('[data-kpi-sub="' + pair[0] + '"]').textContent = pct(pair[1].pct) + ' du total';
+        });
+    }
+
+    function destroyChart(id) { if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; } }
+
+    function renderCharts(stats) {
+        var ch = stats.charts;
+        bar('bscdChartRegion', ch.region, true);
+        donut('bscdChartStatus', ch.status);
+        bar('bscdChartSegmentation', ch.segmentation, false);
+        completenessBar('bscdChartCompleteness', ch.completeness);
+    }
+
+    function bar(canvasId, pairs, horizontal) {
+        destroyChart(canvasId);
+        var canvas = document.getElementById(canvasId);
+        pairs = pairs || [];
+        var total = pairs.reduce(function (s, p) { return s + p.count; }, 0);
+        state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: pairs.map(function (p) { return p.value; }),
+                datasets: [{
+                    data: pairs.map(function (p) { return p.count; }),
+                    backgroundColor: pairs.map(function (p, i) { return p.value === 'Autres' ? OTHER_COLOR : colorFor(i); }),
+                    borderRadius: 3, maxBarThickness: 26
+                }]
+            },
+            options: {
+                indexAxis: horizontal ? 'y' : 'x',
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: function (ctx) {
+                        var val = horizontal ? ctx.parsed.x : ctx.parsed.y;
+                        return fmt(val) + (total ? ' (' + pct(val / total * 100) + ')' : '');
+                    } } }
+                },
+                scales: (function () {
+                    var s = {};
+                    s[horizontal ? 'x' : 'y'] = { ticks: { callback: function (v) { return fmt(v); } } };
+                    return s;
+                })()
+            }
+        });
+    }
+
+    function donut(canvasId, pairs) {
+        destroyChart(canvasId);
+        var canvas = document.getElementById(canvasId);
+        pairs = foldTail(pairs || [], 6);
+        var total = pairs.reduce(function (s, p) { return s + p.count; }, 0);
+        state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                labels: pairs.map(function (p) { return p.value; }),
+                datasets: [{ data: pairs.map(function (p) { return p.count; }),
+                    backgroundColor: pairs.map(function (p, i) { return p.value === 'Autres' ? OTHER_COLOR : colorFor(i); }), borderWidth: 0 }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, cutout: '62%',
+                plugins: {
+                    legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } },
+                    tooltip: { callbacks: { label: function (ctx) {
+                        return ctx.label + ': ' + fmt(ctx.parsed) + (total ? ' (' + pct(ctx.parsed / total * 100) + ')' : '');
+                    } } }
+                }
+            }
+        });
+    }
+
+    function completenessBar(canvasId, rows) {
+        destroyChart(canvasId);
+        var canvas = document.getElementById(canvasId);
+        rows = rows || [];
+        state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: rows.map(function (r) { return r.field; }),
+                datasets: [{
+                    data: rows.map(function (r) { return r.pct; }),
+                    backgroundColor: rows.map(function (r) { return r.pct >= 90 ? '#1a7f4d' : (r.pct >= 50 ? '#d97706' : '#c0392b'); }),
+                    borderRadius: 3, maxBarThickness: 22
+                }]
+            },
+            options: {
+                indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (ctx) { return pct(ctx.parsed.x); } } } },
+                scales: { x: { min: 0, max: 100, ticks: { callback: function (v) { return v + ' %'; } } } }
+            }
+        });
+    }
+
+    function foldTail(pairs, topN) {
+        if (pairs.length <= topN) return pairs;
+        var head = pairs.slice(0, topN - 1);
+        var rest = pairs.slice(topN - 1).reduce(function (s, p) { return s + p.count; }, 0);
+        return head.concat([{ value: 'Autres', count: rest }]);
+    }
+
+    function visibleColumns() {
+        return boot.tableColumns.filter(function (c) { return state.hiddenColumns.indexOf(c) === -1; });
+    }
+
+    function renderTable(data) {
+        state.lastRows = data;
+        state.table.page = data.page;
+        state.table.total = data.total;
+
+        els.rowCount.textContent = fmt(data.total) + ' résultat' + (data.total > 1 ? 's' : '') +
+            (isFiltered() ? ' correspondant aux filtres' : '');
+
+        var cols = visibleColumns();
+        els.tableHead.innerHTML = cols.map(function (col) {
+            var sortable = boot.sortable.indexOf(col) !== -1;
+            var arrow = '';
+            if (state.table.sort === col) arrow = state.table.dir === 'asc' ? ' ▲' : ' ▼';
+            return '<th' + (sortable ? ' class="is-sortable" data-sort="' + col + '"' : '') + '>' +
+                escapeHtml(COLUMN_LABELS[col] || col) + arrow + '</th>';
+        }).join('');
+
+        els.tableHead.querySelectorAll('th.is-sortable').forEach(function (th) {
+            th.addEventListener('click', function () {
+                var col = th.dataset.sort;
+                if (state.table.sort === col) state.table.dir = state.table.dir === 'asc' ? 'desc' : 'asc';
+                else { state.table.sort = col; state.table.dir = 'asc'; }
+                state.table.page = 1;
+                loadRows().catch(handleError);
+            });
+        });
+
+        if (!data.data.length) {
+            els.tableBody.innerHTML = '';
+            els.tableEmpty.classList.remove('d-none');
+        } else {
+            els.tableEmpty.classList.add('d-none');
+            els.tableBody.innerHTML = data.data.map(function (row) {
+                return '<tr>' + cols.map(function (col) {
+                    return '<td>' + escapeHtml(row[col] == null ? '' : row[col]) + '</td>';
+                }).join('') + '</tr>';
+            }).join('');
+        }
+
+        renderPagination(data);
+    }
+
+    function renderPagination(data) {
+        var pages = Math.max(1, Math.ceil(data.total / data.perPage));
+        var cur = data.page;
+        if (pages <= 1) { els.pagination.innerHTML = ''; return; }
+
+        var btns = [];
+        btns.push(pageBtn('«', cur - 1, cur === 1));
+        var start = Math.max(1, cur - 2), end = Math.min(pages, start + 4);
+        start = Math.max(1, end - 4);
+        if (start > 1) { btns.push(pageBtn('1', 1, false)); if (start > 2) btns.push('<span class="bscd-page-gap">…</span>'); }
+        for (var i = start; i <= end; i++) btns.push(pageBtn(String(i), i, false, i === cur));
+        if (end < pages) { if (end < pages - 1) btns.push('<span class="bscd-page-gap">…</span>'); btns.push(pageBtn(String(pages), pages, false)); }
+        btns.push(pageBtn('»', cur + 1, cur === pages));
+
+        els.pagination.innerHTML = '<div class="bscd-page-info">Page ' + cur + ' / ' + fmt(pages) + '</div><div class="bscd-page-btns">' + btns.join('') + '</div>';
+        els.pagination.querySelectorAll('button[data-page]').forEach(function (b) {
+            b.addEventListener('click', function () {
+                state.table.page = parseInt(b.dataset.page, 10);
+                loadRows().catch(handleError);
+                window.scrollTo({ top: els.rowCount.getBoundingClientRect().top + window.scrollY - 80, behavior: 'smooth' });
+            });
+        });
+    }
+    function pageBtn(label, page, disabled, active) {
+        return '<button type="button" data-page="' + page + '"' + (disabled ? ' disabled' : '') +
+            (active ? ' class="is-active"' : '') + '>' + label + '</button>';
+    }
+
+    function renderColumnsMenu() {
+        els.columnsMenu.innerHTML = boot.tableColumns.map(function (col) {
+            var checked = state.hiddenColumns.indexOf(col) === -1 ? 'checked' : '';
+            return '<label class="dropdown-item bscd-col-opt"><input type="checkbox" value="' + col + '" ' + checked + '> ' +
+                escapeHtml(COLUMN_LABELS[col] || col) + '</label>';
+        }).join('');
+        els.columnsMenu.querySelectorAll('input').forEach(function (cb) {
+            cb.addEventListener('change', function () {
+                if (cb.checked) state.hiddenColumns = state.hiddenColumns.filter(function (c) { return c !== cb.value; });
+                else if (state.hiddenColumns.indexOf(cb.value) === -1) state.hiddenColumns.push(cb.value);
+                saveHiddenColumns();
+                if (state.lastRows) renderTable(state.lastRows);
+            });
+        });
+        els.columnsMenu.addEventListener('click', function (e) { e.stopPropagation(); });
+    }
+
+    function updateCacheNote() {
+        if (!state.lastStatsAt) { els.cacheNote.textContent = ''; return; }
+        els.cacheNote.textContent = 'Actualisé ' + timeAgo(state.lastStatsAt);
+    }
+    function timeAgo(ts) {
+        var s = Math.round((Date.now() - ts) / 1000);
+        if (s < 60) return "à l'instant";
+        var m = Math.round(s / 60);
+        return 'il y a ' + m + ' min';
+    }
+
+    function isFiltered() { return Object.keys(state.applied).length > 0; }
+
+    // ── apply / errors ────────────────────────────────────────────────
+    function apply() {
+        state.applied = readForm();
+        state.table.page = 1;
+        renderChips();
+        hideGlobalError();
+        return Promise.all([
+            loadStats().catch(handleError),
+            loadRows().catch(handleError)
+        ]);
+    }
+
+    function handleError(err) {
+        if (err && err.error === 'filter') { alert(err.message || 'Filtre invalide.'); return; }
+        showGlobalError(err && err.reference);
+    }
+
+    // ── export ────────────────────────────────────────────────────────
+    var currentExportFormat = 'csv';
+    var exportLocked = false; // true once a launch has resolved to a terminal state (empty result); next click closes
+
+    function openExportModal(format) {
+        currentExportFormat = format;
+        document.getElementById('bscdExportFormat').textContent = format === 'xlsx' ? 'Excel (.xlsx)' : 'CSV';
+
+        // The export applies the filters only (never the table search box),
+        // so show the filter-only count from the last stats call.
+        var total = state.filterTotal != null ? state.filterTotal : state.table.total;
+        document.getElementById('bscdExportCount').textContent = total != null ? fmt(total) : '…';
+
+        var rows = Object.keys(state.applied).map(function (k) {
+            return '<div><strong>' + escapeHtml(FILTER_LABELS[k] || k) + '</strong> : ' +
+                escapeHtml(filterText(k, state.applied[k])) + '</div>';
+        });
+        if (state.table.search) {
+            rows.push('<div class="text-muted mt-1"><em>La recherche « ' + escapeHtml(state.table.search) +
+                ' » n\'est pas appliquée à l\'export.</em></div>');
+        }
+        document.getElementById('bscdExportFilters').innerHTML = rows.length
+            ? rows.join('')
+            : '<div class="text-muted">Aucun filtre — tout le référentiel.</div>';
+
+        var status = document.getElementById('bscdExportStatus');
+        status.classList.add('d-none'); status.innerHTML = '';
+        var launch = document.getElementById('bscdExportLaunch');
+        launch.disabled = false;
+        launch.textContent = "Lancer l'export";
+        exportLocked = false;
+
+        $('#bscdExportModal').modal('show');
+    }
+
+    function exportFail(msg, canRetry) {
+        var btn = document.getElementById('bscdExportLaunch');
+        var status = document.getElementById('bscdExportStatus');
+        status.classList.remove('d-none');
+        status.innerHTML = '<span class="text-danger">' + escapeHtml(msg) + '</span>';
+        btn.disabled = false;
+        if (canRetry === false) {
+            exportLocked = true;
+            btn.textContent = 'Fermer';
+        } else {
+            btn.textContent = 'Réessayer';
+        }
+    }
+
+    function launchExport() {
+        if (exportLocked) { $('#bscdExportModal').modal('hide'); return; }
+
+        var btn = document.getElementById('bscdExportLaunch');
+        var status = document.getElementById('bscdExportStatus');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Préparation…';
+
+        var body = toParams(state.applied);
+        body.set('format', currentExportFormat);
+
+        bscdFetch(EP.export, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() })
+            .then(function (res) {
+                // Anything without a recognised "mode" is a failure (a 403
+                // from a stale CSRF token, a 500, a redirect to login, ...) —
+                // never fall through to the async branch with no job id.
+                if (!res || (res.mode !== 'sync' && res.mode !== 'async' && res.mode !== 'empty')) {
+                    exportFail("L'export n'a pas pu démarrer. Rechargez la page puis réessayez.");
+                    return;
+                }
+                if (res.error) {
+                    exportFail('Échec : ' + (res.reference || res.message || res.error));
+                    return;
+                }
+                if (res.mode === 'empty') {
+                    exportFail('Aucune ligne ne correspond aux filtres — rien à exporter.', false);
+                    return;
+                }
+                if (res.mode === 'sync') {
+                    status.classList.remove('d-none');
+                    status.textContent = 'Export de ' + fmt(res.count) + ' ligne(s) — téléchargement…';
+                    window.location = res.downloadUrl;
+                    setTimeout(function () { $('#bscdExportModal').modal('hide'); }, 1800);
+                    return;
+                }
+                pollJob(res.jobId, res.count);
+            })
+            .catch(function () {
+                exportFail('Erreur réseau. Réessayez.');
+            });
+    }
+
+    function pollJob(jobId, count) {
+        var status = document.getElementById('bscdExportStatus');
+        var btn = document.getElementById('bscdExportLaunch');
+
+        if (!jobId) { exportFail("L'export n'a pas pu être mis en file. Rechargez la page."); return; }
+
+        status.classList.remove('d-none');
+        status.textContent = 'Export volumineux' + (count ? ' (' + fmt(count) + ' lignes)' : '') +
+            ' mis en file. Préparation en arrière-plan…';
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> En cours…';
+
+        var url = EP.jobStatus + '/' + jobId;
+        var timer = setInterval(function () {
+            bscdFetch(url).then(function (job) {
+                if (job.status === 'done') {
+                    clearInterval(timer);
+                    exportLocked = true;
+                    status.innerHTML = 'Fichier prêt (' + fmt(Math.round((job.fileSize || 0) / 1048576)) + ' Mo). ' +
+                        '<a class="btn btn-sm btn-success ml-2" href="' + job.downloadUrl + '">Télécharger</a>';
+                    btn.textContent = 'Fermer';
+                    btn.disabled = false;
+                } else if (job.status === 'error') {
+                    clearInterval(timer);
+                    exportLocked = true;
+                    status.innerHTML = '<span class="text-danger">Échec de l\'export (' + escapeHtml(job.reference || '') + ').</span>';
+                    btn.textContent = 'Fermer'; btn.disabled = false;
+                }
+            }).catch(function () { /* transient — keep polling */ });
+        }, 3000);
+    }
+
+    // ── wiring ────────────────────────────────────────────────────────
+    els.form.addEventListener('submit', function (e) { e.preventDefault(); apply(); });
+    document.getElementById('bscdReset').addEventListener('click', resetFilters);
+    document.querySelectorAll('[data-reset-filters]').forEach(function (b) { b.addEventListener('click', resetFilters); });
+    document.getElementById('bscdToggleAdvanced').addEventListener('click', function () {
+        document.getElementById('bscdAdvanced').classList.toggle('d-none');
+    });
+    document.getElementById('bscdRefresh').addEventListener('click', function () {
+        loadFilterOptions(true).then(function () { return Promise.all([loadStats(true), loadRows(true)]); }).catch(handleError);
+    });
+    document.getElementById('bscdRetry').addEventListener('click', function () { bootstrapAll(); });
+
+    els.search.addEventListener('input', debounce(function () {
+        state.table.search = els.search.value.trim();
+        state.table.page = 1;
+        loadRows().catch(handleError);
+    }, 350));
+    els.perPage.addEventListener('change', function () {
+        state.table.perPage = parseInt(els.perPage.value, 10);
+        state.table.page = 1;
+        loadRows().catch(handleError);
+    });
+    document.querySelectorAll('[data-export]').forEach(function (b) {
+        b.addEventListener('click', function () { openExportModal(b.dataset.export); });
+    });
+    document.getElementById('bscdExportLaunch').addEventListener('click', launchExport);
+
+    function resetFilters() {
+        els.dateFrom.value = ''; els.dateTo.value = ''; els.niuQc.value = '';
+        MS_DIMS.forEach(function (d) { ms[d].clear(); });
+        refreshCascade();
+        apply();
+    }
+
+    function bootstrapAll() {
+        hideGlobalError();
+        renderColumnsMenu();
+        // Fresh start: clear the staged form and chips so nothing on screen
+        // contradicts the unfiltered data we are about to load.
+        els.dateFrom.value = ''; els.dateTo.value = ''; els.niuQc.value = ''; els.search.value = '';
+        MS_DIMS.forEach(function (d) { ms[d].clear(); });
+        state.applied = {};
+        state.table.search = '';
+        state.table.page = 1;
+        renderChips();
+        loadFilterOptions().then(function () {
+            return Promise.all([loadStats().catch(handleError), loadRows().catch(handleError)]);
+        }).catch(handleError);
+    }
+
+    bootstrapAll();
+    setInterval(updateCacheNote, 30000);
+})();
