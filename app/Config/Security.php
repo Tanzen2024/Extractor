@@ -70,8 +70,17 @@ class Security extends BaseConfig
      * --------------------------------------------------------------------------
      *
      * Regenerate CSRF Token on every submission.
+     *
+     * Kept false on purpose: with $csrfProtection = 'cookie' the token lives in
+     * a single cookie shared by every tab. Rotating it after each validated POST
+     * invalidates the token already embedded in any other open page (second tab,
+     * the back button / bfcache, a double-clicked submit button), which then
+     * fails CSRF validation with SecurityException::forDisallowedAction()
+     * ("The action you requested is not allowed."). A fixed per-session token is
+     * still secret, unguessable and validated server-side, so CSRF protection is
+     * unchanged. See CodeIgniter user guide, Security > "CSRF Regenerate".
      */
-    public bool $regenerate = true;
+    public bool $regenerate = false;
 
     /**
      * --------------------------------------------------------------------------
