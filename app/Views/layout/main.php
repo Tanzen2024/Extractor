@@ -30,8 +30,9 @@
             <li class="nav-item dropdown">
                 <a class="nav-link" data-toggle="dropdown" href="#">
                     <i class="fas fa-user-circle mr-1"></i>
-                    <?= esc(session('fullName') ?? session('username')) ?>
-                    <span class="badge badge-secondary ml-1"><?= esc(session('roleName')) ?></span>
+                    <?= esc(session('display_name') ?? session('username')) ?>
+                    <?php $navRoles = (array) (session('roles') ?? []); ?>
+                    <span class="badge badge-secondary ml-1"><?= esc($navRoles[0] ?? '—') ?></span>
                 </a>
                 <div class="dropdown-menu dropdown-menu-right">
                     <a href="<?= site_url('logout') ?>" class="dropdown-item">
@@ -50,72 +51,59 @@
 
         <div class="sidebar">
             <nav class="mt-2">
+                <?php
+                    $uri            = uri_string();
+                    $canUsers       = user_can('USER_VIEW');
+                    $canRoles       = user_can('ROLE_VIEW');
+                    $canPermissions = user_can('PERMISSION_VIEW');
+                    $canAudit       = user_can('AUDIT_VIEW');
+                ?>
                 <ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" role="menu">
                     <li class="nav-item">
-                        <a href="<?= site_url('dashboard') ?>" class="nav-link <?= (uri_string() === 'dashboard' || uri_string() === '') ? 'active' : '' ?>">
+                        <a href="<?= site_url('dashboard') ?>" class="nav-link <?= ($uri === 'dashboard' || $uri === '') ? 'active' : '' ?>">
                             <i class="nav-icon fas fa-th-large"></i>
                             <p>Dashboard</p>
                         </a>
                     </li>
 
-                    <li class="nav-item">
-                        <a href="<?= site_url('extractor') ?>" class="nav-link <?= (uri_string() === 'extractor' || str_starts_with(uri_string(), 'extractions/')) ? 'active' : '' ?>">
-                            <i class="nav-icon fas fa-file-export"></i>
-                            <p>EXTRACTOR</p>
-                        </a>
-                    </li>
-
-                    <li class="nav-item">
-                        <a href="#" class="nav-link disabled" title="Disponible en phase 6">
-                            <i class="nav-icon fas fa-history"></i>
-                            <p>Historique <span class="badge badge-secondary right">Bientôt</span></p>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="#" class="nav-link disabled" title="Disponible en phase 6">
-                            <i class="nav-icon fas fa-clipboard-list"></i>
-                            <p>Audit <span class="badge badge-secondary right">Bientôt</span></p>
-                        </a>
-                    </li>
-
-                    <?php if (session('roleCode') === 'ADMIN'): ?>
+                    <?php if ($canUsers || $canRoles || $canPermissions || $canAudit): ?>
                     <li class="nav-header">ADMINISTRATION</li>
+
+                    <?php if ($canUsers): ?>
                     <li class="nav-item">
-                        <a href="#" class="nav-link disabled">
-                            <i class="nav-icon fas fa-users-cog"></i>
-                            <p>Utilisateurs <span class="badge badge-secondary right">Bientôt</span></p>
+                        <a href="<?= site_url('admin/users') ?>" class="nav-link <?= ($uri === 'admin/users' || preg_match('#^admin/users/\d#', $uri)) ? 'active' : '' ?>">
+                            <i class="nav-icon fas fa-user"></i>
+                            <p>Utilisateur</p>
                         </a>
                     </li>
+                    <?php endif; ?>
+
+                    <?php if ($canRoles): ?>
                     <li class="nav-item">
-                        <a href="#" class="nav-link disabled">
+                        <a href="<?= site_url('admin/users/roles') ?>" class="nav-link <?= str_starts_with($uri, 'admin/users/roles') ? 'active' : '' ?>">
                             <i class="nav-icon fas fa-user-shield"></i>
-                            <p>Rôles <span class="badge badge-secondary right">Bientôt</span></p>
+                            <p>Rôles</p>
                         </a>
                     </li>
+                    <?php endif; ?>
+
+                    <?php if ($canPermissions): ?>
                     <li class="nav-item">
-                        <a href="#" class="nav-link disabled">
+                        <a href="<?= site_url('admin/users/permissions') ?>" class="nav-link <?= str_starts_with($uri, 'admin/users/permissions') ? 'active' : '' ?>">
                             <i class="nav-icon fas fa-key"></i>
-                            <p>Permissions <span class="badge badge-secondary right">Bientôt</span></p>
+                            <p>Permissions</p>
                         </a>
                     </li>
+                    <?php endif; ?>
+
+                    <?php if ($canAudit): ?>
                     <li class="nav-item">
-                        <a href="#" class="nav-link disabled">
-                            <i class="nav-icon fas fa-layer-group"></i>
-                            <p>Modules <span class="badge badge-secondary right">Bientôt</span></p>
+                        <a href="<?= site_url('admin/audit') ?>" class="nav-link <?= str_starts_with($uri, 'admin/audit') ? 'active' : '' ?>">
+                            <i class="nav-icon fas fa-clipboard-list"></i>
+                            <p>Audit</p>
                         </a>
                     </li>
-                    <li class="nav-item">
-                        <a href="#" class="nav-link disabled">
-                            <i class="nav-icon fas fa-toolbox"></i>
-                            <p>Outils <span class="badge badge-secondary right">Bientôt</span></p>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="<?= site_url('admin/oracle') ?>" class="nav-link <?= uri_string() === 'admin/oracle' ? 'active' : '' ?>">
-                            <i class="nav-icon fas fa-plug"></i>
-                            <p>Oracle</p>
-                        </a>
-                    </li>
+                    <?php endif; ?>
                     <?php endif; ?>
                 </ul>
             </nav>
@@ -166,6 +154,7 @@
 
 <script src="<?= base_url('assets/vendor/jquery/jquery.min.js') ?>"></script>
 <script src="<?= base_url('assets/vendor/bootstrap/bootstrap.bundle.min.js') ?>"></script>
+<script src="<?= base_url('assets/js/frdatepicker.js') ?>"></script>
 <script src="<?= base_url('assets/js/app.js') ?>"></script>
 <?= $this->renderSection('scripts') ?>
 </body>

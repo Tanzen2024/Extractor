@@ -29,7 +29,7 @@ final class CustomerListExportIntegrityTest extends TestCase
                 'PHONE_NUMBERS' => '0123456789', 'E_MAIL' => 'e@example.com', 'REF_GEO' => 'G001',
                 'DATE_AB' => '15-JAN-20', 'DATE_RESILIATION' => null, 'VOLTAGE' => '220',
                 'SEGMENT_TRESOR' => 'T1', 'METER' => 'PREPAID', 'NIU_RIGHT' => 'P123456789012A',
-                'NIU_QC' => 0, 'LAST_VC_DATE' => '01-AUG-26', 'SEGMENT_RFM_2' => 'RFM 1',
+                'NUI_QC' => 0, 'LAST_VC_DATE' => '01-AUG-26', 'SEGMENT_RFM_2' => 'RFM 1',
                 'POSTPAID_PROFILE_DATE' => null, 'SEGMENTATION' => 'RFM 1',
             ],
             [
@@ -39,7 +39,7 @@ final class CustomerListExportIntegrityTest extends TestCase
                 'PHONE_NUMBERS' => null, 'E_MAIL' => null, 'REF_GEO' => 'G002',
                 'DATE_AB' => '02-FEB-19', 'DATE_RESILIATION' => '10-JUL-26', 'VOLTAGE' => '380',
                 'SEGMENT_TRESOR' => 'T2', 'METER' => 'POSTPAID', 'NIU_RIGHT' => null,
-                'NIU_QC' => 1, 'LAST_VC_DATE' => null, 'SEGMENT_RFM_2' => null,
+                'NUI_QC' => 1, 'LAST_VC_DATE' => null, 'SEGMENT_RFM_2' => null,
                 'POSTPAID_PROFILE_DATE' => '01-JUN-26', 'SEGMENTATION' => 'Standard',
             ],
             [
@@ -49,7 +49,7 @@ final class CustomerListExportIntegrityTest extends TestCase
                 'PHONE_NUMBERS' => '0987654321', 'E_MAIL' => 'x@y.z', 'REF_GEO' => 'G003',
                 'DATE_AB' => '20-MAR-21', 'DATE_RESILIATION' => null, 'VOLTAGE' => '220',
                 'SEGMENT_TRESOR' => 'T3', 'METER' => 'Compteurs Communicants', 'NIU_RIGHT' => 'M987654321098Z',
-                'NIU_QC' => 0, 'LAST_VC_DATE' => null, 'SEGMENT_RFM_2' => null,
+                'NUI_QC' => 0, 'LAST_VC_DATE' => null, 'SEGMENT_RFM_2' => null,
                 'POSTPAID_PROFILE_DATE' => null, 'SEGMENTATION' => '8 Autre',
             ],
         ];

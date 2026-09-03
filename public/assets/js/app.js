@@ -25,7 +25,28 @@ function bscdFetch(url, options = {}) {
         if (fresh && meta) {
             meta.content = fresh;
         }
-        return response.json();
+
+        // Read the body as text first so a non-JSON response (a CSRF/500 error
+        // page, a redirect to /login, ...) becomes a structured error the
+        // callers can display — instead of a bare JSON.parse SyntaxError that
+        // hides the real HTTP status. A JSON error body ({error, ...}) is
+        // returned untouched; callers already branch on `data.error`.
+        return response.text().then((body) => {
+            let data;
+            try {
+                data = body ? JSON.parse(body) : {};
+            } catch (e) {
+                return {
+                    error: 'http',
+                    status: response.status,
+                    message: 'Réponse inattendue du serveur (HTTP ' + response.status + ').'
+                };
+            }
+            if (data && typeof data === 'object' && data.error && data.status === undefined) {
+                data.status = response.status;
+            }
+            return data;
+        });
     });
 }
 

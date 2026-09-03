@@ -27,6 +27,10 @@
 
     var MS_DIMS = ['region', 'division', 'agence', 'status', 'segmentation', 'segment_tresor', 'meter', 'voltage'];
 
+    // Table columns that carry a date — displayed dd/mm/yyyy (the wire value
+    // stays ISO: filters/sort/SQL are untouched).
+    var DATE_COLUMNS = ['DATE_AB', 'DATE_RESILIATION'];
+
     var state = {
         options: null,
         applied: {},                 // criteria last sent to the server
@@ -59,6 +63,15 @@
     // ── helpers ────────────────────────────────────────────────────────
     function fmt(n) { return (Number(n) || 0).toLocaleString('fr-FR'); }
     function pct(v) { return (Number(v) || 0).toFixed(1).replace('.', ',') + ' %'; }
+
+    // "2026-09-03" or "2026-09-03 14:30:00" -> "03/09/2026". Empty/invalid ->
+    // returned as-is (never "Invalid Date"). String-only: no new Date(), so a
+    // plain YYYY-MM-DD is never shifted by the browser timezone.
+    function frDate(v) {
+        if (v == null || v === '') { return ''; }
+        var m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        return m ? m[3] + '/' + m[2] + '/' + m[1] : String(v);
+    }
     function debounce(fn, ms) { var t; return function () { var a = arguments, c = this; clearTimeout(t); t = setTimeout(function () { fn.apply(c, a); }, ms); }; }
     function colorFor(i) { return PALETTE[i % PALETTE.length]; }
 
@@ -221,6 +234,7 @@
 
     function filterText(k, v) {
         if (k === 'niu_qc') return v === '0' ? 'Valide' : 'À contrôler';
+        if (k === 'date_from' || k === 'date_to') return frDate(v);
         return Array.isArray(v) ? v.join(', ') : v;
     }
 
@@ -236,8 +250,8 @@
         els.chips.querySelectorAll('.bscd-chip button').forEach(function (btn) {
             btn.addEventListener('click', function () {
                 var key = btn.parentNode.dataset.chip;
-                if (key === 'date_from') els.dateFrom.value = '';
-                else if (key === 'date_to') els.dateTo.value = '';
+                if (key === 'date_from') window.frdate.clear(els.dateFrom);
+                else if (key === 'date_to') window.frdate.clear(els.dateTo);
                 else if (key === 'niu_qc') els.niuQc.value = '';
                 else if (ms[key]) ms[key].clear();
                 refreshCascade();
@@ -254,8 +268,7 @@
 
             var bounds = data.dateBounds || {};
             [els.dateFrom, els.dateTo].forEach(function (input) {
-                if (bounds.min) input.min = bounds.min;
-                if (bounds.max) input.max = bounds.max;
+                window.frdate.setBounds(input, bounds.min || '', bounds.max || '');
             });
 
             ms.region.setOptions(data.regions);
@@ -333,7 +346,7 @@
         bar('bscdChartRegion', ch.region, true);
         donut('bscdChartStatus', ch.status);
         bar('bscdChartSegmentation', ch.segmentation, false);
-        completenessBar('bscdChartCompleteness', ch.completeness);
+        meterTypeSummary(ch.meterType);
     }
 
     function bar(canvasId, pairs, horizontal) {
@@ -394,26 +407,35 @@
         });
     }
 
-    function completenessBar(canvasId, rows) {
-        destroyChart(canvasId);
-        var canvas = document.getElementById(canvasId);
-        rows = rows || [];
-        state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
-            type: 'bar',
-            data: {
-                labels: rows.map(function (r) { return r.field; }),
-                datasets: [{
-                    data: rows.map(function (r) { return r.pct; }),
-                    backgroundColor: rows.map(function (r) { return r.pct >= 90 ? '#1a7f4d' : (r.pct >= 50 ? '#d97706' : '#c0392b'); }),
-                    borderRadius: 3, maxBarThickness: 22
-                }]
-            },
-            options: {
-                indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (ctx) { return pct(ctx.parsed.x); } } } },
-                scales: { x: { min: 0, max: 100, ticks: { callback: function (v) { return v + ' %'; } } } }
-            }
+    // "Type de compteurs" — total + one row per METER value, counts and % from
+    // Oracle (GROUP BY METER). No hardcoded type list: whatever buckets the
+    // backend returns are rendered, in descending-count order, blank -> the
+    // "Non renseigné" bucket the backend already labels.
+    function meterTypeSummary(pairs) {
+        pairs = pairs || [];
+        var totalEl = document.querySelector('[data-metertype="total"]');
+        var listEl = document.querySelector('[data-metertype="list"]');
+        if (!totalEl || !listEl) return;
+
+        var total = pairs.reduce(function (s, p) { return s + (Number(p.count) || 0); }, 0);
+        totalEl.textContent = fmt(total);
+
+        listEl.innerHTML = '';
+        pairs.forEach(function (p, i) {
+            var share = total ? (Number(p.count) || 0) / total * 100 : 0;
+            var li = document.createElement('li');
+            li.className = 'bscd-metertype__row';
+            li.innerHTML =
+                '<span class="bscd-metertype__swatch" style="background:' + colorFor(i) + '"></span>' +
+                '<span class="bscd-metertype__name">' + escapeHtml(p.value) + '</span>' +
+                '<span class="bscd-metertype__count">' + fmt(p.count) + '</span>' +
+                '<span class="bscd-metertype__pct">' + pct(share) + '</span>';
+            listEl.appendChild(li);
         });
+
+        if (pairs.length === 0) {
+            listEl.innerHTML = '<li class="bscd-metertype__empty">Aucune donnée</li>';
+        }
     }
 
     function foldTail(pairs, topN) {
@@ -461,7 +483,9 @@
             els.tableEmpty.classList.add('d-none');
             els.tableBody.innerHTML = data.data.map(function (row) {
                 return '<tr>' + cols.map(function (col) {
-                    return '<td>' + escapeHtml(row[col] == null ? '' : row[col]) + '</td>';
+                    var raw = row[col] == null ? '' : row[col];
+                    var val = DATE_COLUMNS.indexOf(col) >= 0 ? frDate(raw) : raw;
+                    return '<td>' + escapeHtml(val) + '</td>';
                 }).join('') + '</tr>';
             }).join('');
         }
@@ -606,15 +630,18 @@
 
         bscdFetch(EP.export, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() })
             .then(function (res) {
-                // Anything without a recognised "mode" is a failure (a 403
-                // from a stale CSRF token, a 500, a redirect to login, ...) —
-                // never fall through to the async branch with no job id.
-                if (!res || (res.mode !== 'sync' && res.mode !== 'async' && res.mode !== 'empty')) {
-                    exportFail("L'export n'a pas pu démarrer. Rechargez la page puis réessayez.");
+                if (!res) {
+                    exportFail('Réponse vide du serveur. Rechargez la page puis réessayez.');
                     return;
                 }
+                // A server-reported failure — surface its reference/message so
+                // the real cause is visible instead of a generic "n'a pas pu
+                // démarrer" (a 422 invalid filter, a 500 with an EXP-… ref, a
+                // 403 from a stale CSRF token, a redirect to /login, …).
                 if (res.error) {
-                    exportFail('Échec : ' + (res.reference || res.message || res.error));
+                    var detail = res.reference || res.message
+                        || (res.status ? ('HTTP ' + res.status) : String(res.error));
+                    exportFail("L'export a échoué : " + detail + '. Réessayez.');
                     return;
                 }
                 if (res.mode === 'empty') {
@@ -628,7 +655,13 @@
                     setTimeout(function () { $('#bscdExportModal').modal('hide'); }, 1800);
                     return;
                 }
-                pollJob(res.jobId, res.count);
+                if (res.mode === 'async') {
+                    pollJob(res.jobId, res.count);
+                    return;
+                }
+                // No recognised mode and no error flag — never fall through to
+                // the async branch with no job id.
+                exportFail('Réponse inattendue du serveur. Rechargez la page puis réessayez.');
             })
             .catch(function () {
                 exportFail('Erreur réseau. Réessayez.');
@@ -694,7 +727,7 @@
     document.getElementById('bscdExportLaunch').addEventListener('click', launchExport);
 
     function resetFilters() {
-        els.dateFrom.value = ''; els.dateTo.value = ''; els.niuQc.value = '';
+        window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo); els.niuQc.value = '';
         MS_DIMS.forEach(function (d) { ms[d].clear(); });
         refreshCascade();
         apply();
@@ -705,7 +738,7 @@
         renderColumnsMenu();
         // Fresh start: clear the staged form and chips so nothing on screen
         // contradicts the unfiltered data we are about to load.
-        els.dateFrom.value = ''; els.dateTo.value = ''; els.niuQc.value = ''; els.search.value = '';
+        window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo); els.niuQc.value = ''; els.search.value = '';
         MS_DIMS.forEach(function (d) { ms[d].clear(); });
         state.applied = {};
         state.table.search = '';

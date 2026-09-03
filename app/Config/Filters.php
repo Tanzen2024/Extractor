@@ -14,6 +14,7 @@ use CodeIgniter\Filters\PerformanceMetrics;
 use CodeIgniter\Filters\SecureHeaders;
 use App\Filters\AuthFilter;
 use App\Filters\CsrfTokenHeaderFilter;
+use App\Filters\PermissionFilter;
 
 class Filters extends BaseFilters
 {
@@ -38,6 +39,7 @@ class Filters extends BaseFilters
         'performance'   => PerformanceMetrics::class,
         'auth'          => AuthFilter::class,
         'csrftoken'     => CsrfTokenHeaderFilter::class,
+        'permission'    => PermissionFilter::class,
     ];
 
     /**
