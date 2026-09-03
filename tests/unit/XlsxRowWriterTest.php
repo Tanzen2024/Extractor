@@ -18,7 +18,7 @@ final class XlsxRowWriterTest extends TestCase
 {
     private const COLUMNS = ['REGION', 'DIVISION', 'AGENCE', 'COD_UNICOM', 'COD_CLI', 'CONTRACT', 'STATUS',
         'METER_NO', 'CUST_NAME', 'PHONE_NUMBERS', 'E_MAIL', 'REF_GEO', 'DATE_AB',
-        'DATE_RESILIATION', 'VOLTAGE', 'SEGMENT_TRESOR', 'METER', 'NIU_RIGHT', 'NIU_QC',
+        'DATE_RESILIATION', 'VOLTAGE', 'SEGMENT_TRESOR', 'METER', 'NIU_RIGHT', 'NUI_QC',
         'LAST_VC_DATE', 'SEGMENT_RFM_2', 'POSTPAID_PROFILE_DATE', 'SEGMENTATION'];
 
     private string $path;

@@ -62,7 +62,7 @@ final class CustomersListQueryBuilderTest extends TestCase
         $this->assertStringContainsString('REGION IN (:f', $w['sql']);
         $this->assertStringContainsString("DATE_AB >= TO_DATE(:f", $w['sql']);
         $this->assertStringContainsString("DATE_AB < TO_DATE(:f", $w['sql']);
-        $this->assertStringContainsString('NIU_QC = :f', $w['sql']);
+        $this->assertStringContainsString('NUI_QC = :f', $w['sql']);
 
         // No literal filter value anywhere in the SQL string.
         $this->assertStringNotContainsString('DCUD', $w['sql']);
@@ -155,5 +155,24 @@ final class CustomersListQueryBuilderTest extends TestCase
         $this->assertStringContainsString('FROM CMS_RFC.TB_CUSTOMERS_LIST', $export['sql']);
         $this->assertStringContainsString('WHERE ' . $where['sql'], $export['sql']);
         $this->assertSame($where['binds'], $export['binds']);
+    }
+
+    public function testDistributionsStatementAggregatesMeterTypeInOracleWithTheSharedWhere(): void
+    {
+        // Filtered by region + status -> the meter-type distribution must
+        // scope to exactly the same population as every other dashboard query
+        // (one shared WHERE), and Oracle does the GROUP BY / COUNT — never PHP.
+        $criteria = $this->criteria(['region' => ['DCUD'], 'status' => ['ACTIVE']]);
+        $where    = $this->qb->where($criteria);
+        $stmt     = $this->qb->distributionsStatement($where);
+
+        $this->assertStringContainsString("'meterType'", $stmt['sql']);
+        $this->assertStringContainsString('(METER)', $stmt['sql']);
+        $this->assertStringContainsString('GROUP BY GROUPING SETS', $stmt['sql']);
+        $this->assertStringContainsString('COUNT(*) N', $stmt['sql']);
+        $this->assertStringContainsString('REGION IN (', $where['sql']);
+        $this->assertStringContainsString('STATUS IN (', $where['sql']);
+        $this->assertStringContainsString('WHERE ' . $where['sql'], $stmt['sql']);
+        $this->assertSame($where['binds'], $stmt['binds']);
     }
 }

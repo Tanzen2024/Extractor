@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
  * DashboardService shapes raw Oracle aggregate rows into KPIs and chart
  * datasets. These tests feed it canned rows (no Oracle) and pin the maths:
  * the "active" rule, the metered rule, the contacts %, the "Autres" fold,
- * completeness %, and the pagination guard rails.
+ * the meter-type distribution, and the pagination guard rails.
  *
  * @internal
  */
@@ -39,6 +39,9 @@ final class DashboardServiceTest extends TestCase
                 ['DIM' => 'status', 'VAL' => 'INACTIVE.', 'N' => '340'],
                 ['DIM' => 'segmentation', 'VAL' => null, 'N' => '10'],
                 ['DIM' => 'segmentation', 'VAL' => '8 Autre', 'N' => '990'],
+                ['DIM' => 'meterType', 'VAL' => 'PREPAID', 'N' => '620'],
+                ['DIM' => 'meterType', 'VAL' => 'POSTPAID', 'N' => '300'],
+                ['DIM' => 'meterType', 'VAL' => 'Compteurs Communicants', 'N' => '80'],
             ],
         ]);
 
@@ -50,17 +53,28 @@ final class DashboardServiceTest extends TestCase
         $this->assertSame(383, $stats['kpis']['avecCompteur']['value']);
         $this->assertSame(804, $stats['kpis']['contacts']['value']);
         $this->assertSame(80.4, $stats['kpis']['contacts']['pct']);
+
+        // "Type de compteurs" — sorted by count desc, values verbatim from METER.
+        $this->assertSame(
+            [['value' => 'PREPAID', 'count' => 620], ['value' => 'POSTPAID', 'count' => 300], ['value' => 'Compteurs Communicants', 'count' => 80]],
+            $stats['charts']['meterType'],
+        );
+        $this->assertArrayNotHasKey('completeness', $stats['charts']);
     }
 
-    public function testStatsShapesTheThreeDistributionsAndFoldsTheTail(): void
+    public function testStatsShapesTheDistributionsAndFoldsTheSegmentationTail(): void
     {
-        $dist = [['DIM' => 'region', 'VAL' => 'DCUD', 'N' => '10']];
+        $dist = [
+            ['DIM' => 'region', 'VAL' => 'DCUD', 'N' => '10'],
+            ['DIM' => 'meterType', 'VAL' => 'PREPAID', 'N' => '7'],
+            ['DIM' => 'meterType', 'VAL' => 'POSTPAID', 'N' => '3'],
+        ];
         for ($i = 0; $i < 12; $i++) {
             $dist[] = ['DIM' => 'segmentation', 'VAL' => "S{$i}", 'N' => (string) (100 - $i)];
         }
 
         $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '100', 'ACTIFS' => '0', 'AVEC_COMPTEUR' => '0', 'PHONE_OK' => '0', 'EMAIL_OK' => '0', 'REFGEO_OK' => '0', 'METERNO_OK' => '0', 'NIU_OK' => '0', 'NAME_OK' => '0', 'CONTACT_OK' => '0']],
+            'kpi'  => [['TOTAL' => '100', 'ACTIFS' => '0', 'AVEC_COMPTEUR' => '0', 'CONTACT_OK' => '0']],
             'dist' => $dist,
         ]);
 
@@ -71,7 +85,9 @@ final class DashboardServiceTest extends TestCase
         // 12 segmentation buckets -> top 7 + "Autres" (SEGMENTATION_TOP_N = 8).
         $this->assertCount(8, $charts['segmentation']);
         $this->assertSame('Autres', end($charts['segmentation'])['value']);
-        $this->assertCount(6, $charts['completeness']);
+        // meter-type distribution is NOT folded — every real type is shown.
+        $this->assertCount(2, $charts['meterType']);
+        $this->assertSame('PREPAID', $charts['meterType'][0]['value']);
     }
 
     public function testNullDistributionValueBecomesTheEmptyLabel(): void
@@ -86,19 +102,26 @@ final class DashboardServiceTest extends TestCase
         $this->assertSame('Non renseigné', $status[0]['value']);
     }
 
-    public function testCompletenessPercentagesAreRoundedToOneDecimal(): void
+    public function testMeterTypeDistributionSumsToTheTotalAndLabelsTheBlankBucket(): void
     {
+        // COHÉRENCE (mandat §17) : la somme des types == totalRows, valeurs
+        // NULL/vides -> bucket "Non renseigné" (jamais supprimées en silence).
         $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '3', 'ACTIFS' => '0', 'AVEC_COMPTEUR' => '0', 'PHONE_OK' => '1', 'EMAIL_OK' => '0', 'REFGEO_OK' => '3', 'METERNO_OK' => '2', 'NIU_OK' => '0', 'NAME_OK' => '3', 'CONTACT_OK' => '1']],
-            'dist' => [],
+            'kpi'  => [['TOTAL' => '100000', 'ACTIFS' => '0', 'AVEC_COMPTEUR' => '0', 'CONTACT_OK' => '0']],
+            'dist' => [
+                ['DIM' => 'meterType', 'VAL' => 'PREPAID', 'N' => '60000'],
+                ['DIM' => 'meterType', 'VAL' => 'POSTPAID', 'N' => '35000'],
+                ['DIM' => 'meterType', 'VAL' => null, 'N' => '5000'],
+            ],
         ]);
 
-        $completeness = $this->service($oracle)->stats(FilterCriteria::none())['charts']['completeness'];
-        $byField      = array_column($completeness, 'pct', 'field');
+        $stats     = $this->service($oracle)->stats(FilterCriteria::none());
+        $meterType = $stats['charts']['meterType'];
 
-        $this->assertSame(33.3, $byField['Téléphone']);
-        $this->assertSame(100.0, $byField['Réf. géo.']);
-        $this->assertSame(66.7, $byField['N° compteur']);
+        $this->assertSame(100000, array_sum(array_column($meterType, 'count')));
+        $this->assertSame($stats['totalRows'], array_sum(array_column($meterType, 'count')));
+        $this->assertSame('Non renseigné', end($meterType)['value']);
+        $this->assertSame(5000, end($meterType)['count']);
     }
 
     public function testZeroTotalNeverDividesByZero(): void

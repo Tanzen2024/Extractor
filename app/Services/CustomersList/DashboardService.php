@@ -26,16 +26,6 @@ class DashboardService
     private const EMPTY_LABEL = 'Non renseigné';
     private const SEGMENTATION_TOP_N = 8;
 
-    /** Completeness bars, in display order: [resultColumn => label]. */
-    private const COMPLETENESS_FIELDS = [
-        'PHONE_OK'   => 'Téléphone',
-        'EMAIL_OK'   => 'E-mail',
-        'REFGEO_OK'  => 'Réf. géo.',
-        'METERNO_OK' => 'N° compteur',
-        'NIU_OK'     => 'NIU',
-        'NAME_OK'    => 'Nom client',
-    ];
-
     private OracleExtractionService $oracle;
     private QueryBuilder $queryBuilder;
     private OracleConfig $config;
@@ -54,14 +44,14 @@ class DashboardService
     }
 
     /**
-     * KPIs + the four chart datasets for a filter set. Two full scans
-     * (one for every KPI + completeness figure, one GROUPING SETS scan for
-     * the region/status/segmentation distributions).
+     * KPIs + the four chart datasets for a filter set. Two full scans (one for
+     * every KPI figure, one GROUPING SETS scan for the region / status /
+     * segmentation / meter-type distributions).
      *
      * @return array{
      *   totalRows:int,
      *   kpis:array{total:int, actifs:array{value:int,pct:float}, avecCompteur:array{value:int,pct:float}, contacts:array{value:int,pct:float}},
-     *   charts:array{region:list<array{value:string,count:int}>, status:list<array{value:string,count:int}>, segmentation:list<array{value:string,count:int}>, completeness:list<array{field:string,pct:float}>}
+     *   charts:array{region:list<array{value:string,count:int}>, status:list<array{value:string,count:int}>, segmentation:list<array{value:string,count:int}>, meterType:list<array{value:string,count:int}>}
      * }
      */
     public function stats(FilterCriteria $criteria, bool $fresh = false): array
@@ -92,7 +82,11 @@ class DashboardService
                     'region'       => $this->distribution($distRows, 'region'),
                     'status'       => $this->distribution($distRows, 'status'),
                     'segmentation' => $this->foldTail($this->distribution($distRows, 'segmentation'), self::SEGMENTATION_TOP_N),
-                    'completeness' => $this->completeness($kpiRow, $total),
+                    // Répartition des compteurs par type (colonne METER). Chaque
+                    // ligne de la population filtrée tombe dans exactement un
+                    // bucket (les valeurs vides -> "Non renseigné"), donc la
+                    // somme des counts == totalRows.
+                    'meterType'    => $this->distribution($distRows, 'meterType'),
                 ],
             ];
         });
@@ -287,21 +281,6 @@ class DashboardService
         }
 
         usort($out, static fn ($a, $b) => $b['count'] <=> $a['count']);
-
-        return $out;
-    }
-
-    /**
-     * @param array<string,mixed> $kpiRow
-     *
-     * @return list<array{field:string,pct:float}>
-     */
-    private function completeness(array $kpiRow, int $total): array
-    {
-        $out = [];
-        foreach (self::COMPLETENESS_FIELDS as $col => $label) {
-            $out[] = ['field' => $label, 'pct' => $this->pct((int) ($kpiRow[$col] ?? 0), $total)];
-        }
 
         return $out;
     }

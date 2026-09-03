@@ -84,7 +84,10 @@ final class QueryBuilder
         }
 
         if ($c->niuQc !== null) {
-            $conds[] = 'NIU_QC = ' . $bind($c->niuQc);
+            // Real column in CMS_RFC.TB_CUSTOMERS_LIST is NUI_QC (not NIU_QC) —
+            // a transposed-letter name in the source schema. Selecting/filtering
+            // the wrong spelling raises ORA-00904.
+            $conds[] = 'NUI_QC = ' . $bind($c->niuQc);
         }
 
         return ['sql' => implode(' AND ', $conds), 'binds' => $binds];
@@ -146,8 +149,7 @@ final class QueryBuilder
     }
 
     /**
-     * One full-scan query returning every KPI figure and every data-quality
-     * completeness count in a single pass.
+     * One full-scan query returning every KPI figure in a single pass.
      *
      * @param array{sql: string, binds: array<string, mixed>} $where
      *
@@ -169,22 +171,13 @@ final class QueryBuilder
         $meterIn = implode(', ', $meterPlaceholders) ?: "NULL";
 
         // NOTE: the text columns store " " (a single space), not NULL, for
-        // "no value" — a plain "IS NOT NULL" reads ~100% populated on every
-        // one of them. `col > :blank` (blank = a single space) is the "has
-        // real content" test: NULL -> NULL (uncounted), " " -> false, any
-        // real string -> true. Measured ~10x faster than TRIM(col) IS NOT
-        // NULL over the full table, with identical results on this data
-        // (every empty marker here is exactly one space).
+        // "no value". `col > :blank` (blank = a single space) is the "has real
+        // content" test: NULL -> NULL (uncounted), " " -> false, any real
+        // string -> true. Used here only for the "Contacts renseignés" KPI.
         $sql = 'SELECT
                 COUNT(*) TOTAL,
                 SUM(CASE WHEN STATUS LIKE :active THEN 1 ELSE 0 END) ACTIFS,
                 SUM(CASE WHEN METER IN (' . $meterIn . ') THEN 1 ELSE 0 END) AVEC_COMPTEUR,
-                SUM(CASE WHEN PHONE_NUMBERS > :blank THEN 1 ELSE 0 END) PHONE_OK,
-                SUM(CASE WHEN E_MAIL > :blank THEN 1 ELSE 0 END) EMAIL_OK,
-                SUM(CASE WHEN REF_GEO > :blank THEN 1 ELSE 0 END) REFGEO_OK,
-                SUM(CASE WHEN METER_NO > :blank THEN 1 ELSE 0 END) METERNO_OK,
-                SUM(CASE WHEN NIU_RIGHT > :blank THEN 1 ELSE 0 END) NIU_OK,
-                SUM(CASE WHEN CUST_NAME > :blank THEN 1 ELSE 0 END) NAME_OK,
                 SUM(CASE WHEN PHONE_NUMBERS > :blank OR E_MAIL > :blank THEN 1 ELSE 0 END) CONTACT_OK
             FROM ' . self::TABLE . $this->whereSuffix($where['sql']);
 
@@ -192,8 +185,12 @@ final class QueryBuilder
     }
 
     /**
-     * Region / status / segmentation distributions in one full scan via
-     * GROUP BY GROUPING SETS. Rows come back with a DIM tag and a VALUE.
+     * Region / status / segmentation / meter-type distributions in one full
+     * scan via GROUP BY GROUPING SETS. Rows come back with a DIM tag and a
+     * VALUE. METER is the meter-type column of CMS_RFC.TB_CUSTOMERS_LIST
+     * (real values: PREPAID, POSTPAID, "Compteurs Communicants", plus a blank
+     * bucket) — the same column the "Type de compteur" filter and the
+     * "Clients avec compteur" KPI already read.
      *
      * @param array{sql: string, binds: array<string, mixed>} $where
      *
@@ -205,12 +202,13 @@ final class QueryBuilder
                 CASE
                     WHEN GROUPING(REGION) = 0 THEN 'region'
                     WHEN GROUPING(STATUS) = 0 THEN 'status'
-                    ELSE 'segmentation'
+                    WHEN GROUPING(SEGMENTATION) = 0 THEN 'segmentation'
+                    ELSE 'meterType'
                 END DIM,
-                COALESCE(REGION, STATUS, SEGMENTATION) VAL,
+                COALESCE(REGION, STATUS, SEGMENTATION, METER) VAL,
                 COUNT(*) N
             FROM " . self::TABLE . $this->whereSuffix($where['sql']) . "
-            GROUP BY GROUPING SETS ((REGION), (STATUS), (SEGMENTATION))";
+            GROUP BY GROUPING SETS ((REGION), (STATUS), (SEGMENTATION), (METER))";
 
         return ['sql' => $sql, 'binds' => $where['binds']];
     }

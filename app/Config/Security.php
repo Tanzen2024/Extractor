@@ -60,9 +60,13 @@ class Security extends BaseConfig
      *
      * Expiration time for Cross Site Request Forgery protection cookie.
      *
-     * Defaults to two hours (in seconds).
+     * Raised from the 7200s (2h) default to 8h: the login form (and other
+     * plain-form screens) can sit open on a desk far longer than two hours,
+     * and once this cookie expires the next submit fails CSRF validation with
+     * SecurityException::forDisallowedAction() ("The action you requested is
+     * not allowed."). Eight hours covers a normal working day.
      */
-    public int $expires = 7200;
+    public int $expires = 28800;
 
     /**
      * --------------------------------------------------------------------------
@@ -89,7 +93,13 @@ class Security extends BaseConfig
      *
      * Redirect to previous page with error on failure.
      *
+     * Kept true in every environment (not just production). On a stale token
+     * the CSRF filter then bounces the user back to the page they came from
+     * with a flash error and a freshly generated token, so they simply retry
+     * and succeed. With this false, a dev hitting an expired login form got
+     * the raw CRITICAL exception page instead.
+     *
      * @see https://codeigniter4.github.io/userguide/libraries/security.html#redirection-on-failure
      */
-    public bool $redirect = (ENVIRONMENT === 'production');
+    public bool $redirect = true;
 }

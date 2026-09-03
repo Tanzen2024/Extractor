@@ -160,10 +160,90 @@ body {
     color: #6b7280; font-weight: 700; margin: 0;
 }
 .bscd-filter-group input[type="date"],
+.bscd-filter-group input[type="text"],
 .bscd-filter-group select {
     border-radius: 6px; border: 1px solid #d7dbe3; padding: .4rem .55rem;
     font-size: .82rem; background: #fff; color: #1f2937; width: 100%;
 }
+.bscd-filter-group .frdate { width: 100%; }
+
+/* ── French date field (frdatepicker.js) ─────────────────────── */
+.frdate { position: relative; display: block; }
+.frdate__input { padding-right: 2rem !important; }
+.frdate__toggle {
+    position: absolute; top: 0; right: 0; height: 100%; width: 2rem;
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: 0; color: #6b7280; cursor: pointer; font-size: .85rem;
+}
+.frdate__toggle:hover { color: var(--bscd-accent, #1f6fb2); }
+.frdate__input.is-invalid { border-color: #dc3545; }
+.frdate__error { display: block; color: #dc3545; font-size: .72rem; margin-top: .2rem; }
+
+.frdate__cal {
+    position: absolute; z-index: 40; top: calc(100% + 4px); left: 0;
+    background: #fff; border: 1px solid #d7dbe3; border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, .16); padding: .5rem;
+    width: 16rem; max-width: calc(100vw - 2rem);
+}
+.frdate__cal-head { display: flex; align-items: center; justify-content: space-between; gap: .25rem; margin-bottom: .35rem; }
+.frdate__cal-title { font-size: .8rem; font-weight: 700; color: #1f2937; }
+.frdate__nav {
+    flex: none;
+    border: 1px solid #d7dbe3; background: #fff; border-radius: 6px; width: 1.7rem; height: 1.7rem;
+    font-size: 1rem; line-height: 1; color: #374151; cursor: pointer;
+}
+.frdate__nav:hover { border-color: var(--bscd-accent, #1f6fb2); color: var(--bscd-accent, #1f6fb2); }
+
+/* header "[ Mois ] [ Année ]" quick-selectors (days & months views) */
+.frdate__cal-switch { display: flex; gap: .2rem; flex: 1; justify-content: center; }
+.frdate__pick {
+    border: 1px solid transparent; background: none; border-radius: 6px;
+    padding: .15rem .45rem; font-size: .8rem; font-weight: 700; color: #1f2937; cursor: pointer;
+}
+.frdate__pick:hover, .frdate__pick:focus-visible { background: #eef4fb; color: var(--bscd-accent, #1f6fb2); }
+
+.frdate__cal-dow, .frdate__cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.frdate__cal-dow span { text-align: center; font-size: .66rem; font-weight: 700; color: #9ca3af; padding: .2rem 0; }
+.frdate__cal-empty { height: 1.9rem; }
+.frdate__cal-day {
+    height: 1.9rem; border: 0; background: none; border-radius: 6px; font-size: .78rem;
+    color: #374151; cursor: pointer;
+}
+.frdate__cal-day:hover:not(.is-disabled) { background: #eef4fb; }
+.frdate__cal-day.is-selected { background: var(--bscd-accent, #1f6fb2); color: #fff; }
+.frdate__cal-day.is-disabled { color: #cbd2dc; cursor: default; }
+
+/* today marker — outline only, never fills, never auto-selects */
+.frdate__cal-day.is-today:not(.is-selected),
+.frdate__cal-month.is-today:not(.is-selected),
+.frdate__cal-year.is-today:not(.is-selected) {
+    box-shadow: inset 0 0 0 1px var(--bscd-accent, #1f6fb2); color: var(--bscd-accent, #1f6fb2);
+}
+
+/* month & year quick-pick grids */
+.frdate__cal-months, .frdate__cal-years {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin-top: .1rem;
+}
+.frdate__cal-month, .frdate__cal-year {
+    height: 2.1rem; border: 0; background: none; border-radius: 6px;
+    font-size: .78rem; color: #374151; cursor: pointer;
+}
+.frdate__cal-month:hover:not(.is-disabled), .frdate__cal-year:hover:not(.is-disabled) { background: #eef4fb; }
+.frdate__cal-month.is-selected, .frdate__cal-year.is-selected { background: var(--bscd-accent, #1f6fb2); color: #fff; }
+.frdate__cal-month.is-disabled, .frdate__cal-year.is-disabled { color: #cbd2dc; cursor: default; }
+
+/* "aller à l'année" direct input */
+.frdate__year-jump { display: flex; gap: 3px; margin-top: .45rem; }
+.frdate__year-input {
+    flex: 1; min-width: 0; border: 1px solid #d7dbe3; border-radius: 6px;
+    padding: .3rem .45rem; font-size: .78rem; color: #1f2937;
+}
+.frdate__year-input.is-invalid { border-color: #dc3545; }
+.frdate__year-go {
+    flex: none; border: 1px solid #d7dbe3; background: #fff; border-radius: 6px;
+    padding: .3rem .6rem; font-size: .76rem; color: #374151; cursor: pointer;
+}
+.frdate__year-go:hover { border-color: var(--bscd-accent, #1f6fb2); color: var(--bscd-accent, #1f6fb2); }
 
 /* multi-select */
 .bscd-ms { position: relative; }
@@ -244,6 +324,29 @@ body {
 .bscd-chart-card__body { position: relative; min-height: 240px; }
 .bscd-donut-wrap { position: relative; }
 
+/* ── "Type de compteurs" summary (replaces the old data-quality chart) ── */
+.bscd-metertype { display: flex; flex-direction: column; gap: .9rem; padding-top: .25rem; }
+.bscd-metertype__total {
+    display: flex; flex-direction: column; gap: .15rem;
+    padding-bottom: .75rem; border-bottom: 1px solid #eef0f4;
+}
+.bscd-metertype__total-label {
+    font-size: .68rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: #9ca3af;
+}
+.bscd-metertype__total-value { font-size: 1.6rem; font-weight: 700; color: #1f2937; line-height: 1.1; }
+.bscd-metertype__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .55rem; }
+.bscd-metertype__row {
+    display: grid; grid-template-columns: 12px 1fr auto auto;
+    align-items: center; column-gap: .6rem;
+    font-size: .82rem; color: #1f2937;
+}
+.bscd-metertype__swatch { width: 12px; height: 12px; border-radius: 3px; }
+.bscd-metertype__name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bscd-metertype__count { font-variant-numeric: tabular-nums; font-weight: 700; }
+.bscd-metertype__pct { font-variant-numeric: tabular-nums; color: #9ca3af; min-width: 3.5rem; text-align: right; }
+.bscd-metertype__empty { list-style: none; color: #9ca3af; font-size: .82rem; }
+
 /* ── Data table ──────────────────────────────────────────── */
 .bscd-table-card {
     background: #fff; border: 1px solid #e3e6ec; border-radius: 8px;
@@ -300,10 +403,10 @@ body {
 .bscd-page-gap { padding: 0 .3rem; color: #9ca3af; }
 
 /* ── Export ──────────────────────────────────────────────── */
-.bscd-export-bar {
-    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
-    gap: .75rem; background: #fff; border: 1px solid #e3e6ec; border-radius: 8px;
-    padding: .9rem 1.1rem; font-size: .85rem;
+/* Export actions live in the table toolbar, on the same row as the search
+   field and immediately above the data (wraps below it on narrow screens). */
+.bscd-table-export {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
 }
 .bscd-export-summary {
     background: #f7f8fa; border: 1px solid #eef0f4; border-radius: 6px;
