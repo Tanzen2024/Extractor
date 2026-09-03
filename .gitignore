@@ -39,11 +39,29 @@ $RECYCLE.BIN/
 #-------------------------
 # Environment Files
 #-------------------------
-# These should never be under version control,
-# as it poses a security risk.
+# Environment files must never contain production secrets in Git.
 .env
+.env.*
+!.env.example
+
 .vagrant
 Vagrantfile
+
+#-------------------------
+# Sensitive Certificates / Keys
+#-------------------------
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+
+#-------------------------
+# Database Dumps / Archives
+#-------------------------
+*.sql.gz
+*.dump
 
 #-------------------------
 # Temporary Files

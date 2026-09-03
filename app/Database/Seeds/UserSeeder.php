@@ -26,7 +26,13 @@ class UserSeeder extends Seeder
             return;
         }
 
-        $defaultPassword = 'Bscd@2026!';
+        $defaultPassword = trim((string) env('auth.seedAdminPassword', ''));
+
+        if ($defaultPassword === '') {
+            CLI::error('auth.seedAdminPassword is not configured.');
+
+            return;
+        }
 
         $userModel->insert([
             'role_id'   => $adminRole['id'],
@@ -37,6 +43,6 @@ class UserSeeder extends Seeder
             'is_active' => 1,
         ]);
 
-        echo "Utilisateur admin cree. Identifiant: admin / Mot de passe: {$defaultPassword} (a changer immediatement)\n";
+        CLI::write('Utilisateur admin cree. Identifiant: admin.', 'green');
     }
 }
