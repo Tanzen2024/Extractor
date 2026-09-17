@@ -142,7 +142,7 @@ final class CustomersListAggregatorTest extends TestCase
 
         $aggregator->add($this->row(['METER' => 'POSTPAID', 'SEGMENTATION' => 'Fidélisé']));
         $aggregator->add($this->row(['METER' => 'POSTPAID', 'SEGMENTATION' => 'Standard']));
-        $aggregator->add($this->row(['METER' => 'PREPAID', 'SEGMENTATION' => '6 Old_Dormant']));
+        $aggregator->add($this->row(['METER' => 'PREPAID', 'SEGMENTATION' => '1 PERFECT']));
 
         $result = $aggregator->result();
 

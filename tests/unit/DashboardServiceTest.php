@@ -189,7 +189,7 @@ final class DashboardServiceTest extends TestCase
         $this->assertSame('CUST_NAME', $result['sort']);
         $this->assertSame('desc', $result['dir']);
         $this->assertCount(2, $result['data']);
-        $this->assertSame(\App\Services\CustomersList\QueryBuilder::TABLE_COLUMNS, $result['columns']);
+        $this->assertSame(\App\Services\CustomersList\QueryBuilder::ALL_COLUMNS, $result['columns']);
     }
 
     public function testRowsNormalisesAnUnknownSortAndPerPage(): void

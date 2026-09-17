@@ -56,7 +56,8 @@ class DashboardController extends BaseController
                     'jobStatus'     => site_url('exports'), // + /{id}
                 ],
                 'sortable'          => QueryBuilder::SORTABLE,
-                'tableColumns'      => QueryBuilder::TABLE_COLUMNS,
+                'tableColumns'      => QueryBuilder::ALL_COLUMNS,
+                'defaultVisibleColumns' => QueryBuilder::DEFAULT_VISIBLE_COLUMNS,
                 'perPageOptions'    => [20, 50, 100, 200],
                 'exportSyncMaxRows' => $this->oracleConfig->exportSyncMaxRows,
             ],

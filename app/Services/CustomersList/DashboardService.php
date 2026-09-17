@@ -129,7 +129,7 @@ class DashboardService
 
         return [
             'data'    => $result['rows'],
-            'columns' => QueryBuilder::TABLE_COLUMNS,
+            'columns' => QueryBuilder::ALL_COLUMNS,
             'page'    => $page,
             'perPage' => $perPage,
             'total'   => $total,
@@ -189,19 +189,20 @@ class DashboardService
                             WHEN GROUPING(SEGMENTATION) = 0 THEN 'segmentations'
                             WHEN GROUPING(SEGMENT_TRESOR) = 0 THEN 'segmentsTresor'
                             WHEN GROUPING(METER) = 0 THEN 'meters'
-                            ELSE 'voltages'
+                            WHEN GROUPING(VOLTAGE) = 0 THEN 'voltages'
+                            ELSE 'niuQualities'
                         END DIM,
-                        COALESCE(REGION, STATUS, SEGMENTATION, SEGMENT_TRESOR, METER, VOLTAGE) VAL,
+                        COALESCE(REGION, STATUS, SEGMENTATION, SEGMENT_TRESOR, METER, VOLTAGE, NUI_QC) VAL,
                         COUNT(*) N
                     FROM {$t}
-                    GROUP BY GROUPING SETS ((REGION), (STATUS), (SEGMENTATION), (SEGMENT_TRESOR), (METER), (VOLTAGE))"],
+                    GROUP BY GROUPING SETS ((REGION), (STATUS), (SEGMENTATION), (SEGMENT_TRESOR), (METER), (VOLTAGE), (NUI_QC))"],
                 'geo'    => ['sql' => "SELECT REGION, DIVISION, AGENCE, COUNT(*) N FROM {$t} GROUP BY REGION, DIVISION, AGENCE"],
                 'bounds' => ['sql' => "SELECT TO_CHAR(MIN(DATE_AB), 'YYYY-MM-DD') MN, TO_CHAR(MAX(DATE_AB), 'YYYY-MM-DD') MX FROM {$t}"],
             ], 3000);
 
             $flat = $batch['flat'];
 
-            $lists = ['regions' => [], 'statuses' => [], 'segmentations' => [], 'segmentsTresor' => [], 'meters' => [], 'voltages' => []];
+            $lists = ['regions' => [], 'statuses' => [], 'segmentations' => [], 'segmentsTresor' => [], 'meters' => [], 'voltages' => [], 'niuQualities' => []];
             foreach ($flat as $row) {
                 $value = trim((string) ($row['VAL'] ?? ''));
                 // A blank / NULL bucket is shown in the charts (via label())
@@ -243,6 +244,12 @@ class DashboardService
                 $min = '1990-01-01';
             }
 
+            // Type de compteur (POSTPAID/PREPAID) <-> Segmentation is a fixed
+            // business mapping, not derived from the data — see
+            // RFM_SEGMENTATIONS in dashboard.js (2026-09: PREPAID and
+            // POSTPAID share the same 8-value RFM list). Nothing to compute
+            // server-side for it.
+
             return [
                 'regions'        => $lists['regions'],
                 'divisions'      => $this->pairs($divisions),
@@ -252,6 +259,7 @@ class DashboardService
                 'segmentsTresor' => $lists['segmentsTresor'],
                 'meters'         => $lists['meters'],
                 'voltages'       => $lists['voltages'],
+                'niuQualities'   => $lists['niuQualities'],
                 'geoTree'        => $tree,
                 'dateBounds'     => ['min' => $min, 'max' => $bounds['MX'] ?? null],
             ];

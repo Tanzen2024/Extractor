@@ -24,6 +24,7 @@ final class AllowedValues
      * @param list<string>            $segmentsTresor
      * @param list<string>            $meters
      * @param list<string>            $voltages
+     * @param list<string>            $niuQualities
      * @param array{min:?string,max:?string} $dateBounds YYYY-MM-DD, inclusive
      */
     public function __construct(
@@ -35,6 +36,7 @@ final class AllowedValues
         public readonly array $segmentsTresor,
         public readonly array $meters,
         public readonly array $voltages,
+        public readonly array $niuQualities = [],
         public readonly array $dateBounds = ['min' => null, 'max' => null],
     ) {
     }
@@ -58,6 +60,7 @@ final class AllowedValues
             segmentsTresor: $values('segmentsTresor'),
             meters: $values('meters'),
             voltages: $values('voltages'),
+            niuQualities: $values('niuQualities'),
             dateBounds: $options['dateBounds'] ?? ['min' => null, 'max' => null],
         );
     }

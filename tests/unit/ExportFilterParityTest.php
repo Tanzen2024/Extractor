@@ -37,6 +37,7 @@ final class ExportFilterParityTest extends TestCase
             segmentsTresor: ['PRIVATE'],
             meters: ['PREPAID', 'POSTPAID', 'Compteurs Communicants'],
             voltages: ['LV', 'MV'],
+            niuQualities: ['NUI correct', 'NUI a RECLASSER'],
         );
     }
 
@@ -50,13 +51,13 @@ final class ExportFilterParityTest extends TestCase
         yield 'multi region'     => [['region' => ['DCUD', 'DCUY', 'DRE']]];
         yield 'date range only'  => [['date_from' => '2024-01-01', 'date_to' => '2025-12-31']];
         yield 'open-ended date'  => [['date_from' => '2020-06-15']];
-        yield 'niu + meter'      => [['niu_qc' => '1', 'meter' => ['PREPAID', 'Compteurs Communicants']]];
+        yield 'niu + meter'      => [['niu_qc' => ['NUI a RECLASSER'], 'meter' => ['PREPAID', 'Compteurs Communicants']]];
         yield 'the works'        => [[
             'date_from' => '2023-01-01', 'date_to' => '2026-01-01',
             'region' => ['DCUD', 'DCUY'], 'division' => ['DVC DOUALA NORD'],
             'agence' => ['CSC_LOGPOM'], 'status' => ['ACTIVE'],
             'segmentation' => ['8 Autre'], 'segment_tresor' => ['PRIVATE'],
-            'meter' => ['POSTPAID'], 'voltage' => ['LV'], 'niu_qc' => '0',
+            'meter' => ['POSTPAID'], 'voltage' => ['LV'], 'niu_qc' => ['NUI correct'],
         ]];
     }
 

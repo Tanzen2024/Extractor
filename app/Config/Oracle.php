@@ -103,12 +103,22 @@ class Oracle extends BaseConfig
     public int $exportSyncMaxRows = 150_000;
 
     /**
-     * SQL LIKE pattern that defines an "active" customer for the dashboard's
-     * "Clients actifs" KPI. Derived from the real STATUS values in
-     * CMS_RFC.TB_CUSTOMERS_LIST: 'ACTIVE' and 'ACTIVE (PENDING BILLING)' both
-     * count, everything else (INACTIVE*, SUSPENDED*, IN PROCESS*) does not.
+     * The exact STATUS values that define an "active" customer for the
+     * dashboard's "Clients actifs" KPI — the business rule, not a pattern:
+     * a customer counts if ANY of their rows carries one of these statuses.
+     * Everything else (INACTIVE*, IN PROCESS (PENDING CONNECTION/READING))
+     * does not. Verified against the real distinct STATUS values in
+     * CMS_RFC.TB_CUSTOMERS_LIST (exact spelling, including the trailing
+     * period on "INACTIVATION IN PROCESS.").
+     *
+     * @var list<string>
      */
-    public string $activeStatusPattern = 'ACTIVE%';
+    public array $activeStatuses = [
+        'ACTIVE',
+        'ACTIVE (PENDING BILLING)',
+        'INACTIVATION IN PROCESS.',
+        'SUSPENDED (DELINQUENT ACCOUNT)',
+    ];
 
     /**
      * METER values that count as "client avec compteur" for that KPI: a

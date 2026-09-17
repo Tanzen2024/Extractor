@@ -29,6 +29,7 @@ final class FilterCriteria
      * @param list<string> $segmentsTresor
      * @param list<string> $meters
      * @param list<string> $voltages
+     * @param list<string> $niuQualities
      */
     private function __construct(
         public readonly ?DateTimeImmutable $dateFrom,
@@ -41,13 +42,13 @@ final class FilterCriteria
         public readonly array $segmentsTresor,
         public readonly array $meters,
         public readonly array $voltages,
-        public readonly ?int $niuQc,
+        public readonly array $niuQualities,
     ) {
     }
 
     public static function none(): self
     {
-        return new self(null, null, [], [], [], [], [], [], [], [], null);
+        return new self(null, null, [], [], [], [], [], [], [], [], []);
     }
 
     /**
@@ -69,15 +70,6 @@ final class FilterCriteria
             throw new InvalidFilterException('La date de début est postérieure à la date de fin.');
         }
 
-        $niuQcRaw = $get['niu_qc'] ?? null;
-        $niuQc    = null;
-        if ($niuQcRaw !== null && $niuQcRaw !== '') {
-            if (! in_array((string) $niuQcRaw, ['0', '1'], true)) {
-                throw new InvalidFilterException('Valeur de filtre invalide pour NIU_QC.');
-            }
-            $niuQc = (int) $niuQcRaw;
-        }
-
         return new self(
             dateFrom: $dateFrom,
             dateTo: $dateTo,
@@ -89,7 +81,7 @@ final class FilterCriteria
             segmentsTresor: $allowed->assertSubset('le segment trésor', $allowed->segmentsTresor, $list('segment_tresor')),
             meters: $allowed->assertSubset('le type de compteur', $allowed->meters, $list('meter')),
             voltages: $allowed->assertSubset('la tension', $allowed->voltages, $list('voltage')),
-            niuQc: $niuQc,
+            niuQualities: $allowed->assertSubset('la qualité NIU', $allowed->niuQualities, $list('niu_qc')),
         );
     }
 
@@ -113,7 +105,7 @@ final class FilterCriteria
             segmentsTresor: $data['segmentsTresor'] ?? [],
             meters: $data['meters'] ?? [],
             voltages: $data['voltages'] ?? [],
-            niuQc: isset($data['niuQc']) ? (int) $data['niuQc'] : null,
+            niuQualities: $data['niuQualities'] ?? [],
         );
     }
 
@@ -133,7 +125,7 @@ final class FilterCriteria
             'segmentsTresor' => $this->segmentsTresor,
             'meters'         => $this->meters,
             'voltages'       => $this->voltages,
-            'niuQc'          => $this->niuQc,
+            'niuQualities'   => $this->niuQualities,
         ], static fn ($v) => $v !== null && $v !== []);
     }
 
@@ -176,7 +168,7 @@ final class FilterCriteria
         if ($this->segmentsTresor !== []) { $out['Segment trésor'] = $join($this->segmentsTresor); }
         if ($this->meters !== [])         { $out['Compteur']       = $join($this->meters); }
         if ($this->voltages !== [])       { $out['Tension']        = $join($this->voltages); }
-        if ($this->niuQc !== null)        { $out['NIU_QC']         = $this->niuQc === 0 ? 'Valide (0)' : 'À contrôler (1)'; }
+        if ($this->niuQualities !== [])   { $out['Qualité NIU']    = $join($this->niuQualities); }
 
         return $out;
     }

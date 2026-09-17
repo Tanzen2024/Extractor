@@ -254,9 +254,16 @@ body {
 }
 .bscd-ms.is-active .bscd-ms__button { border-color: var(--bscd-accent); background: #f2f8fd; }
 .bscd-ms__button i { font-size: .6rem; color: #9ca3af; }
-.bscd-ms__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* min-width: 0 is required for a flex item's ellipsis to actually engage —
+   without it a nowrap text node never shrinks below its full content width
+   and just overflows the button instead of truncating. */
+.bscd-ms__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bscd-ms__panel {
-    display: none; position: absolute; z-index: 30; top: calc(100% + 3px); left: 0; right: 0;
+    display: none; position: absolute; z-index: 30; top: calc(100% + 3px); left: 0;
+    /* Wide enough for the longest real labels (e.g. "SUSPENDED (DELINQUENT
+       ACCOUNT)") without forcing the closed field or the page to widen —
+       only the open panel grows, and only up to the viewport. */
+    min-width: 100%; width: max-content; max-width: min(26rem, calc(100vw - 2rem));
     background: #fff; border: 1px solid #d7dbe3; border-radius: 6px;
     box-shadow: 0 6px 18px rgba(0, 0, 0, .1); padding: .5rem; max-height: 280px;
     overflow: hidden;
@@ -267,13 +274,31 @@ body {
     padding: .3rem .5rem; font-size: .78rem; margin-bottom: .4rem;
 }
 .bscd-ms__list { max-height: 210px; overflow-y: auto; }
+/* Non-selectable section divider inside the list (e.g. "Contrats actifs" /
+   "Contrats inactifs" in the STATUT dropdown) — visual grouping only. */
+.bscd-ms__group-label {
+    font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
+    font-weight: 700; padding: .2rem .3rem;
+    /* Typographic distinction only — never looks like an option — the
+       accent-tinted color ties it to the theme without shouting. */
+    color: var(--bscd-accent, #1f6fb2);
+}
+/* Standalone divider between groups — a real element, not a border baked
+   into the next label, and not a checkbox/option of any kind. */
+.bscd-ms__group-separator {
+    height: 1px; margin: .55rem .3rem; background: #e3e6ec;
+    border: 0; pointer-events: none; user-select: none;
+}
 .bscd-ms__opt {
-    display: flex; align-items: center; gap: .45rem; padding: .28rem .3rem;
+    display: flex; align-items: center; gap: .45rem; padding: .32rem .3rem;
     font-size: .8rem; margin: 0; border-radius: 4px; cursor: pointer;
 }
 .bscd-ms__opt:hover { background: #f4f6f9; }
-.bscd-ms__opt span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bscd-ms__opt em { font-style: normal; font-size: .72rem; color: #9ca3af; }
+/* Full label, wrapped rather than clipped — the panel is now wide enough
+   that wrapping is rare, but a still-longer value degrades gracefully
+   instead of losing text. */
+.bscd-ms__opt span { flex: 1; white-space: normal; word-break: break-word; line-height: 1.25; }
+.bscd-ms__opt em { flex: none; font-style: normal; font-size: .72rem; color: #9ca3af; }
 .bscd-ms__none { font-size: .78rem; color: #9ca3af; padding: .4rem; }
 
 /* chips */

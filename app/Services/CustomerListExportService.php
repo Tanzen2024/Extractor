@@ -13,7 +13,7 @@ use RuntimeException;
  * Exports the CUSTOMERS_LIST data set (CMS_RFC.TB_CUSTOMERS_LIST, ~3.28M
  * rows) to CSV or XLSX without ever holding the full result set in memory.
  *
- * The 23-column SELECT is fixed (SQL_SELECT); the only thing that varies is
+ * The 25-column SELECT is fixed (SQL_SELECT); the only thing that varies is
  * an optional WHERE clause built — via the shared QueryBuilder — from the
  * exact same FilterCriteria that drives the dashboard, so an export always
  * contains precisely the population the dashboard was showing. Filter values
@@ -37,7 +37,27 @@ class CustomerListExportService
     /** The source table — single source of truth, reused by QueryBuilder. */
     public const SQL_TABLE = 'CMS_RFC.TB_CUSTOMERS_LIST';
 
-    /** The fixed 23-column SELECT (no WHERE) — QueryBuilder appends the shared filter clause. */
+    /**
+     * The fixed 25-column SELECT (no WHERE) — QueryBuilder appends the shared
+     * filter clause.
+     *
+     * NIU_TO_RECLASS and UPDATED_AT (2026-09 addition) are selected bare, no
+     * alias — confirmed as the real column names in CMS_RFC.TB_CUSTOMERS_LIST.
+     * Note NIU_TO_RECLASS uses the "NIU" letter order, same as the free-text
+     * "NUI ... RECLASSER" value already carried by NUI_QC but NOT the same
+     * order as the NUI_QC column name itself — this project's source schema
+     * is not internally consistent about "NIU" vs "NUI", so don't assume one
+     * implies the other; if this ever raises ORA-00904, double-check the
+     * spelling against Oracle's data dictionary before guessing.
+     *
+     * METER (2026-09-17 diagnostic, DASH-20260917-96667): the previous
+     * DASH-20260916-31939 comment claimed the column had been renamed to
+     * METER_TECHNOLOGY and aliased it back to METER here — that column does
+     * not exist in CMS_RFC.TB_CUSTOMERS_LIST (ORA-00904 on every export and
+     * every dashboard endpoint). Re-verified live against ALL_TAB_COLUMNS on
+     * 2026-09-17: the real column is the bare METER, unchanged. Selected
+     * without alias, same as every other bare column here.
+     */
     public const SQL_SELECT = <<<'SQL'
         SELECT
             REGION,
@@ -58,11 +78,13 @@ class CustomerListExportService
             SEGMENT_TRESOR,
             METER,
             NIU_RIGHT,
+            NIU_TO_RECLASS,
             NUI_QC,
             LAST_VC_DATE,
             SEGMENT_RFM_2,
             POSTPAID_PROFILE_DATE,
-            SEGMENTATION
+            SEGMENTATION,
+            UPDATED_AT
         FROM CMS_RFC.TB_CUSTOMERS_LIST
         SQL;
 
@@ -70,8 +92,8 @@ class CustomerListExportService
     public const COLUMNS = [
         'REGION', 'DIVISION', 'AGENCE', 'COD_UNICOM', 'COD_CLI', 'CONTRACT', 'STATUS',
         'METER_NO', 'CUST_NAME', 'PHONE_NUMBERS', 'E_MAIL', 'REF_GEO', 'DATE_AB',
-        'DATE_RESILIATION', 'VOLTAGE', 'SEGMENT_TRESOR', 'METER', 'NIU_RIGHT', 'NUI_QC',
-        'LAST_VC_DATE', 'SEGMENT_RFM_2', 'POSTPAID_PROFILE_DATE', 'SEGMENTATION',
+        'DATE_RESILIATION', 'VOLTAGE', 'SEGMENT_TRESOR', 'METER', 'NIU_RIGHT', 'NIU_TO_RECLASS', 'NUI_QC',
+        'LAST_VC_DATE', 'SEGMENT_RFM_2', 'POSTPAID_PROFILE_DATE', 'SEGMENTATION', 'UPDATED_AT',
     ];
 
     private const LOG_CHECKPOINT_EVERY = 100_000;

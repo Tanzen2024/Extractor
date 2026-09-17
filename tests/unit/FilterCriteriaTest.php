@@ -26,6 +26,7 @@ final class FilterCriteriaTest extends TestCase
             segmentsTresor: ['PRIVATE', 'ADMINISTRATION'],
             meters: ['PREPAID', 'POSTPAID', 'Compteurs Communicants'],
             voltages: ['LV', 'MV'],
+            niuQualities: ['NUI correct', 'NUI a RECLASSER'],
             dateBounds: ['min' => '1990-01-01', 'max' => '2026-08-25'],
         );
     }
@@ -52,14 +53,14 @@ final class FilterCriteriaTest extends TestCase
             'segment_tresor' => ['PRIVATE'],
             'meter'          => ['PREPAID'],
             'voltage'        => ['LV'],
-            'niu_qc'         => '0',
+            'niu_qc'         => ['NUI correct'],
         ], $this->allowed());
 
         $this->assertFalse($c->isEmpty());
         $this->assertSame('2024-01-01', $c->dateFrom->format('Y-m-d'));
         $this->assertSame('2025-12-31', $c->dateTo->format('Y-m-d'));
         $this->assertSame(['DCUD', 'DCUY'], $c->regions);
-        $this->assertSame(0, $c->niuQc);
+        $this->assertSame(['NUI correct'], $c->niuQualities);
         $this->assertArrayHasKey('Région', $c->describe());
     }
 
@@ -100,10 +101,10 @@ final class FilterCriteriaTest extends TestCase
         FilterCriteria::fromRequest(['date_from' => '2025-01-01', 'date_to' => '2024-01-01'], $this->allowed());
     }
 
-    public function testRejectsAnInvalidNiuQc(): void
+    public function testRejectsAnUnknownNiuQuality(): void
     {
         $this->expectException(InvalidFilterException::class);
-        FilterCriteria::fromRequest(['niu_qc' => '2'], $this->allowed());
+        FilterCriteria::fromRequest(['niu_qc' => ['N/A']], $this->allowed());
     }
 
     public function testToArrayFromArrayRoundTrip(): void
@@ -112,14 +113,14 @@ final class FilterCriteriaTest extends TestCase
             'date_from' => '2024-06-01',
             'region'    => ['DRE'],
             'meter'     => ['PREPAID', 'POSTPAID'],
-            'niu_qc'    => '1',
+            'niu_qc'    => ['NUI a RECLASSER'],
         ], $this->allowed());
 
         $restored = FilterCriteria::fromArray($original->toArray());
 
         $this->assertSame($original->toArray(), $restored->toArray());
         $this->assertSame('2024-06-01', $restored->dateFrom->format('Y-m-d'));
-        $this->assertSame(1, $restored->niuQc);
+        $this->assertSame(['NUI a RECLASSER'], $restored->niuQualities);
     }
 
     public function testCacheKeyIsStableAndFilterSensitive(): void
@@ -138,12 +139,12 @@ final class FilterCriteriaTest extends TestCase
             'date_from' => '2024-01-01',
             'date_to'   => '2024-12-31',
             'region'    => ['DCUD', 'DCUY'],
-            'niu_qc'    => '0',
+            'niu_qc'    => ['NUI correct'],
         ], $this->allowed());
 
         $described = $c->describe();
         $this->assertSame('01/01/2024 → 31/12/2024', $described['Période (abonnement)']);
         $this->assertSame('DCUD, DCUY', $described['Région']);
-        $this->assertSame('Valide (0)', $described['NIU_QC']);
+        $this->assertSame('NUI correct', $described['Qualité NIU']);
     }
 }

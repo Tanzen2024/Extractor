@@ -33,6 +33,7 @@ final class CustomersListQueryBuilderTest extends TestCase
             segmentsTresor: ['PRIVATE'],
             meters: ['PREPAID', 'POSTPAID'],
             voltages: ['LV'],
+            niuQualities: ['NUI correct', 'NUI a RECLASSER'],
         );
     }
 
@@ -56,13 +57,13 @@ final class CustomersListQueryBuilderTest extends TestCase
             'status'    => ['ACTIVE'],
             'date_from' => '2024-01-01',
             'date_to'   => '2025-12-31',
-            'niu_qc'    => '1',
+            'niu_qc'    => ['NUI a RECLASSER'],
         ]));
 
         $this->assertStringContainsString('REGION IN (:f', $w['sql']);
         $this->assertStringContainsString("DATE_AB >= TO_DATE(:f", $w['sql']);
         $this->assertStringContainsString("DATE_AB < TO_DATE(:f", $w['sql']);
-        $this->assertStringContainsString('NUI_QC = :f', $w['sql']);
+        $this->assertStringContainsString('NUI_QC IN (:f', $w['sql']);
 
         // No literal filter value anywhere in the SQL string.
         $this->assertStringNotContainsString('DCUD', $w['sql']);
@@ -73,11 +74,25 @@ final class CustomersListQueryBuilderTest extends TestCase
         $this->assertContains('DCUY', $w['binds']);
         $this->assertContains('ACTIVE', $w['binds']);
         $this->assertContains('2024-01-01', $w['binds']);
-        $this->assertContains(1, $w['binds']);
+        $this->assertContains('NUI a RECLASSER', $w['binds']);
 
         // Placeholder count matches bind count.
         preg_match_all('/:f\d+/', $w['sql'], $m);
         $this->assertCount(count($w['binds']), array_unique($m[0]));
+    }
+
+    public function testWhereFiltersMeterTypeByTheRealMeterColumn(): void
+    {
+        // The "Type de compteur" filter (app-facing "meter") must read the
+        // real Oracle column METER — re-verified live against ALL_TAB_COLUMNS
+        // on 2026-09-17 (DASH-20260917-96667: METER_TECHNOLOGY does not exist
+        // and raised ORA-00904 on every dashboard endpoint).
+        $w = $this->qb->where($this->criteria(['meter' => ['PREPAID', 'POSTPAID']]));
+
+        $this->assertStringContainsString('METER IN (:f', $w['sql']);
+        $this->assertStringNotContainsString('METER_TECHNOLOGY IN (', $w['sql']);
+        $this->assertContains('PREPAID', $w['binds']);
+        $this->assertContains('POSTPAID', $w['binds']);
     }
 
     public function testDateToIsInclusiveOfItsWholeDay(): void
@@ -133,16 +148,108 @@ final class CustomersListQueryBuilderTest extends TestCase
         $this->assertStringContainsString("TO_CHAR(DATE_AB, 'YYYY-MM-DD')", $stmt['sql']);
     }
 
+    public function testPageStatementSelectsAllTwentySevenColumnsWithUpdatedAtLast(): void
+    {
+        $stmt = $this->qb->pageStatement(['sql' => '', 'binds' => []], 'ORDER BY CONTRACT ASC', 0, 50);
+
+        foreach (QueryBuilder::ALL_COLUMNS as $col) {
+            $this->assertStringContainsString($col, $stmt['sql'], "pageStatement() must select {$col}.");
+        }
+
+        // UPDATED_AT is VARCHAR2(19) in Oracle, already formatted text — NOT
+        // a DATE column despite its name. Wrapping it in TO_CHAR(..., date
+        // fmt) is exactly the bug behind DASH-20260916-31939 (ORA-01722):
+        // it must be selected bare, like NIU_TO_RECLASS/NUI_QC.
+        $this->assertStringNotContainsString('TO_CHAR(UPDATED_AT', $stmt['sql']);
+        // LAST_VC_DATE / POSTPAID_PROFILE_DATE are real DATE columns, so —
+        // unlike UPDATED_AT — they DO need the same TO_CHAR treatment as
+        // DATE_AB/DATE_RESILIATION.
+        $this->assertStringContainsString("TO_CHAR(LAST_VC_DATE, 'YYYY-MM-DD')", $stmt['sql']);
+        $this->assertStringContainsString("TO_CHAR(POSTPAID_PROFILE_DATE, 'YYYY-MM-DD')", $stmt['sql']);
+
+        // UPDATED_AT must be the last selected expression before " FROM ".
+        $select = substr($stmt['sql'], 0, strpos($stmt['sql'], ' FROM '));
+        $this->assertStringEndsWith('UPDATED_AT', trim($select));
+    }
+
+    public function testAllColumnsListsExactlyTheTwentySevenSelectableColumnsInCanonicalOrder(): void
+    {
+        // The full selector list (2026-09-17 addition of the remaining 10
+        // CMS_RFC.TB_CUSTOMERS_LIST columns), in the table's own order.
+        $this->assertSame([
+            'REGION', 'DIVISION', 'AGENCE', 'COD_UNICOM', 'COD_CLI', 'CONTRACT', 'STATUS',
+            'METER_NO', 'CUST_NAME', 'PHONE_NUMBERS', 'E_MAIL', 'REF_GEO', 'DATE_AB',
+            'DATE_RESILIATION', 'VOLTAGE', 'SEGMENT_TRESOR', 'METER', 'NIU_RIGHT', 'XCOORD',
+            'YCOORD', 'NIU_TO_RECLASS', 'NUI_QC', 'LAST_VC_DATE', 'SEGMENT_RFM_2',
+            'POSTPAID_PROFILE_DATE', 'SEGMENTATION', 'UPDATED_AT',
+        ], QueryBuilder::ALL_COLUMNS);
+        $this->assertCount(27, QueryBuilder::ALL_COLUMNS);
+        $this->assertSame(27, count(array_unique(QueryBuilder::ALL_COLUMNS)), 'ALL_COLUMNS must not contain duplicates.');
+    }
+
+    public function testDefaultVisibleColumnsIsTheFourteenHistoricalColumnsPlusNiuRightAndNuiQc(): void
+    {
+        $default = QueryBuilder::DEFAULT_VISIBLE_COLUMNS;
+
+        $this->assertCount(16, $default, 'DEFAULT_VISIBLE_COLUMNS must total 16.');
+        $this->assertSame(16, count(array_unique($default)), 'DEFAULT_VISIBLE_COLUMNS must not contain duplicates.');
+
+        // Every default column must be one of the 27 selectable columns.
+        foreach ($default as $col) {
+            $this->assertContains($col, QueryBuilder::ALL_COLUMNS, "{$col} must be one of ALL_COLUMNS.");
+        }
+
+        $this->assertContains('NIU_RIGHT', $default);
+        $this->assertContains('NUI_QC', $default);
+
+        // NIU_TO_RECLASS is selectable but NOT part of the default selection.
+        $this->assertNotContains('NIU_TO_RECLASS', $default);
+
+        // The 14 historical columns are untouched.
+        foreach ([
+            'REGION', 'DIVISION', 'AGENCE', 'COD_CLI', 'CONTRACT', 'STATUS', 'METER_NO',
+            'CUST_NAME', 'PHONE_NUMBERS', 'E_MAIL', 'DATE_AB', 'DATE_RESILIATION',
+            'SEGMENTATION', 'UPDATED_AT',
+        ] as $col) {
+            $this->assertContains($col, $default, "{$col} is one of the 14 historical columns and must stay in the default selection.");
+        }
+    }
+
     public function testKpiStatementCarriesTheConfiguredBusinessRules(): void
     {
         $stmt = $this->qb->kpiStatement(['sql' => '', 'binds' => []]);
 
-        $this->assertSame('ACTIVE%', $stmt['binds']['active']);
         $this->assertSame(' ', $stmt['binds']['blank']);
         $this->assertContains('PREPAID', $stmt['binds']);
         $this->assertContains('Compteurs Communicants', $stmt['binds']);
+        $this->assertContains('ACTIVE', $stmt['binds']);
+        $this->assertContains('ACTIVE (PENDING BILLING)', $stmt['binds']);
+        $this->assertContains('INACTIVATION IN PROCESS.', $stmt['binds']);
+        $this->assertContains('SUSPENDED (DELINQUENT ACCOUNT)', $stmt['binds']);
         $this->assertStringContainsString('CONTACT_OK', $stmt['sql']);
         $this->assertStringContainsString('> :blank', $stmt['sql']);
+    }
+
+    public function testKpiStatementCountsTotalActifsAndAvecCompteurByDistinctContract(): void
+    {
+        $stmt = $this->qb->kpiStatement(['sql' => '', 'binds' => []]);
+
+        // TOTAL / ACTIFS / AVEC_COMPTEUR are explicit CONTRACT counts — a
+        // deliberate business decision (the "Clients ..." KPI labels keep
+        // counting contracts, not distinct COD_CLI). CONTACT_OK stays a
+        // plain row SUM, untouched by that decision.
+        $this->assertStringContainsString('COUNT(DISTINCT CONTRACT) TOTAL', $stmt['sql']);
+        $this->assertStringContainsString('COUNT(DISTINCT CASE WHEN STATUS IN (', $stmt['sql']);
+        $this->assertStringContainsString('THEN CONTRACT END) ACTIFS', $stmt['sql']);
+        // METER — see DASH-20260917-96667 audit (METER_TECHNOLOGY doesn't
+        // exist; ORA-00904 on every dashboard endpoint until fixed).
+        $this->assertStringContainsString('COUNT(DISTINCT CASE WHEN METER IN (', $stmt['sql']);
+        $this->assertStringContainsString('THEN CONTRACT END) AVEC_COMPTEUR', $stmt['sql']);
+        $this->assertStringContainsString('SUM(CASE WHEN PHONE_NUMBERS > :blank OR E_MAIL > :blank THEN 1 ELSE 0 END) CONTACT_OK', $stmt['sql']);
+        // No SQL function wraps the STATUS column itself (stays index-friendly).
+        $this->assertStringNotContainsString('UPPER(STATUS', $stmt['sql']);
+        $this->assertStringNotContainsString('LOWER(STATUS', $stmt['sql']);
+        $this->assertStringNotContainsString('TRIM(STATUS', $stmt['sql']);
     }
 
     public function testExportStatementReusesTheSharedWhere(): void
@@ -167,6 +274,7 @@ final class CustomersListQueryBuilderTest extends TestCase
         $stmt     = $this->qb->distributionsStatement($where);
 
         $this->assertStringContainsString("'meterType'", $stmt['sql']);
+        // METER — see DASH-20260917-96667 audit.
         $this->assertStringContainsString('(METER)', $stmt['sql']);
         $this->assertStringContainsString('GROUP BY GROUPING SETS', $stmt['sql']);
         $this->assertStringContainsString('COUNT(*) N', $stmt['sql']);

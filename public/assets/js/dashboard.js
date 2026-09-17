@@ -19,17 +19,63 @@
     var OTHER_COLOR = '#c7ccd6';
 
     var COLUMN_LABELS = {
-        REGION: 'Région', DIVISION: 'Division', AGENCE: 'Agence', COD_CLI: 'Code client',
-        CONTRACT: 'Contrat', STATUS: 'Statut', METER_NO: 'N° compteur', CUST_NAME: 'Client',
-        PHONE_NUMBERS: 'Téléphone', E_MAIL: 'E-mail', DATE_AB: 'Date abo.',
-        DATE_RESILIATION: 'Date résil.', SEGMENTATION: 'Segmentation'
+        REGION: 'Région', DIVISION: 'Division', AGENCE: 'Agence', COD_UNICOM: 'COD_UNICOM',
+        COD_CLI: 'Code client', CONTRACT: 'Contrat', STATUS: 'Statut', METER_NO: 'N° compteur',
+        CUST_NAME: 'Client', PHONE_NUMBERS: 'Téléphone', E_MAIL: 'E-mail', REF_GEO: 'REF_GEO',
+        DATE_AB: 'Date abo.', DATE_RESILIATION: 'Date résil.', VOLTAGE: 'VOLTAGE',
+        SEGMENT_TRESOR: 'SEGMENT_TRESOR', METER: 'METER', NIU_RIGHT: 'NIU_RIGHT',
+        XCOORD: 'XCOORD', YCOORD: 'YCOORD', NIU_TO_RECLASS: 'NIU à reclasser', NUI_QC: 'NUI_QC',
+        LAST_VC_DATE: 'LAST_VC_DATE', SEGMENT_RFM_2: 'SEGMENT_RFM_2',
+        POSTPAID_PROFILE_DATE: 'POSTPAID_PROFILE_DATE', SEGMENTATION: 'Segmentation',
+        UPDATED_AT: 'Mis à jour le'
     };
 
-    var MS_DIMS = ['region', 'division', 'agence', 'status', 'segmentation', 'segment_tresor', 'meter', 'voltage'];
+    // Columns selected/visible on first load — server-provided (see
+    // QueryBuilder::DEFAULT_VISIBLE_COLUMNS), so the 16-default vs
+    // 27-available split has one source of truth. Everything in
+    // boot.tableColumns but not here starts hidden — see loadHiddenColumns().
+    var DEFAULT_VISIBLE_COLUMNS = boot.defaultVisibleColumns || boot.tableColumns;
+
+    var MS_DIMS = ['region', 'division', 'agence', 'status', 'meter', 'segmentation', 'segment_tresor', 'voltage', 'niu_qc'];
+
+    // STATUT: the 4 statuses the business defines as "actif" (client/contrat
+    // actif). No longer pre-selected — this list now only drives the
+    // dropdown's two-group layout (see configureStatusGroups()). The KPI
+    // definitions in Config\Oracle::$activeStatuses are the real source of
+    // truth for what counts as "actif" server-side; this array is a display
+    // concern only and is kept in sync with it by convention.
+    var ACTIVE_STATUSES = ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)'];
+
+    // Technical value -> friendly display label, for dimensions where the raw
+    // Oracle value is either not meant to be read as-is (NIU_QC: a corrupted
+    // accented character upstream) or carries a numeric business-rule prefix
+    // (SEGMENTATION). The value actually sent to the backend is always the
+    // untouched technical one (see MultiSelect#renderList / getValues) — this
+    // only changes what the user sees.
+    var SEGMENTATION_LABELS = {
+        '1 PERFECT': 'Perfect', '2 RELIABLE': 'Reliable', '3 Occasionnal': 'Occasional',
+        '4 At-Risk': 'At Risk', '5 Delinquant': 'Delinquant', '6 Always Late': 'Always late',
+        '7 sometime Paid': '7- Sometime paid', '8 Never Paid': '8- Never paid', '8 Autre': 'Autre'
+    };
+    var DIM_LABELS = {
+        niu_qc: function (v) {
+            var upper = String(v).toUpperCase();
+            if (upper.indexOf('RECLASSER') !== -1) return 'NUI à RECLASSER';
+            if (upper.indexOf('CORRECT') !== -1) return 'NUI CORRECT';
+            return v;
+        },
+        meter: function (v) {
+            var upper = String(v).toUpperCase();
+            if (upper.indexOf('COMMUNICANT') !== -1) return 'COMPTEURS COMMUNICANTS';
+            return v;
+        },
+        segmentation: function (v) { return SEGMENTATION_LABELS[v] || v; }
+    };
+    function dimLabel(dim, value) { return DIM_LABELS[dim] ? DIM_LABELS[dim](value) : value; }
 
     // Table columns that carry a date — displayed dd/mm/yyyy (the wire value
     // stays ISO: filters/sort/SQL are untouched).
-    var DATE_COLUMNS = ['DATE_AB', 'DATE_RESILIATION'];
+    var DATE_COLUMNS = ['DATE_AB', 'DATE_RESILIATION', 'LAST_VC_DATE', 'POSTPAID_PROFILE_DATE'];
 
     var state = {
         options: null,
@@ -45,7 +91,6 @@
         form: document.getElementById('bscdFilters'),
         dateFrom: document.getElementById('bscdDateFrom'),
         dateTo: document.getElementById('bscdDateTo'),
-        niuQc: document.getElementById('bscdNiuQc'),
         chips: document.getElementById('bscdChips'),
         globalError: document.getElementById('bscdGlobalError'),
         globalErrorRef: document.getElementById('bscdGlobalErrorRef'),
@@ -86,7 +131,25 @@
     function hideGlobalError() { els.globalError.classList.add('d-none'); }
 
     function loadHiddenColumns() {
-        try { return JSON.parse(localStorage.getItem('bscd_hidden_cols') || '[]'); } catch (e) { return []; }
+        var hidden;
+        try { hidden = JSON.parse(localStorage.getItem('bscd_hidden_cols') || '[]'); } catch (e) { return []; }
+
+        // One-time seed: every ALL_COLUMNS entry not in DEFAULT_VISIBLE_COLUMNS
+        // (the 11 opt-in columns, incl. NIU_TO_RECLASS) starts hidden for
+        // every visitor — new and returning — until they opt in via the
+        // column selector, without touching a returning visitor's existing
+        // choices for the other columns.
+        try {
+            if (!localStorage.getItem('bscd_hidden_cols_seeded_v3')) {
+                boot.tableColumns.forEach(function (c) {
+                    if (DEFAULT_VISIBLE_COLUMNS.indexOf(c) === -1 && hidden.indexOf(c) === -1) hidden.push(c);
+                });
+                localStorage.setItem('bscd_hidden_cols_seeded_v3', '1');
+                localStorage.setItem('bscd_hidden_cols', JSON.stringify(hidden));
+            }
+        } catch (e) { /* private mode */ }
+
+        return hidden;
     }
     function saveHiddenColumns() {
         try { localStorage.setItem('bscd_hidden_cols', JSON.stringify(state.hiddenColumns)); } catch (e) { /* private mode */ }
@@ -124,16 +187,40 @@
         this.renderList();
         this.renderLabel();
     };
+    // Optional visual grouping (currently only used by the "status" dim, see
+    // configureStatusGroups()) — a group label is a non-selectable divider,
+    // never sent to the backend; the option itself still carries the exact
+    // technical value regardless of which group it renders under.
+    MultiSelect.prototype.optionHtml = function (o) {
+        var checked = this.selected.indexOf(o.value) !== -1 ? 'checked' : '';
+        return '<label class="bscd-ms__opt"><input type="checkbox" value="' + escapeAttr(o.value) + '" ' + checked + '>' +
+            '<span>' + escapeHtml(dimLabel(this.dim, o.value)) + '</span><em>' + fmt(o.count) + '</em></label>';
+    };
     MultiSelect.prototype.renderList = function () {
         var q = (this.filterInput.value || '').toLowerCase();
         var self = this;
-        this.list.innerHTML = this.values
-            .filter(function (o) { return !q || o.value.toLowerCase().indexOf(q) !== -1; })
-            .map(function (o) {
-                var checked = self.selected.indexOf(o.value) !== -1 ? 'checked' : '';
-                return '<label class="bscd-ms__opt"><input type="checkbox" value="' + escapeAttr(o.value) + '" ' + checked + '>' +
-                    '<span>' + escapeHtml(o.value) + '</span><em>' + fmt(o.count) + '</em></label>';
-            }).join('') || '<div class="bscd-ms__none">Aucune valeur</div>';
+        var filtered = this.values.filter(function (o) { return !q || o.value.toLowerCase().indexOf(q) !== -1; });
+        var html;
+
+        if (this.groupOf && filtered.length) {
+            var buckets = this.groupLabels.map(function () { return []; });
+            filtered.forEach(function (o) { buckets[self.groupOf(o.value)].push(o); });
+            var rendered = 0;
+            html = buckets.map(function (list, i) {
+                if (!list.length) return '';
+                // A standalone, non-selectable divider between groups — its own
+                // element, never a checkbox/option, hidden from screen readers
+                // and never part of getValues().
+                var separator = rendered > 0 ? '<div class="bscd-ms__group-separator" aria-hidden="true"></div>' : '';
+                rendered++;
+                return separator + '<div class="bscd-ms__group-label">' + escapeHtml(self.groupLabels[i]) + '</div>' +
+                    list.map(function (o) { return self.optionHtml(o); }).join('');
+            }).join('');
+        } else {
+            html = filtered.map(function (o) { return self.optionHtml(o); }).join('');
+        }
+
+        this.list.innerHTML = html || '<div class="bscd-ms__none">Aucune valeur</div>';
 
         this.list.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
             cb.addEventListener('change', function () {
@@ -146,8 +233,19 @@
     };
     MultiSelect.prototype.renderLabel = function () {
         if (this.selected.length === 0) { this.labelEl.textContent = 'Toutes'; this.root.classList.remove('is-active'); }
-        else if (this.selected.length === 1) { this.labelEl.textContent = this.selected[0]; this.root.classList.add('is-active'); }
+        else if (this.selected.length === 1) { this.labelEl.textContent = dimLabel(this.dim, this.selected[0]); this.root.classList.add('is-active'); }
         else { this.labelEl.textContent = this.selected.length + ' sélectionnées'; this.root.classList.add('is-active'); }
+        this.updateTooltip();
+    };
+    // Native `title` tooltip on the closed field — set ONLY when the text is
+    // actually clipped by its own ellipsis (scrollWidth > clientWidth is the
+    // standard truncation test), so a short label never gets a useless
+    // tooltip. Generic across every dim (status, meter, segmentation, …),
+    // not specific to any one value.
+    MultiSelect.prototype.updateTooltip = function () {
+        var el = this.labelEl;
+        if (el.scrollWidth > el.clientWidth + 1) { el.setAttribute('title', el.textContent); }
+        else { el.removeAttribute('title'); }
     };
     MultiSelect.prototype.toggle = function () { this.panel.classList.toggle('is-open'); };
     MultiSelect.prototype.close = function () { this.panel.classList.remove('is-open'); };
@@ -163,6 +261,12 @@
         var root = document.querySelector('.bscd-ms[data-dim="' + dim + '"]');
         if (root) ms[dim] = new MultiSelect(root);
     });
+
+    function refreshAllTooltips() {
+        Object.keys(ms).forEach(function (dim) { ms[dim].updateTooltip(); });
+    }
+    window.addEventListener('resize', debounce(refreshAllTooltips, 200));
+    configureStatusGroups();
 
     // ── geo cascade ───────────────────────────────────────────────────
     function refreshCascade() {
@@ -201,6 +305,68 @@
     ms.region.onChange = function () { refreshCascade(); };
     ms.division.onChange = function () { refreshCascade(); };
 
+    // ── type de compteur <-> segmentation cascade ──────────────────────
+    // Explicit business mapping (single source of truth, matches the audit
+    // report). 2026-09 rule change: PREPAID no longer uses its own
+    // Old_Dormant/Never Vending pair — it now uses the exact same 8-value
+    // RFM segmentation list as POSTPAID, so there is only ONE list, shared
+    // by both. Matching always compares the FULL normalised value, never a
+    // substring. Any METER value outside {POSTPAID, PREPAID} (e.g.
+    // "Compteurs Communicants") and any SEGMENTATION value outside this
+    // list is neutral: it neither restricts nor is restricted by this
+    // cascade.
+    var RFM_SEGMENTATIONS = [
+        '1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk',
+        '5-Dormant', '6 Always Late', '7 sometime Paid', '8 Never Paid'
+    ];
+    var POSTPAID_SEGMENTATIONS = RFM_SEGMENTATIONS;
+    var PREPAID_SEGMENTATIONS = RFM_SEGMENTATIONS;
+
+    function normalizeMatch(v) { return String(v).trim().toUpperCase().replace(/\s+/g, ' '); }
+    function buildNormSet(list) {
+        var set = {};
+        list.forEach(function (v) { set[normalizeMatch(v)] = true; });
+        return set;
+    }
+    var RFM_SEG_SET = buildNormSet(RFM_SEGMENTATIONS);
+    function isKnownSegmentation(value) { return !!RFM_SEG_SET[normalizeMatch(value)]; }
+
+    // -> 'POSTPAID' | 'PREPAID' | null (e.g. "Compteurs Communicants").
+    function meterUniverse(value) {
+        var n = normalizeMatch(value);
+        if (n === 'POSTPAID') return 'POSTPAID';
+        if (n === 'PREPAID') return 'PREPAID';
+        return null;
+    }
+
+    function segmentationOptionsForMeters(meterValues) {
+        var all = (state.options && state.options.segmentations) || [];
+        var hasKnownMeter = meterValues.some(function (m) { return !!meterUniverse(m); });
+        // No POSTPAID/PREPAID selected (nothing, or only a neutral meter like
+        // "Compteurs Communicants") -> stay neutral, show everything.
+        if (!hasKnownMeter) return all;
+        return all.filter(function (p) { return isKnownSegmentation(p.value); });
+    }
+    // Segmentation -> Type compteur is intentionally NOT implemented: since
+    // PREPAID and POSTPAID now share the exact same segmentation domain, a
+    // Segmentation choice can no longer disambiguate which Type compteur it
+    // belongs to (it is compatible with both), so this direction must never
+    // force a Type compteur selection any more (see audit report — this
+    // retires the old Old_Dormant/Never Vending -> PREPAID deduction).
+    ms.meter.onChange = function () {
+        ms.segmentation.setOptions(segmentationOptionsForMeters(ms.meter.getValues()));
+    };
+
+    // Two visual groups in the STATUT dropdown — "Contrats actifs" first
+    // (the 4 business-active statuses), then "Contrats inactifs" (every
+    // other status the backend actually returns, never hardcoded here).
+    // Purely a display grouping: group labels are not options, selection
+    // and the values sent to the backend are unaffected.
+    function configureStatusGroups() {
+        ms.status.groupLabels = ['Contrats actifs', 'Contrats inactifs'];
+        ms.status.groupOf = function (value) { return ACTIVE_STATUSES.indexOf(value) !== -1 ? 0 : 1; };
+    }
+
     // ── filter form <-> criteria ──────────────────────────────────────
     function readForm() {
         var c = {};
@@ -210,7 +376,6 @@
             var v = ms[dim].getValues();
             if (v.length) c[dim] = v;
         });
-        if (els.niuQc.value) c.niu_qc = els.niuQc.value;
         return c;
     }
 
@@ -229,13 +394,13 @@
     var FILTER_LABELS = {
         date_from: 'Depuis', date_to: "Jusqu'au", region: 'Région', division: 'Division',
         agence: 'Agence', status: 'Statut', segmentation: 'Segmentation',
-        segment_tresor: 'Segment trésor', meter: 'Compteur', voltage: 'Tension', niu_qc: 'NIU_QC'
+        segment_tresor: 'Segment trésor', meter: 'Compteur', voltage: 'Tension', niu_qc: 'Qualité NIU'
     };
 
     function filterText(k, v) {
-        if (k === 'niu_qc') return v === '0' ? 'Valide' : 'À contrôler';
         if (k === 'date_from' || k === 'date_to') return frDate(v);
-        return Array.isArray(v) ? v.join(', ') : v;
+        if (Array.isArray(v)) return v.map(function (x) { return dimLabel(k, x); }).join(', ');
+        return dimLabel(k, v);
     }
 
     function renderChips() {
@@ -252,9 +417,9 @@
                 var key = btn.parentNode.dataset.chip;
                 if (key === 'date_from') window.frdate.clear(els.dateFrom);
                 else if (key === 'date_to') window.frdate.clear(els.dateTo);
-                else if (key === 'niu_qc') els.niuQc.value = '';
                 else if (ms[key]) ms[key].clear();
                 refreshCascade();
+                if (key === 'meter') ms.segmentation.setOptions(segmentationOptionsForMeters(ms.meter.getValues()));
                 apply();
             });
         });
@@ -273,10 +438,11 @@
 
             ms.region.setOptions(data.regions);
             ms.status.setOptions(data.statuses);
-            ms.segmentation.setOptions(data.segmentations);
+            ms.segmentation.setOptions(segmentationOptionsForMeters(ms.meter.getValues()));
             ms.segment_tresor.setOptions(data.segmentsTresor);
             ms.meter.setOptions(data.meters);
             ms.voltage.setOptions(data.voltages);
+            ms.niu_qc.setOptions(data.niuQualities);
             refreshCascade();
         });
     }
@@ -705,6 +871,10 @@
     document.querySelectorAll('[data-reset-filters]').forEach(function (b) { b.addEventListener('click', resetFilters); });
     document.getElementById('bscdToggleAdvanced').addEventListener('click', function () {
         document.getElementById('bscdAdvanced').classList.toggle('d-none');
+        // The advanced dims (segmentation, meter, …) were hidden (display:none)
+        // when their tooltip was first computed, so scrollWidth/clientWidth
+        // read 0/0 back then — recheck now that they are actually laid out.
+        refreshAllTooltips();
     });
     document.getElementById('bscdRefresh').addEventListener('click', function () {
         loadFilterOptions(true).then(function () { return Promise.all([loadStats(true), loadRows(true)]); }).catch(handleError);
@@ -727,8 +897,9 @@
     document.getElementById('bscdExportLaunch').addEventListener('click', launchExport);
 
     function resetFilters() {
-        window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo); els.niuQc.value = '';
-        MS_DIMS.forEach(function (d) { ms[d].clear(); });
+        window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo);
+        MS_DIMS.forEach(function (d) { ms[d].clear(); }); // STATUT: reset leaves it empty, like every other filter
+        ms.segmentation.setOptions(segmentationOptionsForMeters([]));
         refreshCascade();
         apply();
     }
@@ -737,8 +908,11 @@
         hideGlobalError();
         renderColumnsMenu();
         // Fresh start: clear the staged form and chips so nothing on screen
-        // contradicts the unfiltered data we are about to load.
-        window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo); els.niuQc.value = ''; els.search.value = '';
+        // contradicts the unfiltered data we are about to load. STATUT has no
+        // default selection — the "Clients actifs" / "Contrats actifs" KPIs
+        // are a fixed business rule (Config\Oracle::$activeStatuses), not
+        // derived from this filter, so leaving it empty never changes them.
+        window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo); els.search.value = '';
         MS_DIMS.forEach(function (d) { ms[d].clear(); });
         state.applied = {};
         state.table.search = '';

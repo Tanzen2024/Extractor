@@ -75,6 +75,10 @@
 
     <div class="bscd-filters__advanced d-none" id="bscdAdvanced">
         <div class="bscd-filters__grid">
+            <div class="bscd-filter-group" data-ms="meter">
+                <label>Type de compteur</label>
+                <div class="bscd-ms" data-dim="meter"></div>
+            </div>
             <div class="bscd-filter-group" data-ms="segmentation">
                 <label>Segmentation</label>
                 <div class="bscd-ms" data-dim="segmentation"></div>
@@ -83,21 +87,13 @@
                 <label>Segment trésor</label>
                 <div class="bscd-ms" data-dim="segment_tresor"></div>
             </div>
-            <div class="bscd-filter-group" data-ms="meter">
-                <label>Type de compteur</label>
-                <div class="bscd-ms" data-dim="meter"></div>
-            </div>
             <div class="bscd-filter-group" data-ms="voltage">
                 <label>Tension</label>
                 <div class="bscd-ms" data-dim="voltage"></div>
             </div>
-            <div class="bscd-filter-group">
-                <label for="bscdNiuQc">Qualité NIU</label>
-                <select id="bscdNiuQc" name="niu_qc">
-                    <option value="">Toutes</option>
-                    <option value="0">Valide (0)</option>
-                    <option value="1">À contrôler (1)</option>
-                </select>
+            <div class="bscd-filter-group" data-ms="niu_qc">
+                <label>Qualité NIU</label>
+                <div class="bscd-ms" data-dim="niu_qc"></div>
             </div>
         </div>
     </div>

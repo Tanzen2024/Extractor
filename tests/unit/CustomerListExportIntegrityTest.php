@@ -29,8 +29,8 @@ final class CustomerListExportIntegrityTest extends TestCase
                 'PHONE_NUMBERS' => '0123456789', 'E_MAIL' => 'e@example.com', 'REF_GEO' => 'G001',
                 'DATE_AB' => '15-JAN-20', 'DATE_RESILIATION' => null, 'VOLTAGE' => '220',
                 'SEGMENT_TRESOR' => 'T1', 'METER' => 'PREPAID', 'NIU_RIGHT' => 'P123456789012A',
-                'NUI_QC' => 0, 'LAST_VC_DATE' => '01-AUG-26', 'SEGMENT_RFM_2' => 'RFM 1',
-                'POSTPAID_PROFILE_DATE' => null, 'SEGMENTATION' => 'RFM 1',
+                'NIU_TO_RECLASS' => 'N', 'NUI_QC' => 0, 'LAST_VC_DATE' => '01-AUG-26', 'SEGMENT_RFM_2' => 'RFM 1',
+                'POSTPAID_PROFILE_DATE' => null, 'SEGMENTATION' => 'RFM 1', 'UPDATED_AT' => '01-SEP-26',
             ],
             [
                 'REGION' => 'SUD', 'DIVISION' => 'DIVISION B', 'AGENCE' => 'AGENCE 002',
@@ -39,8 +39,8 @@ final class CustomerListExportIntegrityTest extends TestCase
                 'PHONE_NUMBERS' => null, 'E_MAIL' => null, 'REF_GEO' => 'G002',
                 'DATE_AB' => '02-FEB-19', 'DATE_RESILIATION' => '10-JUL-26', 'VOLTAGE' => '380',
                 'SEGMENT_TRESOR' => 'T2', 'METER' => 'POSTPAID', 'NIU_RIGHT' => null,
-                'NUI_QC' => 1, 'LAST_VC_DATE' => null, 'SEGMENT_RFM_2' => null,
-                'POSTPAID_PROFILE_DATE' => '01-JUN-26', 'SEGMENTATION' => 'Standard',
+                'NIU_TO_RECLASS' => 'Y', 'NUI_QC' => 1, 'LAST_VC_DATE' => null, 'SEGMENT_RFM_2' => null,
+                'POSTPAID_PROFILE_DATE' => '01-JUN-26', 'SEGMENTATION' => 'Standard', 'UPDATED_AT' => null,
             ],
             [
                 'REGION' => 'EST', 'DIVISION' => 'DIVISION C', 'AGENCE' => 'AGENCE 003',
@@ -49,8 +49,8 @@ final class CustomerListExportIntegrityTest extends TestCase
                 'PHONE_NUMBERS' => '0987654321', 'E_MAIL' => 'x@y.z', 'REF_GEO' => 'G003',
                 'DATE_AB' => '20-MAR-21', 'DATE_RESILIATION' => null, 'VOLTAGE' => '220',
                 'SEGMENT_TRESOR' => 'T3', 'METER' => 'Compteurs Communicants', 'NIU_RIGHT' => 'M987654321098Z',
-                'NUI_QC' => 0, 'LAST_VC_DATE' => null, 'SEGMENT_RFM_2' => null,
-                'POSTPAID_PROFILE_DATE' => null, 'SEGMENTATION' => '8 Autre',
+                'NIU_TO_RECLASS' => 'N', 'NUI_QC' => 0, 'LAST_VC_DATE' => null, 'SEGMENT_RFM_2' => null,
+                'POSTPAID_PROFILE_DATE' => null, 'SEGMENTATION' => '8 Autre', 'UPDATED_AT' => '15-SEP-26',
             ],
         ];
     }
@@ -124,13 +124,41 @@ final class CustomerListExportIntegrityTest extends TestCase
 
         $this->assertCount(count($rows), $csv);
         $this->assertCount(count($rows), $xlsx);
-        $this->assertCount(23, self::COLUMNS);
+        $this->assertCount(25, self::COLUMNS);
 
         foreach ($csv as $line) {
-            $this->assertCount(23, $line);
+            $this->assertCount(25, $line);
         }
         foreach ($xlsx as $line) {
-            $this->assertCount(23, $line);
+            $this->assertCount(25, $line);
+        }
+    }
+
+    public function testNiuToReclassAndUpdatedAtArePresentAndCorrectlyPositioned(): void
+    {
+        // NIU_TO_RECLASS must sit immediately before NUI_QC, UPDATED_AT must
+        // be the very last column — the exact ordering requested for the
+        // dashboard's two new columns.
+        $niuToReclassIndex = array_search('NIU_TO_RECLASS', self::COLUMNS, true);
+        $nuiQcIndex        = array_search('NUI_QC', self::COLUMNS, true);
+
+        $this->assertNotFalse($niuToReclassIndex, 'NIU_TO_RECLASS must be present in the export columns.');
+        $this->assertNotFalse($nuiQcIndex, 'NUI_QC must be present in the export columns.');
+        $this->assertSame($nuiQcIndex - 1, $niuToReclassIndex, 'NIU_TO_RECLASS must be immediately before NUI_QC.');
+        $this->assertSame('UPDATED_AT', self::COLUMNS[count(self::COLUMNS) - 1], 'UPDATED_AT must be the last export column.');
+        $this->assertSame(1, array_count_values(self::COLUMNS)['NIU_TO_RECLASS'], 'NIU_TO_RECLASS must not be duplicated.');
+        $this->assertSame(1, array_count_values(self::COLUMNS)['UPDATED_AT'], 'UPDATED_AT must not be duplicated.');
+
+        $rows = $this->fixtureRows();
+        $csv  = $this->writeAndReadCsv($rows);
+        $xlsx = $this->writeAndReadXlsx($rows);
+
+        foreach ($rows as $index => $sourceRow) {
+            $this->assertSame((string) $sourceRow['NIU_TO_RECLASS'], $csv[$index]['NIU_TO_RECLASS']);
+            $this->assertSame((string) $sourceRow['NIU_TO_RECLASS'], $xlsx[$index]['NIU_TO_RECLASS']);
+            $expectedUpdatedAt = $sourceRow['UPDATED_AT'] === null ? '' : (string) $sourceRow['UPDATED_AT'];
+            $this->assertSame($expectedUpdatedAt, $csv[$index]['UPDATED_AT']);
+            $this->assertSame($expectedUpdatedAt, $xlsx[$index]['UPDATED_AT']);
         }
     }
 
