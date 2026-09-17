@@ -58,11 +58,15 @@
         '7 sometime Paid': '7- Sometime paid', '8 Never Paid': '8- Never paid', '8 Autre': 'Autre'
     };
     var DIM_LABELS = {
+        // Only two real NUI_QC values exist (see QueryBuilder::TABLE_COLUMNS
+        // comment). The "reclasser" one carries an upstream encoding
+        // corruption that also eats letters out of "RECLASSER" itself, so an
+        // indexOf('RECLASSER') match is unreliable — match the one clean
+        // value ("correct") and treat anything else as the other.
         niu_qc: function (v) {
             var upper = String(v).toUpperCase();
-            if (upper.indexOf('RECLASSER') !== -1) return 'NUI à RECLASSER';
             if (upper.indexOf('CORRECT') !== -1) return 'NUI CORRECT';
-            return v;
+            return 'NUI à RECLASSER';
         },
         meter: function (v) {
             var upper = String(v).toUpperCase();
