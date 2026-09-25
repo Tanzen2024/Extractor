@@ -7,6 +7,9 @@ use OpenSpout\Common\Entity\Cell\StringCell;
 use OpenSpout\Common\Entity\Row;
 use OpenSpout\Writer\XLSX\Options;
 use OpenSpout\Writer\XLSX\Writer;
+use RuntimeException;
+use Throwable;
+use ZipArchive;
 
 /**
  * Streams CUSTOMERS_LIST rows straight into an .xlsx file via OpenSpout,
@@ -32,28 +35,47 @@ use OpenSpout\Writer\XLSX\Writer;
  */
 class XlsxRowWriter
 {
+    /**
+     * Upper bound on how long one close() waits for an external process to
+     * release a file OpenSpout has already unlinked — see close(). Only ever
+     * spent on that failure path.
+     */
+    private const RMDIR_RETRY_BUDGET_MS = 10_000;
+
     private Writer $writer;
     private int $sheetIndex = 0;
     private int $rowInSheet = 0;
     private bool $closed = false;
+    private ?string $tempFolder = null;
+
+    /** @var list<string> Scratch-folder rmdir() failures tolerated during close(). */
+    private array $cleanupWarnings = [];
 
     /**
      * @param string       $path            Destination .xlsx path (created/overwritten).
      * @param list<string>  $columns         Column names, in the exact order to write them.
      * @param int          $maxRowsPerSheet Data rows per sheet before splitting to the next.
      * @param string       $sheetBaseName   Sheet name prefix ("CustomerList" => CustomerList_1, ...).
-     * @param string|null  $tempFolder      Writable folder for OpenSpout's scratch files (defaults to the system temp dir).
+     * @param string|null  $tempFolder      Writable folder for OpenSpout's scratch files (defaults to the
+     *                                      system temp dir). Must be dedicated to this writer: close() treats
+     *                                      everything under it as this writer's own scratch.
      */
     public function __construct(
-        string $path,
+        private readonly string $path,
         private readonly array $columns,
         private readonly int $maxRowsPerSheet,
         private readonly string $sheetBaseName = 'CustomerList',
         ?string $tempFolder = null,
     ) {
         $options = new Options();
-        if ($tempFolder !== null && is_dir($tempFolder)) {
-            $options->setTempFolder($tempFolder);
+        if ($tempFolder !== null) {
+            // Fail loudly rather than silently falling back to the system
+            // temp dir: the caller chose this folder on purpose.
+            if (! is_dir($tempFolder) || ! is_writable($tempFolder)) {
+                throw new RuntimeException("Dossier temporaire OpenSpout inaccessible en écriture : {$tempFolder}");
+            }
+            $this->tempFolder = rtrim(realpath($tempFolder) ?: $tempFolder, '/\\');
+            $options->setTempFolder($this->tempFolder);
         }
         // Inline strings (the default) keep memory flat: each string is
         // written into the sheet XML as it arrives instead of being held in
@@ -90,6 +112,31 @@ class XlsxRowWriter
     /**
      * Finalises the workbook (writes the zip central directory). Idempotent —
      * safe to call from both the happy path and a cleanup/finally block.
+     *
+     * Windows race handled here (EXP-20260924-12337): OpenSpout's close()
+     * unlinks its scratch sheetN.xml files and immediately rmdir()s their
+     * folder. When another process — typically antivirus/EDR scanning the
+     * large file that was just written — still holds a handle opened with
+     * FILE_SHARE_DELETE, unlink() succeeds but the entry stays listed
+     * ("delete pending") until that handle is released, so rmdir() warns
+     * "Directory not empty". OpenSpout ignores rmdir()'s return value, but
+     * CodeIgniter turns the warning into an ErrorException that aborts
+     * close() before the zip is written. The entry must also be gone before
+     * the zip step, which walks the whole scratch tree and asserts realpath()
+     * on each item (false for a delete-pending file).
+     *
+     * So, for the duration of close() only, rmdir() failures inside this
+     * writer's own dedicated temp folder are intercepted:
+     *   - worksheets-temp (the only folder removed before the zip step) is
+     *     retried with a short backoff, bounded by RMDIR_RETRY_BUDGET_MS, until
+     *     the external handle goes away; if it never does, the original
+     *     warning is passed on and close() fails as it always did;
+     *   - any other folder is only removed after the archive has been
+     *     written, so its failure is recorded and ignored (the caller deletes
+     *     the whole temp folder afterwards).
+     * Whenever something was intercepted, the produced archive is checked
+     * before being accepted. Any other warning — including a failed unlink()
+     * — still goes to the previous handler untouched.
      */
     public function close(): void
     {
@@ -98,7 +145,53 @@ class XlsxRowWriter
         }
 
         $this->closed = true;
-        $this->writer->close();
+
+        if ($this->tempFolder === null) {
+            $this->writer->close();
+
+            return;
+        }
+
+        $retryBudgetMs = self::RMDIR_RETRY_BUDGET_MS;
+        $previous      = null;
+        $previous      = set_error_handler(function (int $severity, string $message, string $file = '', int $line = 0) use (&$previous, &$retryBudgetMs): bool {
+            if ($this->handleScratchRmdirFailure($message, $retryBudgetMs)) {
+                return true;
+            }
+
+            return $previous !== null && (bool) $previous($severity, $message, $file, $line);
+        });
+
+        try {
+            $this->writer->close();
+        } catch (Throwable $e) {
+            if ($this->cleanupWarnings !== []) {
+                throw new RuntimeException(
+                    'Finalisation XLSX impossible après verrouillage de fichiers temporaires OpenSpout par un autre processus (' . implode(' | ', $this->cleanupWarnings) . ')',
+                    0,
+                    $e,
+                );
+            }
+
+            throw $e;
+        } finally {
+            restore_error_handler();
+        }
+
+        if ($this->cleanupWarnings !== []) {
+            $this->assertArchiveIsComplete();
+        }
+    }
+
+    /**
+     * Scratch-folder rmdir() failures tolerated (and possibly recovered) during
+     * close(), for the caller to log. Empty on a normal run.
+     *
+     * @return list<string>
+     */
+    public function cleanupWarnings(): array
+    {
+        return $this->cleanupWarnings;
     }
 
     /** Number of sheets created so far (>= 1). */
@@ -129,5 +222,84 @@ class XlsxRowWriter
         $this->writer->addRow(new Row($header));
 
         $this->rowInSheet = 0;
+    }
+
+    /**
+     * @return bool True when the warning was an rmdir() failure inside this
+     *              writer's temp folder and has been dealt with; false hands
+     *              it on to the previous handler.
+     */
+    private function handleScratchRmdirFailure(string $message, int &$retryBudgetMs): bool
+    {
+        if (preg_match('/^rmdir\((.+?)\): /s', $message, $m) !== 1) {
+            return false;
+        }
+
+        $dir = realpath($m[1]);
+        if ($dir === false || ! str_starts_with($dir, $this->tempFolder . DIRECTORY_SEPARATOR)) {
+            return false;
+        }
+
+        // Every other scratch folder is removed by OpenSpout's final cleanup,
+        // after the archive has been written: nothing to wait for, whatever
+        // is left goes with the caller's own cleanup.
+        if (basename($dir) !== 'worksheets-temp') {
+            $this->cleanupWarnings[] = "{$message} — après écriture de l'archive, ignoré";
+
+            return true;
+        }
+
+        // worksheets-temp is removed *before* the zip step, which must not
+        // see it: wait (bounded) for the external handle to go away.
+        $waitedMs = 0;
+        $delayMs  = 50;
+        while ($retryBudgetMs > 0) {
+            $step = min($delayMs, $retryBudgetMs);
+            usleep($step * 1000);
+            $waitedMs      += $step;
+            $retryBudgetMs -= $step;
+
+            if (@rmdir($dir)) {
+                $this->cleanupWarnings[] = "{$message} — libéré après {$waitedMs} ms";
+
+                return true;
+            }
+
+            $delayMs = min($delayMs * 2, 1000);
+        }
+
+        // Still locked: let the original warning abort close() before the zip
+        // step, exactly as without this handler.
+        $this->cleanupWarnings[] = "{$message} — toujours verrouillé après {$waitedMs} ms";
+
+        return false;
+    }
+
+    /**
+     * Only reached when close() had to tolerate a scratch cleanup failure:
+     * make sure the archive is a consistent zip holding a workbook and that
+     * no scratch entry leaked into it.
+     */
+    private function assertArchiveIsComplete(): void
+    {
+        $zip    = new ZipArchive();
+        $status = $zip->open($this->path, ZipArchive::CHECKCONS);
+        if ($status !== true) {
+            throw new RuntimeException("Archive XLSX invalide après finalisation (code ZipArchive {$status}).");
+        }
+
+        try {
+            if ($zip->locateName('xl/workbook.xml') === false) {
+                throw new RuntimeException('Archive XLSX incomplète : xl/workbook.xml absent.');
+            }
+
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                if (str_starts_with((string) $zip->getNameIndex($i), 'worksheets-temp/')) {
+                    throw new RuntimeException('Archive XLSX invalide : fichiers temporaires OpenSpout inclus.');
+                }
+            }
+        } finally {
+            $zip->close();
+        }
     }
 }

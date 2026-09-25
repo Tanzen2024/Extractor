@@ -46,6 +46,21 @@
     // concern only and is kept in sync with it by convention.
     var ACTIVE_STATUSES = ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)'];
 
+    // SEGMENTATION values per Type de compteur — exact technical values, as
+    // observed in TB_CUSTOMERS_LIST (METER x SEGMENTATION, 2026-09-24):
+    // every POSTPAID value below occurs only on POSTPAID (and Compteurs
+    // Communicants) contracts, every PREPAID value only on PREPAID ones.
+    // "8 Autre" (Postpaid) and "Other" (Prepaid) are two distinct values that
+    // merely share the "Other" display label. POSTPAID order is the display
+    // order; PREPAID keeps the backend's count order. Drives the dropdown
+    // groups and the Type compteur -> Segmentation cascade only — never used
+    // to build a filter or a query.
+    var POSTPAID_SEGMENTATIONS = [
+        '1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk', '5 Delinquant',
+        '6 Always Late', '8 Never Paid', '7 sometime Paid', '8 Autre'
+    ];
+    var PREPAID_SEGMENTATIONS = ['5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'];
+
     // Technical value -> friendly display label, for dimensions where the raw
     // Oracle value is either not meant to be read as-is (NIU_QC: a corrupted
     // accented character upstream) or carries a numeric business-rule prefix
@@ -53,9 +68,9 @@
     // untouched technical one (see MultiSelect#renderList / getValues) — this
     // only changes what the user sees.
     var SEGMENTATION_LABELS = {
-        '1 PERFECT': 'Perfect', '2 RELIABLE': 'Reliable', '3 Occasionnal': 'Occasional',
-        '4 At-Risk': 'At Risk', '5 Delinquant': 'Delinquant', '6 Always Late': 'Always late',
-        '7 sometime Paid': '7- Sometime paid', '8 Never Paid': '8- Never paid', '8 Autre': 'Autre'
+        '1 PERFECT': 'PERFECT', '2 RELIABLE': 'RELIABLE', '3 Occasionnal': 'Occasional',
+        '4 At-Risk': 'At-Risk', '5 Delinquant': 'Delinquant', '6 Always Late': 'Always Late',
+        '8 Never Paid': 'Never Paid', '7 sometime Paid': 'sometime Paid', '8 Autre': 'Other'
     };
     var DIM_LABELS = {
         // Only two real NUI_QC values exist (see QueryBuilder::TABLE_COLUMNS
@@ -191,19 +206,26 @@
         this.renderList();
         this.renderLabel();
     };
-    // Optional visual grouping (currently only used by the "status" dim, see
-    // configureStatusGroups()) — a group label is a non-selectable divider,
-    // never sent to the backend; the option itself still carries the exact
-    // technical value regardless of which group it renders under.
+    // Optional visual grouping (used by the "status" and "segmentation" dims,
+    // see configureStatusGroups() / configureSegmentationGroups()) — a group
+    // label is a non-selectable divider, never sent to the backend; the
+    // option itself still carries the exact technical value regardless of
+    // which group it renders under. Optional orderOf(value) re-orders options
+    // inside a group (stable: ties keep the backend's count order).
     MultiSelect.prototype.optionHtml = function (o) {
         var checked = this.selected.indexOf(o.value) !== -1 ? 'checked' : '';
         return '<label class="bscd-ms__opt"><input type="checkbox" value="' + escapeAttr(o.value) + '" ' + checked + '>' +
             '<span>' + escapeHtml(dimLabel(this.dim, o.value)) + '</span><em>' + fmt(o.count) + '</em></label>';
     };
     MultiSelect.prototype.renderList = function () {
-        var q = (this.filterInput.value || '').toLowerCase();
+        // Case-insensitive, and "-"/"_" count as spaces ("at risk" finds "At-Risk").
+        function norm(s) { return String(s).toLowerCase().replace(/[-_\s]+/g, ' ').trim(); }
+        var q = norm(this.filterInput.value || '');
         var self = this;
-        var filtered = this.values.filter(function (o) { return !q || o.value.toLowerCase().indexOf(q) !== -1; });
+        // Matches the technical value or the label the user actually sees.
+        var filtered = this.values.filter(function (o) {
+            return !q || norm(o.value).indexOf(q) !== -1 || norm(dimLabel(self.dim, o.value)).indexOf(q) !== -1;
+        });
         var html;
 
         if (this.groupOf && filtered.length) {
@@ -212,6 +234,7 @@
             var rendered = 0;
             html = buckets.map(function (list, i) {
                 if (!list.length) return '';
+                if (self.orderOf) list.sort(function (a, b) { return self.orderOf(a.value) - self.orderOf(b.value); });
                 // A standalone, non-selectable divider between groups — its own
                 // element, never a checkbox/option, hidden from screen readers
                 // and never part of getValues().
@@ -271,6 +294,7 @@
     }
     window.addEventListener('resize', debounce(refreshAllTooltips, 200));
     configureStatusGroups();
+    configureSegmentationGroups();
 
     // ── geo cascade ───────────────────────────────────────────────────
     function refreshCascade() {
@@ -310,30 +334,24 @@
     ms.division.onChange = function () { refreshCascade(); };
 
     // ── type de compteur <-> segmentation cascade ──────────────────────
-    // Explicit business mapping (single source of truth, matches the audit
-    // report). 2026-09 rule change: PREPAID no longer uses its own
-    // Old_Dormant/Never Vending pair — it now uses the exact same 8-value
-    // RFM segmentation list as POSTPAID, so there is only ONE list, shared
-    // by both. Matching always compares the FULL normalised value, never a
-    // substring. Any METER value outside {POSTPAID, PREPAID} (e.g.
-    // "Compteurs Communicants") and any SEGMENTATION value outside this
-    // list is neutral: it neither restricts nor is restricted by this
-    // cascade.
-    var RFM_SEGMENTATIONS = [
-        '1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk',
-        '5-Dormant', '6 Always Late', '7 sometime Paid', '8 Never Paid'
-    ];
-    var POSTPAID_SEGMENTATIONS = RFM_SEGMENTATIONS;
-    var PREPAID_SEGMENTATIONS = RFM_SEGMENTATIONS;
-
+    // Each Type compteur restricts Segmentation to its own list
+    // (POSTPAID_SEGMENTATIONS / PREPAID_SEGMENTATIONS, top of file); both
+    // selected -> union of the two. The previous single shared RFM list
+    // offered the PREPAID-only "5-Dormant" under POSTPAID and hid the
+    // POSTPAID "5 Delinquant" / "8 Autre". Matching always compares the FULL
+    // normalised value, never a substring or the numeric prefix. Any METER
+    // value outside {POSTPAID, PREPAID} (e.g. "Compteurs Communicants") is
+    // neutral: on its own it shows every segmentation.
     function normalizeMatch(v) { return String(v).trim().toUpperCase().replace(/\s+/g, ' '); }
     function buildNormSet(list) {
         var set = {};
         list.forEach(function (v) { set[normalizeMatch(v)] = true; });
         return set;
     }
-    var RFM_SEG_SET = buildNormSet(RFM_SEGMENTATIONS);
-    function isKnownSegmentation(value) { return !!RFM_SEG_SET[normalizeMatch(value)]; }
+    var SEGMENTATION_SETS = {
+        POSTPAID: buildNormSet(POSTPAID_SEGMENTATIONS),
+        PREPAID: buildNormSet(PREPAID_SEGMENTATIONS)
+    };
 
     // -> 'POSTPAID' | 'PREPAID' | null (e.g. "Compteurs Communicants").
     function meterUniverse(value) {
@@ -342,21 +360,25 @@
         if (n === 'PREPAID') return 'PREPAID';
         return null;
     }
+    // -> 'POSTPAID' | 'PREPAID' | null (a value in neither list).
+    function segmentationUniverse(value) {
+        var n = normalizeMatch(value);
+        if (SEGMENTATION_SETS.POSTPAID[n]) return 'POSTPAID';
+        if (SEGMENTATION_SETS.PREPAID[n]) return 'PREPAID';
+        return null;
+    }
 
     function segmentationOptionsForMeters(meterValues) {
         var all = (state.options && state.options.segmentations) || [];
-        var hasKnownMeter = meterValues.some(function (m) { return !!meterUniverse(m); });
+        var universes = {};
+        meterValues.forEach(function (m) { var u = meterUniverse(m); if (u) universes[u] = true; });
         // No POSTPAID/PREPAID selected (nothing, or only a neutral meter like
         // "Compteurs Communicants") -> stay neutral, show everything.
-        if (!hasKnownMeter) return all;
-        return all.filter(function (p) { return isKnownSegmentation(p.value); });
+        if (!universes.POSTPAID && !universes.PREPAID) return all;
+        return all.filter(function (p) { return !!universes[segmentationUniverse(p.value)]; });
     }
-    // Segmentation -> Type compteur is intentionally NOT implemented: since
-    // PREPAID and POSTPAID now share the exact same segmentation domain, a
-    // Segmentation choice can no longer disambiguate which Type compteur it
-    // belongs to (it is compatible with both), so this direction must never
-    // force a Type compteur selection any more (see audit report — this
-    // retires the old Old_Dormant/Never Vending -> PREPAID deduction).
+    // Segmentation -> Type compteur is intentionally NOT implemented: a
+    // Segmentation choice never forces a Type compteur selection.
     ms.meter.onChange = function () {
         ms.segmentation.setOptions(segmentationOptionsForMeters(ms.meter.getValues()));
     };
@@ -369,6 +391,25 @@
     function configureStatusGroups() {
         ms.status.groupLabels = ['Contrats actifs', 'Contrats inactifs'];
         ms.status.groupOf = function (value) { return ACTIVE_STATUSES.indexOf(value) !== -1 ? 0 : 1; };
+    }
+
+    // Three visual groups in the SEGMENTATION dropdown, same mechanism as
+    // STATUT: "Postpaid" (POSTPAID_SEGMENTATIONS, in that order), "Prepaid"
+    // (PREPAID_SEGMENTATIONS, count order), then "Autres" for any value the
+    // backend returns that is in neither list — none today, and like any
+    // empty group it is then not rendered. Display only: selection, the
+    // values sent to the backend and the counts are unaffected.
+    function configureSegmentationGroups() {
+        var groupIndex = { POSTPAID: 0, PREPAID: 1 };
+        ms.segmentation.groupLabels = ['Postpaid', 'Prepaid', 'Autres'];
+        ms.segmentation.groupOf = function (value) {
+            var u = segmentationUniverse(value);
+            return u ? groupIndex[u] : 2;
+        };
+        ms.segmentation.orderOf = function (value) {
+            var i = POSTPAID_SEGMENTATIONS.indexOf(value);
+            return i === -1 ? POSTPAID_SEGMENTATIONS.length : i;
+        };
     }
 
     // ── filter form <-> criteria ──────────────────────────────────────

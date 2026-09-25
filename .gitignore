@@ -81,6 +81,8 @@ Vagrantfile
 /writable/debugbar/*
 !/writable/debugbar/index.html
 
+/writable/tmp/
+
 php_errors.log
 
 #-------------------------

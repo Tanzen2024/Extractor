@@ -108,21 +108,36 @@ class CustomerListExportService
      */
     private const ORPHAN_MAX_AGE_SECONDS = 24 * 3600;
 
+    /**
+     * OpenSpout scratch folders still present after this long belong to an
+     * export that died without reaching its own cleanup (fatal error, PHP
+     * timeout, killed worker). Far above exportTimeLimitSeconds, so a folder
+     * still in use by a running export is never swept.
+     */
+    private const TEMP_ORPHAN_MAX_AGE_SECONDS = 6 * 3600;
+
     private OracleExtractionService $oracle;
     private OracleConfig $config;
     private QueryBuilder $queryBuilder;
+
+    /** Final export files only (customer_list_*.csv/.xlsx). */
     private string $exportDir;
+
+    /** Parent of the per-export OpenSpout scratch folders — never $exportDir. */
+    private string $openSpoutTempDir;
 
     public function __construct(
         ?OracleExtractionService $oracle = null,
         ?OracleConfig $config = null,
         ?string $exportDir = null,
         ?QueryBuilder $queryBuilder = null,
+        ?string $openSpoutTempDir = null,
     ) {
-        $this->config       = $config ?? new OracleConfig();
-        $this->oracle       = $oracle ?? new OracleExtractionService($this->config);
-        $this->queryBuilder = $queryBuilder ?? new QueryBuilder($this->config);
-        $this->exportDir    = rtrim($exportDir ?? WRITEPATH . 'uploads/exports', '/\\') . DIRECTORY_SEPARATOR;
+        $this->config           = $config ?? new OracleConfig();
+        $this->oracle           = $oracle ?? new OracleExtractionService($this->config);
+        $this->queryBuilder     = $queryBuilder ?? new QueryBuilder($this->config);
+        $this->exportDir        = rtrim($exportDir ?? WRITEPATH . 'uploads/exports', '/\\') . DIRECTORY_SEPARATOR;
+        $this->openSpoutTempDir = rtrim($openSpoutTempDir ?? WRITEPATH . 'tmp/openspout', '/\\') . DIRECTORY_SEPARATOR;
 
         if (! is_dir($this->exportDir) && ! mkdir($this->exportDir, 0755, true) && ! is_dir($this->exportDir)) {
             throw new RuntimeException("Impossible de créer le répertoire d'export {$this->exportDir}.");
@@ -212,57 +227,74 @@ class CustomerListExportService
 
         $t0 = microtime(true);
 
-        try {
-            $writer = new XlsxRowWriter(
-                $path,
-                self::COLUMNS,
-                $this->config->xlsxMaxRowsPerSheet,
-                'CustomerList',
-                rtrim($this->exportDir, '/\\'),
-            );
-        } catch (\Throwable $e) {
-            if (is_file($path)) {
-                @unlink($path);
-            }
-
-            throw $e;
-        }
-
-        $firstRowAt = null;
-        $written    = 0;
-        $writeTime  = 0.0; // Time spent handing rows to the writer, measured inside the fetch loop.
-        $saveTime   = 0.0; // Time spent finalising the zip (writer->close()), measured after the loop.
+        // OpenSpout's scratch files go to a folder private to this export,
+        // outside $exportDir, so final files and scratch never mix and this
+        // export's cleanup can never touch a concurrent one's.
+        $scratchDir = $this->createOpenSpoutScratchDir();
 
         try {
-            $rowCount = $this->oracle->stream($statement['sql'], function (array $row) use ($writer, &$written, &$firstRowAt, &$writeTime, $t0): void {
-                if ($firstRowAt === null) {
-                    $firstRowAt = microtime(true);
+            try {
+                $writer = new XlsxRowWriter(
+                    $path,
+                    self::COLUMNS,
+                    $this->config->xlsxMaxRowsPerSheet,
+                    'CustomerList',
+                    $scratchDir,
+                );
+            } catch (\Throwable $e) {
+                if (is_file($path)) {
+                    @unlink($path);
                 }
 
-                $tw = microtime(true);
-                $writer->writeRow($row);
-                $writeTime += microtime(true) - $tw;
+                throw $e;
+            }
 
-                $this->logCheckpoint('xlsx', ++$written, $writer->sheetCount(), $t0);
-            }, $statement['binds'], prefetch: $this->config->exportPrefetchRows);
+            $firstRowAt = null;
+            $written    = 0;
+            $writeTime  = 0.0; // Time spent handing rows to the writer, measured inside the fetch loop.
+            $saveTime   = 0.0; // Time spent finalising the zip (writer->close()), measured after the loop.
 
-            $tFetchEnd = microtime(true);
-
-            $writer->close();
-            $saveTime = microtime(true) - $tFetchEnd;
-        } catch (\Throwable $e) {
-            // Release the writer's file handles (best effort), then drop the
-            // partial workbook — same rationale as exportCsv().
             try {
+                $rowCount = $this->oracle->stream($statement['sql'], function (array $row) use ($writer, &$written, &$firstRowAt, &$writeTime, $t0): void {
+                    if ($firstRowAt === null) {
+                        $firstRowAt = microtime(true);
+                    }
+
+                    $tw = microtime(true);
+                    $writer->writeRow($row);
+                    $writeTime += microtime(true) - $tw;
+
+                    $this->logCheckpoint('xlsx', ++$written, $writer->sheetCount(), $t0);
+                }, $statement['binds'], prefetch: $this->config->exportPrefetchRows);
+
+                $tFetchEnd = microtime(true);
+
                 $writer->close();
-            } catch (\Throwable) {
-                // ignore — we are already unwinding a failure
-            }
-            if (is_file($path)) {
-                @unlink($path);
+                $saveTime = microtime(true) - $tFetchEnd;
+            } catch (\Throwable $e) {
+                // Release the writer's file handles (best effort), then drop the
+                // partial workbook — same rationale as exportCsv().
+                try {
+                    $writer->close();
+                } catch (\Throwable) {
+                    // ignore — we are already unwinding a failure
+                }
+                if (is_file($path)) {
+                    @unlink($path);
+                }
+
+                throw $e;
             }
 
-            throw $e;
+            foreach ($writer->cleanupWarnings() as $warning) {
+                log_message('warning', '[EXPORT] nettoyage temporaire OpenSpout: {warning}', ['warning' => $warning]);
+            }
+        } finally {
+            // Reached only once the writer is closed (or never opened): OpenSpout
+            // normally empties this folder itself on close(); this removes the
+            // folder and whatever a failed close() left behind. Anything still
+            // locked is picked up later by sweepOrphanFiles().
+            $this->deleteDirectory($scratchDir);
         }
 
         $sheets = $writer->sheetCount();
@@ -344,9 +376,11 @@ class CustomerListExportService
      * after the download — see ExportJobController). Runs before
      * every new export rather than on a cron, keeping this self-contained.
      *
-     * Covers both the generated output files (customer_list_*.csv/.xlsx) and
-     * OpenSpout's own scratch folders (xlsx<uniqid>/), which it writes into
-     * this same directory and normally removes itself on close().
+     * Covers the generated output files (customer_list_*.csv/.xlsx) in
+     * $exportDir, and the per-export OpenSpout scratch folders (export_*) in
+     * $openSpoutTempDir that an export killed before its own finally block
+     * left behind. The xlsx* glob on $exportDir only collects scratch folders
+     * from before OpenSpout was moved out of it.
      */
     private function sweepOrphanFiles(): void
     {
@@ -363,11 +397,48 @@ class CustomerListExportService
                 $this->deleteDirectory($dir);
             }
         }
+
+        $tempCutoff = time() - self::TEMP_ORPHAN_MAX_AGE_SECONDS;
+
+        foreach (glob($this->openSpoutTempDir . 'export_*', GLOB_ONLYDIR) ?: [] as $dir) {
+            if (filemtime($dir) < $tempCutoff) {
+                $this->deleteDirectory($dir);
+            }
+        }
+    }
+
+    /**
+     * Creates (under $openSpoutTempDir) the scratch folder dedicated to one
+     * XLSX export. Only called by exportXlsx(), so CSV exports never depend
+     * on this directory.
+     */
+    private function createOpenSpoutScratchDir(): string
+    {
+        // @: a concurrent export may create the parent at the same moment.
+        if (! is_dir($this->openSpoutTempDir) && ! @mkdir($this->openSpoutTempDir, 0755, true) && ! is_dir($this->openSpoutTempDir)) {
+            throw new RuntimeException("Impossible de créer le répertoire temporaire OpenSpout {$this->openSpoutTempDir}.");
+        }
+        if (! is_writable($this->openSpoutTempDir)) {
+            throw new RuntimeException("Le répertoire temporaire OpenSpout {$this->openSpoutTempDir} n'est pas accessible en écriture.");
+        }
+
+        $dir = $this->openSpoutTempDir . 'export_' . date('Ymd_His') . '_' . bin2hex(random_bytes(6));
+        if (! @mkdir($dir, 0755)) {
+            throw new RuntimeException("Impossible de créer le dossier temporaire d'export {$dir}.");
+        }
+
+        return $dir;
     }
 
     private function deleteDirectory(string $dir): void
     {
-        foreach (scandir($dir) ?: [] as $entry) {
+        // Best effort, and called from finally blocks: never raise a warning
+        // (CodeIgniter would turn it into an exception masking the real one).
+        if (! is_dir($dir)) {
+            return;
+        }
+
+        foreach (@scandir($dir) ?: [] as $entry) {
             if ($entry === '.' || $entry === '..') {
                 continue;
             }
