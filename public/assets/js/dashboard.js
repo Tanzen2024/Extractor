@@ -896,10 +896,16 @@
                 if (job.status === 'done') {
                     clearInterval(timer);
                     exportLocked = true;
-                    status.innerHTML = 'Fichier prêt (' + fmt(Math.round((job.fileSize || 0) / 1048576)) + ' Mo). ' +
-                        '<a class="btn btn-sm btn-success ml-2" href="' + job.downloadUrl + '">Télécharger</a>';
                     btn.textContent = 'Fermer';
                     btn.disabled = false;
+                    if (!job.downloadUrl) {
+                        status.innerHTML = '<span class="text-danger">Fichier prêt mais lien de téléchargement indisponible. Réessayez.</span>';
+                        return;
+                    }
+                    // Auto-download: the endpoint answers with Content-Disposition:
+                    // attachment, so the page stays on the dashboard (same as sync mode).
+                    status.textContent = 'Fichier prêt (' + fmt(Math.round((job.fileSize || 0) / 1048576)) + ' Mo) — téléchargement lancé.';
+                    window.location = job.downloadUrl;
                 } else if (job.status === 'error') {
                     clearInterval(timer);
                     exportLocked = true;

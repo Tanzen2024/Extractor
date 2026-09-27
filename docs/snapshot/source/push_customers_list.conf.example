@@ -1,0 +1,10 @@
+# Copier en /u01/COMMERCIALS_APPS/Nwameh/jobs/push_customers_list.conf
+# chmod 600, propriétaire = compte qui exécute load_tb_customers_list.sh.
+# Ne contient AUCUN secret : uniquement des chemins et des noms.
+EXTRACTOR_HOST=<ip-ou-nom-du-serveur-extractor>
+PUSH_USER=svc_snapshot_push          # compte SFTP seul, chrooté sur incoming/
+PUSH_KEY=$HOME/.ssh/extractor_push_ed25519
+REMOTE_DIR=incoming                  # relatif à la racine chroot du compte SFTP
+INSTALL_USER=svc_snapshot_install    # compte limité à « php spark snapshot:install »
+INSTALL_KEY=$HOME/.ssh/extractor_install_ed25519
+KNOWN_HOSTS=$HOME/.ssh/known_hosts_extractor

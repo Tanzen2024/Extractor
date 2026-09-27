@@ -4,7 +4,11 @@ namespace App\Commands;
 
 use App\Services\CustomerListExportService;
 use App\Services\CustomersList\FilterCriteria;
+use App\Services\Export\RowSource;
 use App\Services\OracleExtractionService;
+use App\Services\Snapshot\ActiveSnapshot;
+use App\Services\Snapshot\SnapshotRowSource;
+use App\Services\Snapshot\SnapshotStore;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
 use RuntimeException;
@@ -14,29 +18,32 @@ use ZipArchive;
 /**
  * Full-table performance test of the CUSTOMERS_LIST export, CSV then XLSX.
  *
- *   php spark export:benchmark
+ *   php spark export:benchmark                  (source: local snapshot — no Oracle)
+ *   php spark export:benchmark --source oracle  (historical live Oracle reference)
  *
  * Runs the real CustomerListExportService::exportCsv() / exportXlsx() with
- * FilterCriteria::none() against the real Oracle source — no row cap, no
- * test table. The two formats run one after the other, never concurrently;
+ * FilterCriteria::none() against the chosen source — no row cap, no test
+ * table. In snapshot mode nothing touches Oracle, the warm-up included; the
+ * consistency reference is the row count validated at snapshot install. The two formats run one after the other, never concurrently;
  * each generated file is validated (row count, zip integrity, sheet count)
  * outside the timed window, then deleted.
  *
  * Rows are counted as they are handed to the writer (a thin stream()
  * wrapper increments after each successful writeRow), never from COUNT(*).
- * A COUNT(*) is only shown afterwards, outside the timed window, as a
- * consistency reference.
+ * In Oracle mode a COUNT(*) is shown afterwards, outside the timed window, as
+ * a consistency reference.
  *
- * Read-only on Oracle. Dev tooling only — never wired into a route or a
+ * Read-only on both sources. Dev tooling only — never wired into a route or a
  * scheduled task. See ExportBenchmark (export:bench) for capped partial runs.
  */
 class ExportPerformanceTest extends BaseCommand
 {
     protected $group       = 'Export';
     protected $name        = 'export:benchmark';
-    protected $description = 'Full CUSTOMERS_LIST export performance test (CSV then XLSX, no filter, real Oracle).';
-    protected $usage       = 'export:benchmark [--only csv|xlsx] [--limit N]';
+    protected $description = 'Full CUSTOMERS_LIST export performance test (CSV then XLSX, no filter; snapshot or Oracle source).';
+    protected $usage       = 'export:benchmark [--source snapshot|oracle] [--only csv|xlsx] [--limit N]';
     protected $options     = [
+        '--source' => 'snapshot (default: the active local snapshot, no Oracle) or oracle (live reference).',
         '--only'  => 'Run a single format (csv or xlsx) instead of CSV then XLSX.',
         '--limit' => 'Smoke test only: cap each export at N rows (result flagged PARTIEL, not a benchmark).',
     ];
@@ -45,8 +52,28 @@ class ExportPerformanceTest extends BaseCommand
 
     public function run(array $params): int
     {
-        $source = CustomerListExportService::SQL_TABLE;
+        $mode   = strtolower((string) (CLI::getOption('source') ?? 'snapshot'));
         $limit  = max(0, (int) (CLI::getOption('limit') ?? 0));
+        if (! in_array($mode, ['snapshot', 'oracle'], true)) {
+            CLI::error("--source doit valoir 'snapshot' ou 'oracle'");
+
+            return EXIT_ERROR;
+        }
+
+        $snapshot = null;
+        if ($mode === 'snapshot') {
+            try {
+                $snapshot = (new SnapshotStore())->active();
+            } catch (Throwable $e) {
+                CLI::error('SNAPSHOT : ECHEC');
+                CLI::error('Erreur : ' . $e->getMessage());
+
+                return EXIT_ERROR;
+            }
+            $source = "Snapshot local {$snapshot->id} ({$snapshot->csvPath})";
+        } else {
+            $source = CustomerListExportService::SQL_TABLE;
+        }
         $only   = strtolower((string) (CLI::getOption('only') ?? ''));
         $formats = match ($only) {
             ''      => ['csv', 'xlsx'],
@@ -77,7 +104,9 @@ class ExportPerformanceTest extends BaseCommand
         CLI::write('Début : ' . date('Y-m-d H:i:s'));
         CLI::write('');
 
-        $oracle = new ExportPerformanceCountingOracle(self::PROGRESS_EVERY, $limit);
+        $counter = $snapshot !== null
+            ? new ExportPerformanceCountingSource(new SnapshotRowSource($snapshot, maxRows: $limit), self::PROGRESS_EVERY, $limit)
+            : new ExportPerformanceCountingOracle(self::PROGRESS_EVERY, $limit);
 
         // --- Warm-up (not timed, not counted) ---------------------------------
         CLI::write('----------------------------------------');
@@ -85,7 +114,7 @@ class ExportPerformanceTest extends BaseCommand
         CLI::write('----------------------------------------');
 
         try {
-            $this->warmUp($oracle, $source);
+            $snapshot !== null ? $this->warmUpSnapshot($snapshot) : $this->warmUp($counter, $source);
         } catch (Throwable $e) {
             CLI::error('WARM-UP : ECHEC');
             CLI::error('Erreur : ' . $e->getMessage());
@@ -104,7 +133,7 @@ class ExportPerformanceTest extends BaseCommand
             CLI::write('----------------------------------------');
 
             try {
-                $results[$format] = $this->runOne($oracle, $format, $source);
+                $results[$format] = $this->runOne($counter, $format, $source, $snapshot);
             } catch (Throwable $e) {
                 CLI::error("{$label} : ECHEC");
                 CLI::error('Erreur : ' . $e->getMessage());
@@ -125,6 +154,25 @@ class ExportPerformanceTest extends BaseCommand
         return EXIT_SUCCESS;
     }
 
+    /** Snapshot mode: no Oracle at all — the file must be present and readable. */
+    private function warmUpSnapshot(ActiveSnapshot $snapshot): void
+    {
+        $reader = $snapshot->reader();
+        $cols   = count($reader->header());
+        $reader->close();
+
+        CLI::write(sprintf(
+            'Snapshot actif %s : %s lignes, %d colonnes, %s, généré le %s : OK',
+            $snapshot->id,
+            $this->formatInt($snapshot->rows()),
+            $cols,
+            $this->formatSize((int) filesize($snapshot->csvPath)),
+            (string) ($snapshot->meta['generated_at'] ?? 'n/d'),
+        ));
+
+        $this->checkWritableDirs();
+    }
+
     private function warmUp(ExportPerformanceCountingOracle $oracle, string $source): void
     {
         $sample = 0;
@@ -137,6 +185,11 @@ class ExportPerformanceTest extends BaseCommand
         }
         CLI::write("Connexion Oracle + lecture {$source} : OK");
 
+        $this->checkWritableDirs();
+    }
+
+    private function checkWritableDirs(): void
+    {
         foreach ([WRITEPATH . 'uploads/exports', WRITEPATH . 'tmp/openspout'] as $dir) {
             if (! is_dir($dir) && ! @mkdir($dir, 0755, true) && ! is_dir($dir)) {
                 throw new RuntimeException("Répertoire introuvable/non créable : {$dir}");
@@ -158,7 +211,7 @@ class ExportPerformanceTest extends BaseCommand
     /**
      * @return array<string, mixed>
      */
-    private function runOne(ExportPerformanceCountingOracle $oracle, string $format, string $source): array
+    private function runOne(ExportPerformanceCountingOracle|ExportPerformanceCountingSource $oracle, string $format, string $source, ?ActiveSnapshot $snapshot): array
     {
         $scratchBefore = $this->openSpoutScratchDirs();
 
@@ -166,12 +219,14 @@ class ExportPerformanceTest extends BaseCommand
         memory_reset_peak_usage();
         $oracle->reset();
 
-        // Timed window: service init (orphan sweep, export dir) -> Oracle
-        // extraction -> row writing -> fclose() / OpenSpout close() + zip
+        // Timed window: service init (orphan sweep, export dir) -> source
+        // read (Oracle or snapshot) -> row writing -> fclose() / OpenSpout close() + zip
         // finalisation + scratch cleanup — everything exportCsv()/exportXlsx()
         // does before returning.
         $start   = microtime(true);
-        $service = new CustomerListExportService($oracle);
+        $service = $oracle instanceof ExportPerformanceCountingSource
+            ? new CustomerListExportService(rowSource: $oracle)
+            : new CustomerListExportService($oracle);
         $meta    = $format === 'xlsx'
             ? $service->exportXlsx(FilterCriteria::none())
             : $service->exportCsv(FilterCriteria::none());
@@ -202,9 +257,15 @@ class ExportPerformanceTest extends BaseCommand
         $leftover = array_diff($this->openSpoutScratchDirs(), $scratchBefore);
 
         $totalRows = null;
-        $oracle->stream("SELECT COUNT(*) AS N FROM {$source}", static function (array $row) use (&$totalRows): void {
-            $totalRows = (int) $row['N'];
-        }, counting: false);
+        if ($snapshot !== null) {
+            $totalRows = $snapshot->rows();
+            $refLabel  = 'Lignes validées snapshot  ';
+        } else {
+            $oracle->stream("SELECT COUNT(*) AS N FROM {$source}", static function (array $row) use (&$totalRows): void {
+                $totalRows = (int) $row['N'];
+            }, counting: false);
+            $refLabel = 'COUNT(*) après export     ';
+        }
 
         $rate = $counted / max($elapsed, 0.000001);
 
@@ -216,8 +277,9 @@ class ExportPerformanceTest extends BaseCommand
         CLI::write('Taille fichier   : ' . $this->formatSize($size) . ' (' . $this->formatInt($size) . ' octets)');
         CLI::write('');
         CLI::write('Détail (mesures internes du service) :');
-        CLI::write(sprintf('  SQL -> 1re ligne : %.2f s', $meta['sqlDurationMs'] / 1000));
-        CLI::write(sprintf('  Fetch Oracle     : %.2f s', $meta['fetchDurationMs'] / 1000));
+        CLI::write('  Source           : ' . $meta['source']);
+        CLI::write(sprintf('  Jusqu\'à 1re ligne: %.2f s', $meta['sqlDurationMs'] / 1000));
+        CLI::write(sprintf('  Lecture source   : %.2f s', $meta['fetchDurationMs'] / 1000));
         CLI::write(sprintf('  Écriture%s : %.2f s', $format === 'xlsx' ? ' + close' : '        ', $meta['writeDurationMs'] / 1000));
         CLI::write(sprintf('  Mémoire PHP pic  : %.1f MB', $peakMb));
         CLI::write(sprintf('  Mémoire PHP fin  : %.1f MB', $currentMb));
@@ -232,7 +294,7 @@ class ExportPerformanceTest extends BaseCommand
         }
         CLI::write('  Lignes (compteur export)  : ' . $this->formatInt($counted));
         CLI::write('  Lignes (retour service)   : ' . $this->formatInt($meta['rows']));
-        CLI::write('  COUNT(*) après export     : ' . $this->formatInt((int) $totalRows) . ' (référence, hors chrono)');
+        CLI::write('  ' . $refLabel . ': ' . $this->formatInt((int) $totalRows) . ' (référence, hors chrono)');
         CLI::write('  Fichier supprimé          : ' . ($deleted ? 'oui' : 'NON'));
         if ($format === 'xlsx') {
             CLI::write('  Dossier temp OpenSpout    : ' . ($leftover === [] ? 'supprimé' : 'RESTANT ' . implode(', ', $leftover)));
@@ -255,6 +317,9 @@ class ExportPerformanceTest extends BaseCommand
             throw new RuntimeException('export incohérent — ' . implode(' ; ', $problems));
         }
         if ($oracle->limit() === 0 && $totalRows !== $counted) {
+            if ($snapshot !== null) {
+                throw new RuntimeException("export incohérent — {$counted} lignes exportées ≠ {$totalRows} lignes du snapshot");
+            }
             CLI::write('  NOTE : COUNT(*) actuel différent du nombre exporté (la table a pu évoluer pendant le test).', 'yellow');
         }
 
@@ -488,5 +553,62 @@ class ExportPerformanceCountingOracle extends OracleExtractionService
                 ));
             }
         }, $binds, $prefetch);
+    }
+}
+
+/**
+ * Snapshot-mode twin of ExportPerformanceCountingOracle: wraps the real
+ * SnapshotRowSource, counts the rows whose onRow (the writer) returned
+ * without throwing, and prints a progress line every $progressEvery rows.
+ */
+class ExportPerformanceCountingSource implements RowSource
+{
+    private int $rows = 0;
+    private float $t0 = 0.0;
+
+    public function __construct(
+        private readonly RowSource $inner,
+        private readonly int $progressEvery,
+        private readonly int $limit = 0,
+    ) {
+    }
+
+    public function reset(): void
+    {
+        $this->rows = 0;
+        $this->t0   = microtime(true);
+    }
+
+    public function limit(): int
+    {
+        return $this->limit;
+    }
+
+    public function rowsWritten(): int
+    {
+        return $this->rows;
+    }
+
+    public function label(): string
+    {
+        return $this->inner->label();
+    }
+
+    public function stream(FilterCriteria $criteria, callable $onRow): int
+    {
+        return $this->inner->stream($criteria, function (array $row) use ($onRow): void {
+            $onRow($row);
+
+            if (++$this->rows % $this->progressEvery === 0) {
+                $elapsed = microtime(true) - $this->t0;
+                CLI::write(sprintf(
+                    '  %s lignes... (%.1f s, %s lignes/s, mém. %.0f MB)',
+                    number_format($this->rows, 0, ',', ' '),
+                    $elapsed,
+                    number_format((int) ($this->rows / max($elapsed, 0.001)), 0, ',', ' '),
+                    memory_get_usage(true) / 1048576,
+                ));
+            }
+        });
     }
 }

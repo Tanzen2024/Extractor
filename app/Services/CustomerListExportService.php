@@ -5,8 +5,14 @@ namespace App\Services;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\QueryBuilder;
 use App\Services\Export\CsvRowWriter;
+use App\Services\Export\ReportsStreamStats;
+use App\Services\Export\OracleRowSource;
+use App\Services\Export\RowSource;
 use App\Services\Export\XlsxRowWriter;
+use App\Services\Snapshot\SnapshotRowSource;
+use App\Services\Snapshot\SnapshotStore;
 use Config\Oracle as OracleConfig;
+use Config\Snapshot as SnapshotConfig;
 use RuntimeException;
 
 /**
@@ -19,9 +25,12 @@ use RuntimeException;
  * contains precisely the population the dashboard was showing. Filter values
  * travel as oci_bind_by_name placeholders; no request text is concatenated.
  *
- * Both formats stream row-by-row from Oracle (OracleExtractionService::stream(),
- * with the existing OCI8 prefetch tuning) straight into an open file/writer,
- * so PHP's memory stays flat regardless of row count:
+ * Rows come from a RowSource (see the constructor): by default the local
+ * validated snapshot (SnapshotRowSource — no Oracle at all, filters applied
+ * by RowMatcher, the PHP twin of QueryBuilder::where()), or the historical
+ * live Oracle SELECT (OracleRowSource) when Config\Snapshot::$exportSource is
+ * 'oracle'. Either way rows stream one by one straight into an open
+ * file/writer, so PHP's memory stays flat regardless of row count:
  *   - CSV:  fputcsv() into a file handle (CsvRowWriter).
  *   - XLSX: OpenSpout streaming writer (XlsxRowWriter) — no in-memory
  *           workbook, no per-cell object graph, no SQLite cell cache.
@@ -99,6 +108,18 @@ class CustomerListExportService
     private const LOG_CHECKPOINT_EVERY = 100_000;
 
     /**
+     * CSV rows are copied to the file in ~1 MB chunks instead of one write()
+     * per row (see CsvRowWriter) — same bytes, measured 1.75x faster writes.
+     */
+    private const CSV_WRITE_BUFFER_BYTES = 1 << 20;
+
+    /**
+     * Upper bound on waiting for this export's (already emptied) OpenSpout
+     * scratch folder to disappear — see removeScratchDir().
+     */
+    private const SCRATCH_RMDIR_BUDGET_MS = 5_000;
+
+    /**
      * Generated files older than this are swept before each export. Covers
      * both orphans from an interrupted/crashed export AND completed
      * asynchronous export-job files the requester never came back to
@@ -116,9 +137,8 @@ class CustomerListExportService
      */
     private const TEMP_ORPHAN_MAX_AGE_SECONDS = 6 * 3600;
 
-    private OracleExtractionService $oracle;
+    private RowSource $rowSource;
     private OracleConfig $config;
-    private QueryBuilder $queryBuilder;
 
     /** Final export files only (customer_list_*.csv/.xlsx). */
     private string $exportDir;
@@ -126,16 +146,32 @@ class CustomerListExportService
     /** Parent of the per-export OpenSpout scratch folders — never $exportDir. */
     private string $openSpoutTempDir;
 
+    /**
+     * Row source resolution:
+     *   1. $rowSource if given;
+     *   2. else an explicitly injected $oracle / $queryBuilder -> Oracle
+     *      (callers that deliberately target Oracle, e.g. export:bench);
+     *   3. else Config\Snapshot::$exportSource: 'snapshot' (default) -> the
+     *      active local snapshot, 'oracle' -> live Oracle.
+     * With 'snapshot' and no valid snapshot, this throws
+     * SnapshotUnavailableException — there is no silent Oracle fallback.
+     */
     public function __construct(
         ?OracleExtractionService $oracle = null,
         ?OracleConfig $config = null,
         ?string $exportDir = null,
         ?QueryBuilder $queryBuilder = null,
         ?string $openSpoutTempDir = null,
+        ?RowSource $rowSource = null,
+        ?SnapshotConfig $snapshotConfig = null,
     ) {
         $this->config           = $config ?? new OracleConfig();
-        $this->oracle           = $oracle ?? new OracleExtractionService($this->config);
-        $this->queryBuilder     = $queryBuilder ?? new QueryBuilder($this->config);
+        $snapshotConfig       ??= new SnapshotConfig();
+        $this->rowSource        = $rowSource ?? (
+            $oracle !== null || $queryBuilder !== null || ! $snapshotConfig->usesSnapshot()
+                ? new OracleRowSource($oracle, $this->config, $queryBuilder)
+                : new SnapshotRowSource(store: new SnapshotStore($snapshotConfig))
+        );
         $this->exportDir        = rtrim($exportDir ?? WRITEPATH . 'uploads/exports', '/\\') . DIRECTORY_SEPARATOR;
         $this->openSpoutTempDir = rtrim($openSpoutTempDir ?? WRITEPATH . 'tmp/openspout', '/\\') . DIRECTORY_SEPARATOR;
 
@@ -159,25 +195,39 @@ class CustomerListExportService
         // for why raise-only matters.
         OracleExtractionService::ensurePhpTimeLimitAtLeast($this->config->exportTimeLimitSeconds);
 
-        $statement = $this->queryBuilder->exportStatement($filters ?? FilterCriteria::none());
+        $filters ??= FilterCriteria::none();
 
         $filename = $this->buildFilename('csv');
         $path     = $this->exportDir . $filename;
+        // Rows go to <final>.tmp; the final name only ever appears, by an
+        // atomic rename, once the file is complete, flushed, closed and
+        // checked — a download URL or export job can never point at a
+        // partial file. On any failure the .tmp is deleted.
+        $tmpPath  = $path . '.tmp';
+        $source   = $this->rowSource->label();
+        $filtersLog = json_encode($filters->toArray(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
-        $t0 = microtime(true);
+        log_message('info', '[CSV EXPORT] started export={export} source={source} filters={filters}', [
+            'export' => $filename, 'source' => $source, 'filters' => $filtersLog,
+        ]);
 
-        $handle = fopen($path, 'wb');
-        if ($handle === false) {
-            throw new RuntimeException("Impossible de créer le fichier d'export CSV.");
-        }
-
-        $writer      = new CsvRowWriter($handle, self::COLUMNS);
-        $firstRowAt  = null;
-        $written     = 0;
-        $writeTime   = 0.0;
+        $t0         = microtime(true);
+        $handle     = null;
+        $firstRowAt = null;
+        $written    = 0;
+        $writeTime  = 0.0;
 
         try {
-            $rowCount = $this->oracle->stream($statement['sql'], function (array $row) use ($writer, &$written, &$firstRowAt, &$writeTime, $t0): void {
+            $handle = @fopen($tmpPath, 'wb');
+            if ($handle === false) {
+                $handle = null;
+
+                throw new RuntimeException("Impossible de créer le fichier d'export CSV.");
+            }
+
+            $writer = new CsvRowWriter($handle, self::COLUMNS, true, self::CSV_WRITE_BUFFER_BYTES);
+
+            $rowCount = $this->rowSource->stream($filters, function (array $row) use ($writer, &$written, &$firstRowAt, &$writeTime, $t0): void {
                 if ($firstRowAt === null) {
                     $firstRowAt = microtime(true);
                 }
@@ -187,28 +237,82 @@ class CustomerListExportService
                 $writeTime += microtime(true) - $tw;
 
                 $this->logCheckpoint('csv', ++$written, 1, $t0);
-            }, $statement['binds'], prefetch: $this->config->exportPrefetchRows);
+            });
+
+            $tw = microtime(true);
+            $writer->flush();
+            $flushed = fflush($handle);
+            $writeTime += microtime(true) - $tw;
+
+            $closed = fclose($handle);
+            $handle = null;
+
+            if (! $flushed || ! $closed) {
+                throw new RuntimeException("Finalisation du fichier d'export CSV impossible (disque plein ?).");
+            }
+            if ($written !== $rowCount) {
+                throw new RuntimeException("Export CSV incohérent : {$written} lignes écrites pour {$rowCount} lignes retenues.");
+            }
+
+            clearstatcache(true, $tmpPath);
+            if ((int) @filesize($tmpPath) === 0) {
+                throw new RuntimeException("Fichier d'export CSV vide après écriture.");
+            }
+            if (! @rename($tmpPath, $path)) {
+                throw new RuntimeException("Publication du fichier d'export CSV impossible.");
+            }
         } catch (\Throwable $e) {
-            fclose($handle);
-            // Don't leave a header-only (or partially written) file behind
-            // for a failed attempt — the controller never gets to request a
-            // download for it, so nothing else will clean it up before the
-            // next export's orphan sweep, up to two hours later.
-            @unlink($path);
+            if (is_resource($handle)) {
+                @fclose($handle);
+            }
+            @unlink($tmpPath);
+
+            log_message('error', '[CSV EXPORT] failed export={export} source={source} filters={filters} rows_exported_before_failure={rows} elapsed_ms={ms} error={error}', [
+                'export'  => $filename,
+                'source'  => $source,
+                'filters' => $filtersLog,
+                'rows'    => $written,
+                'ms'      => round((microtime(true) - $t0) * 1000),
+                'error'   => $e->getMessage(),
+            ]);
 
             throw $e;
         }
 
-        fclose($handle);
+        $tEnd  = microtime(true);
+        $stats = $this->rowSource instanceof ReportsStreamStats ? $this->rowSource->lastStreamStats() : null;
 
-        $tEnd = microtime(true);
-
-        return $this->buildMeta($path, $filename, 'csv', $rowCount, 1, [
+        $meta = $this->buildMeta($path, $filename, 'csv', $rowCount, 1, [
             'sql'   => ($firstRowAt ?? $tEnd) - $t0,
             'fetch' => ($tEnd - ($firstRowAt ?? $tEnd)) - $writeTime,
             'write' => $writeTime,
             'total' => $tEnd - $t0,
         ]);
+
+        // Snapshot: the source reports its own read/filter split. Oracle:
+        // the database filters, so every fetched row was a matching row.
+        $meta['rowsRead']         = $stats['rows_read'] ?? $rowCount;
+        $meta['rowsMatched']      = $stats['rows_matched'] ?? $rowCount;
+        $meta['rowsExported']     = $written;
+        $meta['readDurationMs']   = $stats !== null ? round($stats['read_s'] * 1000, 1) : $meta['fetchDurationMs'];
+        $meta['filterDurationMs'] = $stats !== null ? round($stats['filter_s'] * 1000, 1) : 0.0;
+
+        log_message('info', '[CSV EXPORT] completed export={export} source={source} filters={filters} rows_read={read} rows_matched={matched} rows_exported={exported} read_ms={readMs} filter_ms={filterMs} write_ms={writeMs} total_ms={totalMs} file_size={size} peak_memory_mb={mem}', [
+            'export'   => $filename,
+            'source'   => $source,
+            'filters'  => $filtersLog,
+            'read'     => $meta['rowsRead'],
+            'matched'  => $meta['rowsMatched'],
+            'exported' => $meta['rowsExported'],
+            'readMs'   => $meta['readDurationMs'],
+            'filterMs' => $meta['filterDurationMs'],
+            'writeMs'  => $meta['writeDurationMs'],
+            'totalMs'  => $meta['totalDurationMs'],
+            'size'     => $meta['fileSize'],
+            'mem'      => $meta['peakMemoryMb'],
+        ]);
+
+        return $meta;
     }
 
     /**
@@ -220,7 +324,7 @@ class CustomerListExportService
     {
         OracleExtractionService::ensurePhpTimeLimitAtLeast($this->config->exportTimeLimitSeconds);
 
-        $statement = $this->queryBuilder->exportStatement($filters ?? FilterCriteria::none());
+        $filters ??= FilterCriteria::none();
 
         $filename = $this->buildFilename('xlsx');
         $path     = $this->exportDir . $filename;
@@ -255,7 +359,7 @@ class CustomerListExportService
             $saveTime   = 0.0; // Time spent finalising the zip (writer->close()), measured after the loop.
 
             try {
-                $rowCount = $this->oracle->stream($statement['sql'], function (array $row) use ($writer, &$written, &$firstRowAt, &$writeTime, $t0): void {
+                $rowCount = $this->rowSource->stream($filters, function (array $row) use ($writer, &$written, &$firstRowAt, &$writeTime, $t0): void {
                     if ($firstRowAt === null) {
                         $firstRowAt = microtime(true);
                     }
@@ -265,7 +369,7 @@ class CustomerListExportService
                     $writeTime += microtime(true) - $tw;
 
                     $this->logCheckpoint('xlsx', ++$written, $writer->sheetCount(), $t0);
-                }, $statement['binds'], prefetch: $this->config->exportPrefetchRows);
+                });
 
                 $tFetchEnd = microtime(true);
 
@@ -294,7 +398,7 @@ class CustomerListExportService
             // normally empties this folder itself on close(); this removes the
             // folder and whatever a failed close() left behind. Anything still
             // locked is picked up later by sweepOrphanFiles().
-            $this->deleteDirectory($scratchDir);
+            $this->removeScratchDir($scratchDir);
         }
 
         $sheets = $writer->sheetCount();
@@ -346,11 +450,12 @@ class CustomerListExportService
             'writeDurationMs' => round(max(0, $durations['write']) * 1000, 1),
             'totalDurationMs' => round(max(0, $durations['total']) * 1000, 1),
             'peakMemoryMb'    => round(memory_get_peak_usage(true) / 1048576, 2),
+            'source'          => $this->rowSource->label(),
         ];
 
         $rowsPerSecond = $durations['total'] > 0 ? round($rows / $durations['total']) : 0;
 
-        log_message('info', '[EXPORT] completed format={format} rows={rows} sheets={sheets} rows_per_s={rps} total_ms={total} sql_ms={sql} write_ms={write} file_size={size} peak_memory_mb={mem}', [
+        log_message('info', '[EXPORT] completed source={source} format={format} rows={rows} sheets={sheets} rows_per_s={rps} total_ms={total} sql_ms={sql} write_ms={write} file_size={size} peak_memory_mb={mem}', [
             'format' => $format,
             'rows'   => $rows,
             'sheets' => $sheets,
@@ -360,6 +465,7 @@ class CustomerListExportService
             'write'  => $meta['writeDurationMs'],
             'size'   => $fileSize,
             'mem'    => $meta['peakMemoryMb'],
+            'source' => $meta['source'],
         ]);
 
         return $meta;
@@ -428,6 +534,39 @@ class CustomerListExportService
         }
 
         return $dir;
+    }
+
+    /**
+     * Deletes this export's scratch folder, retrying briefly: on Windows the
+     * multi-GB sheet files OpenSpout just unlinked can stay "delete pending"
+     * while antivirus/EDR still holds them, so the first rmdir() fails even
+     * though nothing is left to delete (observed 2026-09-27 on a full 3.3M-row
+     * export: folder empty but still present). Bounded; a folder still there
+     * is logged and left to sweepOrphanFiles(). Never throws (finally block).
+     */
+    private function removeScratchDir(string $dir): void
+    {
+        $waitedMs = 0;
+        $delayMs  = 50;
+
+        while (true) {
+            $this->deleteDirectory($dir);
+            clearstatcache(true, $dir);
+            if (! is_dir($dir)) {
+                return;
+            }
+            if ($waitedMs >= self::SCRATCH_RMDIR_BUDGET_MS) {
+                break;
+            }
+            usleep($delayMs * 1000);
+            $waitedMs += $delayMs;
+            $delayMs   = min($delayMs * 2, 1000);
+        }
+
+        log_message('warning', '[EXPORT] dossier temporaire OpenSpout non supprimé après {ms} ms (fichier encore verrouillé par un autre processus ?) : {dir} — sera purgé par le balayage des orphelins', [
+            'ms'  => $waitedMs,
+            'dir' => $dir,
+        ]);
     }
 
     private function deleteDirectory(string $dir): void

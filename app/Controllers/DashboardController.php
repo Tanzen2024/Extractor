@@ -8,7 +8,10 @@ use App\Services\CustomersList\DashboardService;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\InvalidFilterException;
 use App\Services\CustomersList\QueryBuilder;
+use App\Services\Snapshot\SnapshotRowSource;
+use App\Services\Snapshot\SnapshotUnavailableException;
 use Config\Oracle as OracleConfig;
+use Config\Snapshot as SnapshotConfig;
 use Throwable;
 
 /**
@@ -120,14 +123,27 @@ class DashboardController extends BaseController
                 return $this->response->setStatusCode(422)->setJSON(['error' => 'format', 'message' => 'Format invalide.']);
             }
 
+            // Export source (Config\Snapshot::$exportSource). With the
+            // snapshot, validation, count and rows all come from ONE pinned
+            // local version — this endpoint then never touches Oracle, and
+            // never falls back to it when no snapshot is available.
+            $source = null;
+            if ((new SnapshotConfig())->usesSnapshot()) {
+                try {
+                    $source = new SnapshotRowSource();
+                } catch (SnapshotUnavailableException $e) {
+                    return $this->snapshotUnavailable($e);
+                }
+            }
+
             $criteria = FilterCriteria::fromRequest(
                 (array) $this->request->getPost(),
-                $this->dashboard->allowedValues(),
+                $source?->allowedValues() ?? $this->dashboard->allowedValues(),
             );
 
-            // Source of truth: the backend's own COUNT over the export
+            // Source of truth: the backend's own count over the export
             // filters — the browser's displayed figure is never trusted.
-            $count    = $this->dashboard->count($criteria);
+            $count    = $source?->count($criteria) ?? $this->dashboard->count($criteria);
             $decision = $this->dashboard->exportDecision($count);
 
             if ($decision === 'empty') {
@@ -135,7 +151,7 @@ class DashboardController extends BaseController
             }
 
             if ($decision === 'sync') {
-                $service = new CustomerListExportService();
+                $service = new CustomerListExportService(rowSource: $source);
 
                 try {
                     $meta = $format === 'xlsx' ? $service->exportXlsx($criteria) : $service->exportCsv($criteria);
@@ -212,6 +228,21 @@ class DashboardController extends BaseController
         });
 
         return $this->response->download($path, null)->setFileName($name);
+    }
+
+    /**
+     * No valid snapshot: a controlled, logged 503 — deliberately no Oracle
+     * extraction instead. The message is shown as-is by dashboard.js.
+     */
+    private function snapshotUnavailable(SnapshotUnavailableException $e)
+    {
+        $ref = bscd_error_reference('SNAP');
+        log_message('error', '[SNAPSHOT] export refusé [{ref}] : aucun snapshot valide ({message})', ['ref' => $ref, 'message' => $e->getMessage()]);
+
+        return $this->response->setStatusCode(503)->setJSON([
+            'error'   => 'snapshot_unavailable',
+            'message' => "Les données de référence ne sont pas disponibles actuellement (réf. {$ref}). Réessayez plus tard ou contactez l'administrateur",
+        ]);
     }
 
     private function signDownload(string $filename): string

@@ -200,9 +200,11 @@
             <button type="button" class="btn btn-outline-primary btn-sm" data-export="csv" title="La population exportée correspond exactement aux filtres appliqués">
                 <i class="fas fa-file-csv mr-1"></i> Export CSV
             </button>
+            <?php /* Export Excel masqué côté UI (backend XLSX/OpenSpout et routes conservés).
             <button type="button" class="btn btn-outline-primary btn-sm" data-export="xlsx" title="La population exportée correspond exactement aux filtres appliqués">
                 <i class="fas fa-file-excel mr-1"></i> Export Excel
             </button>
+            */ ?>
         </div>
     </div>
 
