@@ -14,6 +14,7 @@
 
     var boot = JSON.parse(document.getElementById('bscd-dashboard-data').textContent || '{}');
     var EP = boot.endpoints;
+    var SOURCE = window.bscdDashboardSource; // public/assets/js/dashboard-source.js
 
     var PALETTE = ['#1f6fb2', '#7c3aed', '#d97706', '#1a7f4d', '#c0392b', '#0891b2', '#db2777', '#ca8a04', '#475569', '#94a3b8'];
     var OTHER_COLOR = '#c7ccd6';
@@ -103,7 +104,13 @@
         table: { page: 1, perPage: 50, sort: 'CONTRACT', dir: 'asc', search: '' },
         hiddenColumns: loadHiddenColumns(),
         lastStatsAt: null,
-        exporting: false
+        exporting: false,
+        filterTotal: null,           // snapshot count for state.applied (GET /dashboard/count)
+        snapshotCount: null,
+        countKey: null,              // filters that snapshotCount describes
+        snapshot: null,              // active snapshot metadata (rows, dates)
+        liveTotal: null,             // live Oracle total for the same filters (GET /dashboard/stats)
+        liveKey: null
     };
 
     var els = {
@@ -114,6 +121,8 @@
         globalError: document.getElementById('bscdGlobalError'),
         globalErrorRef: document.getElementById('bscdGlobalErrorRef'),
         cacheNote: document.getElementById('bscdCacheNote'),
+        sourceNote: document.getElementById('bscdSourceNote'),
+        sourceWarning: document.getElementById('bscdSourceWarning'),
         rowCount: document.getElementById('bscdRowCount'),
         tableHead: document.getElementById('bscdTableHead'),
         tableBody: document.getElementById('bscdTableBody'),
@@ -494,14 +503,67 @@
 
     function loadStats(fresh) {
         setKpiSkeleton(true);
-        var url = EP.stats + '?' + toParams(state.applied).toString() + (fresh ? '&fresh=1' : '');
+        var key = toParams(state.applied).toString();
+        if (EP.count) loadCount(key); // in parallel: the snapshot count behind "Total" / export "Résultats"
+        var url = EP.stats + '?' + key + (fresh ? '&fresh=1' : '');
         return json(url).then(function (data) {
             if (data.error) throw data;
-            renderKpis(data);
+            renderKpis(data, key);
             renderCharts(data);
             state.lastStatsAt = Date.now();
             updateCacheNote();
         });
+    }
+
+    // Rows matching the filters in the ACTIVE SNAPSHOT — the file the exports
+    // read (same count as POST /dashboard/export). Drives the "Total" card
+    // and the export modal's "Résultats"; never replaced by an Oracle figure.
+    var countSeq = 0;
+
+    function loadCount(key) {
+        var seq = ++countSeq;
+        state.filterTotal = null;
+        state.snapshotCount = null;
+        state.countKey = null;
+        refreshExportCount();
+        renderSourceWarning();
+
+        return json(EP.count + '?' + key).then(function (data) {
+            if (seq !== countSeq) return; // superseded by a newer filter set
+            if (!data || data.error || typeof data.count !== 'number') throw data;
+            state.filterTotal = data.count;
+            state.snapshotCount = data.count;
+            state.countKey = key;
+            state.snapshot = data.snapshot || null;
+            document.querySelector('[data-kpi="total"]').textContent = fmt(data.count);
+            document.querySelector('[data-kpi-sub="total"]').textContent = 'contrats correspondant aux filtres';
+            if (els.sourceNote) els.sourceNote.textContent = SOURCE.sourceNote(state.snapshot);
+            refreshExportCount();
+            renderSourceWarning();
+        }).catch(function () {
+            if (seq !== countSeq) return;
+            document.querySelector('[data-kpi="total"]').textContent = '—';
+            document.querySelector('[data-kpi-sub="total"]').textContent = 'référentiel indisponible';
+        });
+    }
+
+    // Warns when live Oracle (ratios, charts, table) and the snapshot (total,
+    // exports) disagree — only when both figures describe the same filters.
+    function renderSourceWarning() {
+        if (!els.sourceWarning) return;
+        var text = state.countKey !== null && state.countKey === state.liveKey
+            ? SOURCE.divergenceNote(state.snapshotCount, state.liveTotal) : '';
+        els.sourceWarning.textContent = text;
+        els.sourceWarning.classList.toggle('d-none', text === '');
+    }
+
+    // The export modal reads the snapshot count — refreshed in place when it
+    // arrives while the modal is already open.
+    function refreshExportCount() {
+        var modal = document.getElementById('bscdExportModal');
+        if (!modal || !modal.classList.contains('show')) return;
+        document.getElementById('bscdExportCount').textContent = state.filterTotal != null ? fmt(state.filterTotal) : '…';
+        document.getElementById('bscdExportSource').textContent = SOURCE.sourceNote(state.snapshot);
     }
 
     var rowsSeq = 0;
@@ -539,11 +601,18 @@
         });
     }
 
-    function renderKpis(stats) {
+    function renderKpis(stats, key) {
         var k = stats.kpis;
-        state.filterTotal = stats.totalRows; // filter-only count (no search) — used by the export modal
-        document.querySelector('[data-kpi="total"]').textContent = fmt(k.total);
-        document.querySelector('[data-kpi-sub="total"]').textContent = 'contrats correspondant aux filtres';
+        // Live Oracle total for these filters: base of the ratios below, and
+        // compared with the snapshot count to flag a divergence.
+        state.liveTotal = stats.totalRows;
+        state.liveKey = key;
+        if (!EP.count) { // no count endpoint (older page shell): previous behaviour
+            state.filterTotal = stats.totalRows;
+            document.querySelector('[data-kpi="total"]').textContent = fmt(k.total);
+            document.querySelector('[data-kpi-sub="total"]').textContent = 'contrats correspondant aux filtres';
+        }
+        renderSourceWarning();
         [['actifs', k.actifs], ['avecCompteur', k.avecCompteur], ['contacts', k.contacts]].forEach(function (pair) {
             document.querySelector('[data-kpi="' + pair[0] + '"]').textContent = fmt(pair[1].value);
             document.querySelector('[data-kpi-sub="' + pair[0] + '"]').textContent = pct(pair[1].pct) + ' du total';
@@ -782,6 +851,9 @@
     // ── export ────────────────────────────────────────────────────────
     var currentExportFormat = 'csv';
     var exportLocked = false; // true once a launch has resolved to a terminal state (empty result); next click closes
+    var downloadedJobs = {};  // job ids whose file download was already triggered — one download per job
+    var EXPORT_PROGRESS = window.bscdExportProgress; // public/assets/js/export-progress.js
+    var exportTracker = EXPORT_PROGRESS.createTracker(downloadedJobs); // active job + one download per job
 
     function openExportModal(format) {
         currentExportFormat = format;
@@ -789,8 +861,11 @@
 
         // The export applies the filters only (never the table search box),
         // so show the filter-only count from the last stats call.
-        var total = state.filterTotal != null ? state.filterTotal : state.table.total;
+        // Snapshot count only (see loadCount) — never the table's live Oracle
+        // count as a stand-in: '…' until it arrives, then refreshExportCount().
+        var total = state.filterTotal != null ? state.filterTotal : (EP.count ? null : state.table.total);
         document.getElementById('bscdExportCount').textContent = total != null ? fmt(total) : '…';
+        document.getElementById('bscdExportSource').textContent = SOURCE.sourceNote(state.snapshot);
 
         var rows = Object.keys(state.applied).map(function (k) {
             return '<div><strong>' + escapeHtml(FILTER_LABELS[k] || k) + '</strong> : ' +
@@ -806,6 +881,7 @@
 
         var status = document.getElementById('bscdExportStatus');
         status.classList.add('d-none'); status.innerHTML = '';
+        exportTracker.deactivate(); // a job still polling from a previous launch no longer owns the modal
         var launch = document.getElementById('bscdExportLaunch');
         launch.disabled = false;
         launch.textContent = "Lancer l'export";
@@ -885,35 +961,95 @@
 
         if (!jobId) { exportFail("L'export n'a pas pu être mis en file. Rechargez la page."); return; }
 
+        // From now on only this job may write into the modal: an older job
+        // still being polled keeps polling (and still downloads its file
+        // once) but never touches the status area again.
+        exportTracker.activate(jobId);
+
+        var queued = 'Export volumineux' + (count ? ' (' + fmt(count) + ' lignes)' : '') + ' mis en file.';
         status.classList.remove('d-none');
-        status.textContent = 'Export volumineux' + (count ? ' (' + fmt(count) + ' lignes)' : '') +
-            ' mis en file. Préparation en arrière-plan…';
+        renderExportProgress(status, EXPORT_PROGRESS.progressView({ status: 'pending' }), queued);
         btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> En cours…';
 
         var url = EP.jobStatus + '/' + jobId;
         var timer = setInterval(function () {
             bscdFetch(url).then(function (job) {
-                if (job.status === 'done') {
-                    clearInterval(timer);
+                var step = exportTracker.handle(jobId, job);
+                if (step.stop) clearInterval(timer);
+
+                // Another "done" answer for an already downloaded job (an
+                // in-flight poll that raced the one clearing the timer).
+                if (step.kind === 'duplicate') return;
+
+                if (step.kind === 'done' && step.download) {
+                    // Auto-download: the endpoint answers with Content-Disposition:
+                    // attachment, so the page stays on the dashboard (same as sync mode).
+                    window.location = step.download;
+                }
+
+                if (!step.render) return;
+
+                if (step.kind === 'progress') {
+                    if (step.view) renderExportProgress(status, step.view, queued);
+                } else if (step.kind === 'done') {
                     exportLocked = true;
                     btn.textContent = 'Fermer';
                     btn.disabled = false;
-                    if (!job.downloadUrl) {
+                    if (!step.download) {
                         status.innerHTML = '<span class="text-danger">Fichier prêt mais lien de téléchargement indisponible. Réessayez.</span>';
                         return;
                     }
-                    // Auto-download: the endpoint answers with Content-Disposition:
-                    // attachment, so the page stays on the dashboard (same as sync mode).
-                    status.textContent = 'Fichier prêt (' + fmt(Math.round((job.fileSize || 0) / 1048576)) + ' Mo) — téléchargement lancé.';
-                    window.location = job.downloadUrl;
-                } else if (job.status === 'error') {
-                    clearInterval(timer);
+                    step.view.title = 'Fichier prêt (' + fmt(Math.round((job.fileSize || 0) / 1048576)) + ' Mo) — téléchargement…';
+                    renderExportProgress(status, step.view, queued);
+                } else if (step.kind === 'error') {
                     exportLocked = true;
                     status.innerHTML = '<span class="text-danger">Échec de l\'export (' + escapeHtml(job.reference || '') + ').</span>';
                     btn.textContent = 'Fermer'; btn.disabled = false;
                 }
             }).catch(function () { /* transient — keep polling */ });
         }, 3000);
+    }
+
+    // Progress block of an asynchronous export (pending / running / done),
+    // fed only by the figures GET /exports/{id} returns (see
+    // export-progress.js). Built once, then updated in place; the bar width
+    // is set through element.style (CSSOM), not an inline style attribute.
+    function renderExportProgress(status, view, queued) {
+        var box = status.querySelector('.bscd-export-progress');
+        if (!box) {
+            status.innerHTML =
+                '<div class="bscd-export-progress">' +
+                    '<div class="mb-2" data-progress-queued></div>' +
+                    '<div class="d-flex justify-content-between align-items-baseline mb-1">' +
+                        '<strong>Progression de l\'export</strong><span class="text-muted" data-progress-title></span>' +
+                    '</div>' +
+                    '<div class="progress bscd-export-progress-track" data-progress-track>' +
+                        '<div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>' +
+                    '</div>' +
+                    '<div class="text-muted mt-1" data-progress-processed></div>' +
+                    '<div class="text-muted" data-progress-exported></div>' +
+                '</div>';
+            box = status.querySelector('.bscd-export-progress');
+        }
+
+        box.querySelector('[data-progress-queued]').textContent = queued || '';
+        box.querySelector('[data-progress-title]').textContent = view.title;
+
+        // Unknown progress (running, no usable figures): no bar, no invented %.
+        var track = box.querySelector('[data-progress-track]');
+        track.classList.toggle('d-none', view.percent === null);
+        if (view.percent !== null) {
+            var bar = track.querySelector('.progress-bar');
+            bar.style.width = view.percent + '%';
+            bar.setAttribute('aria-valuenow', String(view.percent));
+            bar.textContent = view.percent + ' %';
+        }
+
+        var counted = view.processed !== null && view.total !== null;
+        box.querySelector('[data-progress-processed]').textContent = counted
+            ? fmt(view.processed) + ' / ' + fmt(view.total) + ' lignes parcourues' : '';
+        box.querySelector('[data-progress-exported]').textContent = counted && view.exported !== null
+            ? fmt(view.exported) + ' lignes exportées' : '';
     }
 
     // ── wiring ────────────────────────────────────────────────────────

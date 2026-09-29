@@ -5,14 +5,14 @@ Les exports utilisateur d'Extractor (CSV/XLSX) lisent un **snapshot local** de
 alimentent le même mécanisme de versions :
 
 - **Source quotidienne (depuis 2026-09-27) : `php spark customers:refresh`**,
-  exécuté sur le serveur Extractor lui-même à 05:00 — voir section 0.
+  exécuté sur le serveur Extractor lui-même à 05:30 — voir section 0.
 - Secours : le push SFTP depuis le serveur source (sections 1 à 3).
 
 ## 0. Refresh quotidien Oracle → CSV (`customers:refresh`)
 
 ```
-CMS_RFC.TB_CUSTOMERS_LIST (rechargée ~04:30 par truncate + SQL*Loader)
-      │ 05:00  SELECT explicite (25 colonnes, dates DD/MM/YYYY), lecture en flux
+CMS_RFC.TB_CUSTOMERS_LIST (rechargée chaque nuit : génération 04:32, truncate 04:40, chargée à 04:42)
+      │ 05:30  SELECT explicite (25 colonnes, dates DD/MM/YYYY), lecture en flux
       ▼
 writable/data/customers_list.csv.tmp     (SHA-256, octets, lignes calculés à l'écriture)
       │ contrôles : fclose OK, taille disque = octets écrits, lignes = COUNT(*) Oracle,
@@ -24,11 +24,18 @@ lien writable/data/customers_list.csv → version active (Linux)
 
 | Élément | Valeur |
 |---|---|
-| Lancement manuel | `cd /var/www/MyMemo && php spark customers:refresh` (`--force` : accepter une forte baisse de volume) |
-| Cron | `0 5 * * * cd /var/www/MyMemo && /usr/bin/php spark customers:refresh >> /var/www/MyMemo/writable/logs/customers_refresh.log 2>&1` |
+| Source | Oracle `CMS_RFC.TB_CUSTOMERS_LIST` |
+| Projet (prod Linux) | `/var/www/extractor` |
+| Lancement manuel | `cd /var/www/extractor && php spark customers:refresh` (`--force` : accepter une forte baisse de volume) |
+| Fréquence / heure | quotidienne, **05:30** heure serveur (= Africa/Douala, UTC+1) |
+| Pourquoi 05:30 | mesuré le 2026-09-29 dans Oracle : `UPDATED_AT` 04:32:48, truncate (`LAST_DDL_TIME`) 04:40:46, 3 303 512 insertions enregistrées à 04:41:44 (`ALL_TAB_MODIFICATIONS`) → ~50 min de marge ; si le chargement n'était pas fini, les garde-fous refusent la publication |
+| Installation du cron (root, prod) | `sh docs/snapshot/extractor/install_customers_refresh_cron.sh --user <utilisateur web>` (vérifie `command -v php`, PHP ≥ 8.2 + oci8, droits sur `writable/`, fuseau +0100, puis écrit `/etc/cron.d/extractor-customers-refresh`) ; `--dry-run` pour voir la ligne sans l'écrire |
+| Ligne cron écrite | `30 5 * * * <utilisateur> cd /var/www/extractor && <php résolu> spark customers:refresh >> /var/www/extractor/writable/logs/customers_refresh.log 2>&1` |
+| Dev Windows | pas de planification : lancement manuel si besoin |
 | Log | `writable/logs/customers_refresh.log` (écrit par la commande, même en manuel ; le `>>` du cron n'ajoute que les erreurs fatales PHP) |
 | Codes retour | `0` nouvelle version active · `1` échec (version précédente conservée) · `3` déjà en cours |
-| Verrou | `writable/data/customers_refresh.lock` (`flock`, libéré par l'OS si le process meurt) |
+| Verrou | `writable/data/customers_refresh.lock` (`flock` noyau pris par la commande — cron **et** manuel ; libéré par l'OS si le process meurt ; 2e instance → code 3 `SKIPPED`, sans requête Oracle). Pas de `flock(1)` en plus dans le cron |
+| En cas d'échec | code 1, `FAILED raison=…` dans le log, fichier temporaire supprimé, **version active conservée** (dashboard et exports continuent sur l'ancien snapshot ; le bandeau du dashboard signale l'écart avec Oracle). Pas de nouvel essai automatique : relancer à la main après correction |
 | Fichier de travail | version active = `writable/data/snapshots/customers/versions/<id>/customers_list.csv` (via `current.json`) ; lien pratique `writable/data/customers_list.csv` |
 | Arrêt (SIGTERM/SIGINT) | extraction stoppée, `.tmp` supprimé, version active conservée (pcntl) ; un `kill -9` laisse un `.tmp` supprimé au lancement suivant |
 | Retour arrière | `php spark snapshot:rollback` (version précédente conservée sur disque) |

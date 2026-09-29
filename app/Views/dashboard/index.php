@@ -20,6 +20,10 @@
     </div>
 </div>
 
+<?php // Filled by dashboard.js from GET /dashboard/count (active snapshot metadata only). ?>
+<p class="bscd-source-note" id="bscdSourceNote"></p>
+<div class="bscd-alert bscd-alert--warning d-none" id="bscdSourceWarning" role="status"></div>
+
 <div class="bscd-alert bscd-alert--error d-none" id="bscdGlobalError">
     <div>
         <strong>Impossible de charger les données.</strong>
@@ -235,7 +239,8 @@
             <div class="modal-body" id="bscdExportBody">
                 <div class="bscd-export-summary" id="bscdExportFilters"></div>
                 <p class="mb-1"><strong>Résultats :</strong> <span id="bscdExportCount">—</span> ligne(s)</p>
-                <p class="mb-3"><strong>Format :</strong> <span id="bscdExportFormat">—</span></p>
+                <p class="mb-1"><strong>Format :</strong> <span id="bscdExportFormat">—</span></p>
+                <p class="mb-3 small text-muted" id="bscdExportSource"></p>
                 <div class="bscd-export-status d-none" id="bscdExportStatus"></div>
             </div>
             <div class="modal-footer">
@@ -251,5 +256,8 @@
 <?= $this->section('scripts') ?>
 <script src="<?= base_url('assets/vendor/chartjs/chart.umd.min.js') ?>"></script>
 <script type="application/json" id="bscd-dashboard-data"><?= json_encode($bootstrap, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?></script>
-<script src="<?= base_url('assets/js/dashboard.js') ?>"></script>
+<?php // ?v=<mtime>: a reload always fetches the deployed version, never a stale cached copy. ?>
+<script src="<?= base_url('assets/js/export-progress.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/export-progress.js') ?: 0 ?>"></script>
+<script src="<?= base_url('assets/js/dashboard-source.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/dashboard-source.js') ?: 0 ?>"></script>
+<script src="<?= base_url('assets/js/dashboard.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/dashboard.js') ?: 0 ?>"></script>
 <?= $this->endSection() ?>

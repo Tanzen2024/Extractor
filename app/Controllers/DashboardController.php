@@ -15,24 +15,39 @@ use Config\Snapshot as SnapshotConfig;
 use Throwable;
 
 /**
- * The CUSTOMERS_LIST analytics dashboard — live against
- * CMS_RFC.TB_CUSTOMERS_LIST (no snapshot, no cube).
+ * The CUSTOMERS_LIST analytics dashboard.
+ *
+ * Sources (Config\Snapshot::$exportSource = 'snapshot', the default):
+ *   - the ACTIVE SNAPSHOT — the very file the exports read — for the filter
+ *     options (and the validation of every filter), the row count shown as
+ *     "Total" / "Résultats" (GET /dashboard/count, the export's own
+ *     SnapshotRowSource::count(), same RowMatcher, same cache) and the
+ *     exports themselves: what the user counts is what they export;
+ *   - live CMS_RFC.TB_CUSTOMERS_LIST for the analytics that need SQL
+ *     aggregation or paging (KPI ratios, charts, table page) — the page
+ *     flags when that live base holds a different number of rows.
+ * With exportSource = 'oracle' (rollback) everything is live Oracle again.
  *
  *   GET  /dashboard                  the page shell (+ filter options island)
  *   GET  /dashboard/stats            KPIs + chart datasets for a filter set
+ *   GET  /dashboard/count            rows matching the filters in the snapshot (+ its metadata)
  *   GET  /dashboard/rows             one server-side page of the data table
  *   GET  /dashboard/filter-options   region→division→agence tree + value lists
  *   POST /dashboard/export           run (small) or queue (large) a filtered export
  *   GET  /dashboard/export/download  one-shot signed download of a sync export
  *
- * Every AJAX endpoint validates the incoming filters against the live list
- * of real column values (DashboardService::allowedValues()) before touching
- * Oracle; an unknown value is a 422, an Oracle failure a sanitised 503.
+ * Every AJAX endpoint validates the incoming filters against the real
+ * column values of the source the filter options came from (the snapshot's,
+ * see criteria()) before touching any data; an unknown value is a 422, a
+ * data failure a sanitised 503.
  */
 class DashboardController extends BaseController
 {
     private DashboardService $dashboard;
     private OracleConfig $oracleConfig;
+
+    /** Memo of snapshotSource(): false = not resolved yet. */
+    private SnapshotRowSource|false|null $snapshotSource = false;
 
     public function __construct()
     {
@@ -53,6 +68,7 @@ class DashboardController extends BaseController
             'bootstrap' => [
                 'endpoints' => [
                     'stats'         => site_url('dashboard/stats'),
+                    'count'         => site_url('dashboard/count'),
                     'rows'          => site_url('dashboard/rows'),
                     'filterOptions' => site_url('dashboard/filter-options'),
                     'export'        => site_url('dashboard/export'),
@@ -74,6 +90,45 @@ class DashboardController extends BaseController
             $fresh    = $this->request->getGet('fresh') === '1';
 
             return $this->response->setJSON($this->dashboard->stats($criteria, $fresh));
+        });
+    }
+
+    /**
+     * Rows matching the filters in the active snapshot — the export's own
+     * count (SnapshotRowSource::count(): same RowMatcher, same per-version
+     * cache as POST /dashboard/export, so launching the export afterwards
+     * reuses it). No filter = the row count validated at install (instant);
+     * filters = one streaming pass, cached per (version, filters).
+     *
+     * Releases the session lock first: a new filter set can take seconds
+     * and must not hold up /stats and /rows, requested alongside it.
+     */
+    public function count()
+    {
+        session()->close();
+
+        return $this->guarded(function () {
+            if (! (new SnapshotConfig())->usesSnapshot()) {
+                return $this->response->setJSON([
+                    'count'    => $this->dashboard->count($this->criteria()),
+                    'source'   => 'oracle',
+                    'snapshot' => null,
+                ]);
+            }
+
+            try {
+                $source = $this->snapshotSource();
+            } catch (SnapshotUnavailableException $e) {
+                return $this->snapshotUnavailable($e);
+            }
+
+            $criteria = FilterCriteria::fromRequest($this->request->getGet(), $source->allowedValues());
+
+            return $this->response->setJSON([
+                'count'    => $source->count($criteria),
+                'source'   => 'snapshot',
+                'snapshot' => $this->snapshotInfo($source),
+            ]);
         });
     }
 
@@ -100,6 +155,14 @@ class DashboardController extends BaseController
     public function filterOptions()
     {
         return $this->guarded(function () {
+            // Snapshot mode: the values (with counts) computed when the active
+            // snapshot was installed — same shape as the Oracle query, instant,
+            // and exactly the values an export accepts.
+            $source = $this->snapshotSourceOrNull();
+            if ($source !== null) {
+                return $this->response->setJSON($source->snapshot()->filterOptions());
+            }
+
             $fresh = $this->request->getGet('fresh') === '1';
 
             return $this->response->setJSON($this->dashboard->filterOptions($fresh));
@@ -254,12 +317,76 @@ class DashboardController extends BaseController
 
     // ---- helpers -----------------------------------------------------
 
+    /**
+     * The request's filters, validated against the values of the source the
+     * filter options came from (the active snapshot in snapshot mode).
+     */
     private function criteria(): FilterCriteria
     {
+        $source = $this->snapshotSourceOrNull();
+
         return FilterCriteria::fromRequest(
             $this->request->getGet(),
-            $this->dashboard->allowedValues(),
+            $source?->allowedValues() ?? $this->dashboard->allowedValues(),
         );
+    }
+
+    /**
+     * The active snapshot's row source in snapshot mode, null in Oracle mode.
+     * Resolved once per request, so every figure of a request describes the
+     * same version.
+     *
+     * @throws SnapshotUnavailableException in snapshot mode with no valid snapshot.
+     */
+    private function snapshotSource(): ?SnapshotRowSource
+    {
+        if ($this->snapshotSource === false) {
+            $this->snapshotSource = null;
+            if ((new SnapshotConfig())->usesSnapshot()) {
+                $this->snapshotSource = new SnapshotRowSource();
+            }
+        }
+
+        return $this->snapshotSource;
+    }
+
+    /**
+     * snapshotSource(), or null when no valid snapshot is available: the
+     * read-only screens (options, stats, table) then fall back to live
+     * Oracle, while /count and exports refuse (503) — no count or export
+     * silently switches base.
+     */
+    private function snapshotSourceOrNull(): ?SnapshotRowSource
+    {
+        try {
+            return $this->snapshotSource();
+        } catch (SnapshotUnavailableException $e) {
+            log_message('warning', '[SNAPSHOT] aucun snapshot valide, filtres du dashboard lus sur Oracle ({message})', ['message' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
+    /**
+     * What the page may say about the snapshot in use — only metadata really
+     * present in its meta file, never a guessed date.
+     *
+     * @return array{id: string, rows: int, generatedAt: string|null, sourceUpdatedAt: string|null}
+     */
+    private function snapshotInfo(SnapshotRowSource $source): array
+    {
+        $snapshot = $source->snapshot();
+        $meta     = $snapshot->meta;
+        $text     = static fn ($v): ?string => is_string($v) && trim($v) !== '' ? trim($v) : null;
+
+        return [
+            'id'              => $snapshot->id,
+            'rows'            => $snapshot->rows(),
+            // When the snapshot file was extracted.
+            'generatedAt'     => $text($meta['generated_at'] ?? $meta['manifest']['generated_at'] ?? null),
+            // Last reload of the Oracle table it was extracted from (its UPDATED_AT), when known.
+            'sourceUpdatedAt' => $text($meta['manifest']['source_updated_at'] ?? null),
+        ];
     }
 
     /**

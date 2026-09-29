@@ -5,6 +5,7 @@ namespace App\Commands;
 use App\Models\ExportJobModel;
 use App\Services\CustomerListExportService;
 use App\Services\CustomersList\FilterCriteria;
+use App\Services\Export\ThrottledProgress;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
 use Throwable;
@@ -28,6 +29,9 @@ class ProcessExportJobs extends BaseCommand
         '--watch' => 'Keep running, polling for new jobs instead of exiting when the queue is empty.',
         '--sleep' => 'Seconds to wait between polls in --watch mode (default 5).',
     ];
+
+    /** Minimum gap between two progress UPDATEs of the same job. */
+    private const PROGRESS_MIN_INTERVAL_SECONDS = 1.0;
 
     public function run(array $params): int
     {
@@ -62,13 +66,23 @@ class ProcessExportJobs extends BaseCommand
             $criteria = FilterCriteria::fromArray(json_decode($job['filters'] ?? '[]', true) ?: []);
             $service  = new CustomerListExportService();
 
+            // CSV only: progress is persisted in batches, at most once a
+            // second (ThrottledProgress), never per row.
+            $progress = new ThrottledProgress(
+                static function (int $processed, int $total, int $exported) use ($jobs, $id): void {
+                    $jobs->updateProgress($id, $processed, $total, $exported);
+                },
+                self::PROGRESS_MIN_INTERVAL_SECONDS,
+            );
+
             $meta = $job['format'] === 'xlsx'
                 ? $service->exportXlsx($criteria)
-                : $service->exportCsv($criteria);
+                : $service->exportCsv($criteria, $progress);
 
             $jobs->markDone($id, $meta['path'], $meta['filename'], (int) $meta['fileSize'], (int) $meta['rows']);
 
-            CLI::write("Job #{$id} — terminé : {$meta['rows']} lignes, " . round($meta['fileSize'] / 1048576, 1) . ' Mo.', 'green');
+            CLI::write("Job #{$id} — terminé : {$meta['rows']} lignes, " . round($meta['fileSize'] / 1048576, 1) . ' Mo'
+                . " ({$progress->writes()} mises à jour de progression).", 'green');
         } catch (Throwable $e) {
             $reference = bscd_error_reference('EXPJOB');
 

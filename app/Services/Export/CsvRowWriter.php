@@ -65,11 +65,21 @@ class CsvRowWriter
      */
     public function writeRow(array $row): void
     {
-        $line = [];
+        if (array_keys($row) === $this->columns) {
+            // Fast path: the row already has exactly the columns, in order
+            // (every snapshot row, and Oracle rows without a missing key).
+            // fputcsv() stringifies each value itself — null as '' — exactly
+            // like the loop below, so the bytes are identical; this only
+            // skips rebuilding a second 25-value array per row (measured
+            // 2026-09-29: -17% CPU per row on its own).
+            $line = $row;
+        } else {
+            $line = [];
 
-        foreach ($this->columns as $column) {
-            $value  = $row[$column] ?? null;
-            $line[] = $value === null ? '' : (string) $value;
+            foreach ($this->columns as $column) {
+                $value  = $row[$column] ?? null;
+                $line[] = $value === null ? '' : (string) $value;
+            }
         }
 
         fputcsv($this->buffer ?? $this->handle, $line, self::DELIMITER, self::ENCLOSURE, self::ESCAPE);

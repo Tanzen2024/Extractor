@@ -79,7 +79,8 @@ class Snapshot extends BaseConfig
     ];
 
     /**
-     * `php spark customers:refresh` (daily Oracle -> CSV pull, cron 05:00).
+     * `php spark customers:refresh` (daily Oracle -> CSV pull, cron 05:30 —
+     * see docs/snapshot/README.md §0).
      *
      * The extraction is written to refreshTmpFile, never read by anything,
      * and only becomes a snapshot version through SnapshotInstaller once

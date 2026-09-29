@@ -14,6 +14,7 @@ $routes->get('logout', 'AuthController::logout');
 // ---- CUSTOMERS_LIST analytics dashboard = the application core --------
 $routes->get('dashboard', 'DashboardController::index');
 $routes->get('dashboard/stats', 'DashboardController::stats');
+$routes->get('dashboard/count', 'DashboardController::count');
 $routes->get('dashboard/rows', 'DashboardController::rows');
 $routes->get('dashboard/filter-options', 'DashboardController::filterOptions');
 $routes->post('dashboard/export', 'DashboardController::export');

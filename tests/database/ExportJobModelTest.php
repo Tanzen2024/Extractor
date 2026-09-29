@@ -50,6 +50,9 @@ final class ExportJobModelTest extends CIUnitTestCase
             'filters_label'   => ['type' => 'VARCHAR', 'constraint' => 500, 'null' => true],
             'status'          => ['type' => 'VARCHAR', 'constraint' => 12, 'default' => 'pending'],
             'row_count'       => ['type' => 'INTEGER', 'null' => true],
+            'rows_total'      => ['type' => 'INTEGER', 'null' => true],
+            'rows_processed'  => ['type' => 'INTEGER', 'default' => 0],
+            'rows_exported'   => ['type' => 'INTEGER', 'default' => 0],
             'file_path'       => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
             'file_name'       => ['type' => 'VARCHAR', 'constraint' => 150, 'null' => true],
             'file_size'       => ['type' => 'INTEGER', 'null' => true],
@@ -135,6 +138,41 @@ final class ExportJobModelTest extends CIUnitTestCase
         $row = $this->model->find($id);
         $this->assertSame('error', $row['status']);
         $this->assertSame('EXPJOB-20260829-00042', $row['error_reference']);
+    }
+
+    public function testUpdateProgressStoresTheCountersOfARunningJob(): void
+    {
+        $id = $this->makeJob();
+        $this->model->claimNext();
+
+        $this->model->updateProgress($id, 1_651_421, 3_302_841, 100_000);
+
+        $row = $this->model->find($id);
+        $this->assertSame('1651421', (string) $row['rows_processed']);
+        $this->assertSame('3302841', (string) $row['rows_total']);
+        $this->assertSame('100000', (string) $row['rows_exported']);
+        $this->assertSame(50, ExportJobModel::progress($row)['percent']);
+    }
+
+    public function testUpdateProgressNeverTouchesAJobThatIsNotRunning(): void
+    {
+        foreach (['pending', 'done', 'error'] as $status) {
+            $id = $this->makeJob($status);
+
+            $this->model->updateProgress($id, 10, 20, 5);
+
+            $row = $this->model->find($id);
+            $this->assertSame($status, $row['status']);
+            $this->assertSame('0', (string) $row['rows_processed'], $status);
+            $this->assertNull($row['rows_total'], $status);
+        }
+    }
+
+    public function testANewJobStartsAtZeroProgress(): void
+    {
+        $row = $this->model->find($this->makeJob());
+
+        $this->assertSame(['percent' => 0, 'processed' => 0, 'total' => null, 'exported' => 0], ExportJobModel::progress($row));
     }
 
     public function testFiltersJsonRoundTrips(): void

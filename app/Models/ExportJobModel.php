@@ -11,7 +11,8 @@ class ExportJobModel extends Model
     protected $returnType    = 'array';
     protected $allowedFields  = [
         'uuid', 'requested_by', 'format', 'filters', 'filters_label', 'status',
-        'row_count', 'file_path', 'file_name', 'file_size', 'error_reference',
+        'row_count', 'rows_total', 'rows_processed', 'rows_exported',
+        'file_path', 'file_name', 'file_size', 'error_reference',
         'started_at', 'finished_at',
     ];
     protected $useTimestamps = true;
@@ -59,6 +60,54 @@ class ExportJobModel extends Model
         }
 
         return $this->find($row['id']);
+    }
+
+    /**
+     * Batched progress write from the worker (see Export\ThrottledProgress —
+     * never called per row). Only touches a job still 'running', so a late
+     * write can never resurrect a finished or failed job.
+     */
+    public function updateProgress(int $id, int $processed, int $total, int $exported): void
+    {
+        $this->db->table($this->table)
+            ->where('id', $id)
+            ->where('status', 'running')
+            ->update([
+                'rows_total'     => $total,
+                'rows_processed' => $processed,
+                'rows_exported'  => $exported,
+                'updated_at'     => date('Y-m-d H:i:s'),
+            ]);
+    }
+
+    /**
+     * Progress as reported by GET /exports/{id}. The percentage is derived
+     * here, never stored: rows_processed / rows_total, always within 0..100 —
+     * pending = 0, running = 0..99 (the file is still being finalised after
+     * the scan), done = 100, unknown or zero total = 0.
+     *
+     * @param array<string, mixed> $job
+     *
+     * @return array{percent: int, processed: int, total: int|null, exported: int}
+     */
+    public static function progress(array $job): array
+    {
+        $total     = isset($job['rows_total']) ? max(0, (int) $job['rows_total']) : null;
+        $processed = max(0, (int) ($job['rows_processed'] ?? 0));
+        $exported  = max(0, (int) ($job['rows_exported'] ?? 0));
+
+        $percent = match ($job['status'] ?? null) {
+            'done'    => 100,
+            'running' => $total > 0 ? min(99, intdiv($processed * 100, $total)) : 0,
+            default   => 0,
+        };
+
+        return [
+            'percent'   => $percent,
+            'processed' => $processed,
+            'total'     => $total,
+            'exported'  => $exported,
+        ];
     }
 
     public function markDone(int $id, string $filePath, string $fileName, int $fileSize, int $rowCount): void

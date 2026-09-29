@@ -30,6 +30,12 @@ class ExportJobController extends BaseController
             'label'    => $job['filters_label'],
         ];
 
+        // Real scan progress (0..100, see ExportJobModel::progress()). Not
+        // sent for 'error', whose payload stays as it was.
+        if (in_array($job['status'], ['pending', 'running', 'done'], true)) {
+            $payload['progress'] = ExportJobModel::progress($job);
+        }
+
         if ($job['status'] === 'done') {
             $payload['downloadUrl'] = site_url("exports/{$job['id']}/download");
             $payload['fileSize']    = (int) $job['file_size'];

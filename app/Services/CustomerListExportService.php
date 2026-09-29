@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\QueryBuilder;
 use App\Services\Export\CsvRowWriter;
+use App\Services\Export\ReportsProgress;
 use App\Services\Export\ReportsStreamStats;
 use App\Services\Export\OracleRowSource;
 use App\Services\Export\RowSource;
@@ -186,8 +187,13 @@ class CustomerListExportService
      * @return array{path:string, filename:string, format:string, rows:int, sheets:int,
      *     fileSize:int, sqlDurationMs:float, fetchDurationMs:float, writeDurationMs:float,
      *     totalDurationMs:float, peakMemoryMb:float}
+     *
+     * @param (callable(int $processed, int $total, int $exported): void)|null $onProgress
+     *     Scan progress (see Export\ReportsProgress), batched — never per row.
+     *     Only sources implementing ReportsProgress (the snapshot) report it;
+     *     with any other source it is simply never called.
      */
-    public function exportCsv(?FilterCriteria $filters = null): array
+    public function exportCsv(?FilterCriteria $filters = null, ?callable $onProgress = null): array
     {
         // The whole operation's PHP time budget is decided here, once, at the
         // top level — a finite ceiling (not set_time_limit(0)), never
@@ -227,17 +233,28 @@ class CustomerListExportService
 
             $writer = new CsvRowWriter($handle, self::COLUMNS, true, self::CSV_WRITE_BUFFER_BYTES);
 
-            $rowCount = $this->rowSource->stream($filters, function (array $row) use ($writer, &$written, &$firstRowAt, &$writeTime, $t0): void {
-                if ($firstRowAt === null) {
-                    $firstRowAt = microtime(true);
+            $reportsProgress = $onProgress !== null && $this->rowSource instanceof ReportsProgress;
+            if ($reportsProgress) {
+                $this->rowSource->setProgressListener($onProgress);
+            }
+
+            try {
+                $rowCount = $this->rowSource->stream($filters, function (array $row) use ($writer, &$written, &$firstRowAt, &$writeTime, $t0): void {
+                    if ($firstRowAt === null) {
+                        $firstRowAt = microtime(true);
+                    }
+
+                    $tw = microtime(true);
+                    $writer->writeRow($row);
+                    $writeTime += microtime(true) - $tw;
+
+                    $this->logCheckpoint('csv', ++$written, 1, $t0);
+                });
+            } finally {
+                if ($reportsProgress) {
+                    $this->rowSource->setProgressListener(null);
                 }
-
-                $tw = microtime(true);
-                $writer->writeRow($row);
-                $writeTime += microtime(true) - $tw;
-
-                $this->logCheckpoint('csv', ++$written, 1, $t0);
-            });
+            }
 
             $tw = microtime(true);
             $writer->flush();

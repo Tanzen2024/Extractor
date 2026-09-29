@@ -10,10 +10,18 @@ use Config\Snapshot as SnapshotConfig;
 /**
  * Daily refresh of the working file from Oracle:
  *   CMS_RFC.TB_CUSTOMERS_LIST -> customers_list.csv.tmp -> new active snapshot
- * (see CustomersRefresher). Scheduled by cron at 05:00, after the upstream
- * truncate + SQL*Loader reload of the table (~04:30):
+ * (see CustomersRefresher). Scheduled daily at 05:30 by /etc/cron.d, after the
+ * upstream reload of the table (measured 2026-09-29: UPDATED_AT stamp 04:32,
+ * truncate 04:40:46, all rows inserted by 04:41:44). Install on the Linux
+ * server with docs/snapshot/extractor/install_customers_refresh_cron.sh,
+ * which resolves and checks the PHP binary (oci8), user rights and timezone
+ * before writing, e.g.:
  *
- *   0 5 * * * cd /var/www/MyMemo && /usr/bin/php spark customers:refresh >> /var/www/MyMemo/writable/logs/customers_refresh.log 2>&1
+ *   30 5 * * * www-data cd /var/www/extractor && /usr/bin/php spark customers:refresh >> /var/www/extractor/writable/logs/customers_refresh.log 2>&1
+ *
+ * No outer flock(1) is needed: refresh() holds a kernel flock on
+ * Config\Snapshot::$refreshLockFile for the whole run, for cron AND manual
+ * runs alike, so a second instance exits at once with code 3.
  *
  * Every step is appended, timestamped, to Config\Snapshot::$refreshLogFile
  * (writable/logs/customers_refresh.log) by the command itself — also for a

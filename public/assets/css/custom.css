@@ -141,6 +141,8 @@ body {
     border-radius: 8px; padding: .75rem 1rem; margin-bottom: 1rem; font-size: .85rem;
 }
 .bscd-alert--error { background: #fdeaea; border: 1px solid #f5c6c6; color: #a12b2b; }
+.bscd-alert--warning { background: #fff8e6; border: 1px solid #f3dca4; color: #7a5a00; font-size: .82rem; }
+.bscd-source-note { font-size: .78rem; color: #6b7280; margin: -.25rem 0 .5rem; min-height: 1em; }
 
 /* ── Filters ─────────────────────────────────────────────── */
 .bscd-filters {
@@ -441,6 +443,8 @@ body {
 .bscd-export-status {
     background: #eef2f7; border-radius: 6px; padding: .6rem .75rem; font-size: .82rem;
 }
+.bscd-export-progress-track { height: 1.1rem; background: #dde3ec; font-size: .72rem; }
+.bscd-export-progress-track .progress-bar { transition: width .6s ease; font-weight: 600; min-width: 2.2rem; }
 
 /* ── Skeletons ───────────────────────────────────────────── */
 .bscd-skeleton {
