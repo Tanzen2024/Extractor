@@ -50,13 +50,19 @@ class DashboardService
      *
      * @return array{
      *   totalRows:int,
-     *   kpis:array{total:int, actifs:array{value:int,pct:float}, avecCompteur:array{value:int,pct:float}, contacts:array{value:int,pct:float}},
+     *   kpis:array{total:int, totalPct:float, reference:array{totalClients:int, totalNui:int}, nuiCorrects:array{value:int,pct:float}, actifs:array{value:int,pct:float}, inactifs:array{value:int,pct:float}, avecCompteur:array{value:int,pct:float}, contacts:array{value:int,pct:float}},
      *   charts:array{region:list<array{value:string,count:int}>, status:list<array{value:string,count:int}>, segmentation:list<array{value:string,count:int}>, meterType:list<array{value:string,count:int}>}
      * }
      */
     public function stats(FilterCriteria $criteria, bool $fresh = false): array
     {
-        return $this->remember('stats_' . $criteria->cacheKey(), $this->config->dashboardCacheTtl, $fresh, function () use ($criteria): array {
+        // v4: payload gained kpis.nuiCorrects (v2), kpis.inactifs (v3), then
+        // kpis.totalPct / kpis.reference (v4) — never serve an older entry.
+        return $this->remember('stats_v4_' . $criteria->cacheKey(), $this->config->dashboardCacheTtl, $fresh, function () use ($criteria, $fresh): array {
+            // "% du total" of Total clients / Clients actifs / NUI corrects is
+            // taken against the unfiltered reference, not the filtered total.
+            // Contacts (and the non-displayed cards) keep the filtered total.
+            $ref      = $this->reference($fresh);
             $where    = $this->queryBuilder->where($criteria);
             $kpiStmt  = $this->queryBuilder->kpiStatement($where);
             $distStmt = $this->queryBuilder->distributionsStatement($where);
@@ -74,7 +80,11 @@ class DashboardService
                 'totalRows' => $total,
                 'kpis'      => [
                     'total'        => $total,
-                    'actifs'       => $this->ratio((int) ($kpiRow['ACTIFS'] ?? 0), $total),
+                    'totalPct'     => $this->pct($total, $ref['totalClients']),
+                    'reference'    => $ref,
+                    'nuiCorrects'  => $this->ratio((int) ($kpiRow['NUI_CORRECT'] ?? 0), $ref['totalNui']),
+                    'actifs'       => $this->ratio((int) ($kpiRow['ACTIFS'] ?? 0), $ref['totalClients']),
+                    'inactifs'     => $this->ratio((int) ($kpiRow['INACTIFS'] ?? 0), $total),
                     'avecCompteur' => $this->ratio((int) ($kpiRow['AVEC_COMPTEUR'] ?? 0), $total),
                     'contacts'     => $this->ratio((int) ($kpiRow['CONTACT_OK'] ?? 0), $total),
                 ],
@@ -309,6 +319,25 @@ class DashboardService
         $head[] = ['value' => 'Autres', 'count' => array_sum(array_column($tail, 'count'))];
 
         return $head;
+    }
+
+    /**
+     * Unfiltered totals of the whole table (KPI "% du total" denominators),
+     * cached on their own so a filter change never rescans for them.
+     *
+     * @return array{totalClients:int, totalNui:int}
+     */
+    private function reference(bool $fresh): array
+    {
+        return $this->remember('stats_reference_v1', $this->config->dashboardCacheTtl, $fresh, function (): array {
+            $stmt = $this->queryBuilder->referenceStatement();
+            $row  = $this->oracle->selectMany(['ref' => ['sql' => $stmt['sql'], 'binds' => $stmt['binds']]], 1)['ref'][0] ?? [];
+
+            return [
+                'totalClients' => (int) ($row['TOTAL'] ?? 0),
+                'totalNui'     => (int) ($row['NUI_TOTAL'] ?? 0),
+            ];
+        });
     }
 
     /**

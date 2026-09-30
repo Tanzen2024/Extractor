@@ -14,7 +14,7 @@
 
     var boot = JSON.parse(document.getElementById('bscd-dashboard-data').textContent || '{}');
     var EP = boot.endpoints;
-    var SOURCE = window.bscdDashboardSource; // public/assets/js/dashboard-source.js
+    var DEFAULTS = window.bscdDashboardDefaults; // public/assets/js/dashboard-defaults.js
 
     var PALETTE = ['#1f6fb2', '#7c3aed', '#d97706', '#1a7f4d', '#c0392b', '#0891b2', '#db2777', '#ca8a04', '#475569', '#94a3b8'];
     var OTHER_COLOR = '#c7ccd6';
@@ -40,8 +40,9 @@
     var MS_DIMS = ['region', 'division', 'agence', 'status', 'meter', 'segmentation', 'segment_tresor', 'voltage', 'niu_qc'];
 
     // STATUT: the 4 statuses the business defines as "actif" (client/contrat
-    // actif). No longer pre-selected — this list now only drives the
-    // dropdown's two-group layout (see configureStatusGroups()). The KPI
+    // actif). Drives the dropdown's two-group layout (see
+    // configureStatusGroups()) and the initial selection on first load (see
+    // bootstrapAll(); "Réinitialiser" still clears it like any filter). The KPI
     // definitions in Config\Oracle::$activeStatuses are the real source of
     // truth for what counts as "actif" server-side; this array is a display
     // concern only and is kept in sync with it by convention.
@@ -105,12 +106,7 @@
         hiddenColumns: loadHiddenColumns(),
         lastStatsAt: null,
         exporting: false,
-        filterTotal: null,           // snapshot count for state.applied (GET /dashboard/count)
-        snapshotCount: null,
-        countKey: null,              // filters that snapshotCount describes
-        snapshot: null,              // active snapshot metadata (rows, dates)
-        liveTotal: null,             // live Oracle total for the same filters (GET /dashboard/stats)
-        liveKey: null
+        filterTotal: null            // snapshot count for state.applied (GET /dashboard/count)
     };
 
     var els = {
@@ -121,8 +117,6 @@
         globalError: document.getElementById('bscdGlobalError'),
         globalErrorRef: document.getElementById('bscdGlobalErrorRef'),
         cacheNote: document.getElementById('bscdCacheNote'),
-        sourceNote: document.getElementById('bscdSourceNote'),
-        sourceWarning: document.getElementById('bscdSourceWarning'),
         rowCount: document.getElementById('bscdRowCount'),
         tableHead: document.getElementById('bscdTableHead'),
         tableBody: document.getElementById('bscdTableBody'),
@@ -348,8 +342,9 @@
     // selected -> union of the two. The previous single shared RFM list
     // offered the PREPAID-only "5-Dormant" under POSTPAID and hid the
     // POSTPAID "5 Delinquant" / "8 Autre". Matching always compares the FULL
-    // normalised value, never a substring or the numeric prefix. Any METER
-    // value outside {POSTPAID, PREPAID} (e.g. "Compteurs Communicants") is
+    // normalised value, never a substring or the numeric prefix.
+    // "Compteurs Communicants" uses the POSTPAID segmentation (business rule),
+    // even when POSTPAID itself is not selected. Any other METER value is
     // neutral: on its own it shows every segmentation.
     function normalizeMatch(v) { return String(v).trim().toUpperCase().replace(/\s+/g, ' '); }
     function buildNormSet(list) {
@@ -362,12 +357,26 @@
         PREPAID: buildNormSet(PREPAID_SEGMENTATIONS)
     };
 
-    // -> 'POSTPAID' | 'PREPAID' | null (e.g. "Compteurs Communicants").
+    // Same "communicant" test as DIM_LABELS.meter.
+    function isSmartMeter(value) { return normalizeMatch(value).indexOf('COMMUNICANT') !== -1; }
+    // -> 'POSTPAID' | 'PREPAID' | null — the SEGMENTATION universe of a meter
+    // type; Compteurs Communicants -> 'POSTPAID'.
     function meterUniverse(value) {
         var n = normalizeMatch(value);
-        if (n === 'POSTPAID') return 'POSTPAID';
+        if (n === 'POSTPAID' || isSmartMeter(value)) return 'POSTPAID';
         if (n === 'PREPAID') return 'PREPAID';
         return null;
+    }
+    // Label of the POSTPAID segmentation group, from the meter types actually
+    // selected (display only — the options under it are the same):
+    // POSTPAID + communicants -> both, one of them -> that one, neither ->
+    // unchanged "Postpaid".
+    function postpaidGroupLabel(meterValues) {
+        var postpaid = meterValues.some(function (m) { return normalizeMatch(m) === 'POSTPAID'; });
+        var smart = meterValues.some(isSmartMeter);
+        if (postpaid && smart) return 'Postpaid | Compteurs communicants';
+        if (smart) return 'Compteurs communicants';
+        return 'Postpaid';
     }
     // -> 'POSTPAID' | 'PREPAID' | null (a value in neither list).
     function segmentationUniverse(value) {
@@ -381,16 +390,19 @@
         var all = (state.options && state.options.segmentations) || [];
         var universes = {};
         meterValues.forEach(function (m) { var u = meterUniverse(m); if (u) universes[u] = true; });
-        // No POSTPAID/PREPAID selected (nothing, or only a neutral meter like
-        // "Compteurs Communicants") -> stay neutral, show everything.
+        // No POSTPAID/PREPAID universe selected (nothing, or only a neutral
+        // meter) -> stay neutral, show everything.
         if (!universes.POSTPAID && !universes.PREPAID) return all;
         return all.filter(function (p) { return !!universes[segmentationUniverse(p.value)]; });
     }
     // Segmentation -> Type compteur is intentionally NOT implemented: a
     // Segmentation choice never forces a Type compteur selection.
-    ms.meter.onChange = function () {
-        ms.segmentation.setOptions(segmentationOptionsForMeters(ms.meter.getValues()));
-    };
+    function refreshSegmentationOptions() {
+        var meters = ms.meter.getValues();
+        ms.segmentation.groupLabels[0] = postpaidGroupLabel(meters);
+        ms.segmentation.setOptions(segmentationOptionsForMeters(meters));
+    }
+    ms.meter.onChange = refreshSegmentationOptions;
 
     // Two visual groups in the STATUT dropdown — "Contrats actifs" first
     // (the 4 business-active statuses), then "Contrats inactifs" (every
@@ -473,7 +485,7 @@
                 else if (key === 'date_to') window.frdate.clear(els.dateTo);
                 else if (ms[key]) ms[key].clear();
                 refreshCascade();
-                if (key === 'meter') ms.segmentation.setOptions(segmentationOptionsForMeters(ms.meter.getValues()));
+                if (key === 'meter') refreshSegmentationOptions();
                 apply();
             });
         });
@@ -492,7 +504,7 @@
 
             ms.region.setOptions(data.regions);
             ms.status.setOptions(data.statuses);
-            ms.segmentation.setOptions(segmentationOptionsForMeters(ms.meter.getValues()));
+            refreshSegmentationOptions();
             ms.segment_tresor.setOptions(data.segmentsTresor);
             ms.meter.setOptions(data.meters);
             ms.voltage.setOptions(data.voltages);
@@ -502,13 +514,14 @@
     }
 
     function loadStats(fresh) {
+        applyKpiLayout();
         setKpiSkeleton(true);
         var key = toParams(state.applied).toString();
-        if (EP.count) loadCount(key); // in parallel: the snapshot count behind "Total" / export "Résultats"
+        if (EP.count) loadCount(key); // in parallel: the snapshot count behind export "Résultats"
         var url = EP.stats + '?' + key + (fresh ? '&fresh=1' : '');
         return json(url).then(function (data) {
             if (data.error) throw data;
-            renderKpis(data, key);
+            renderKpis(data);
             renderCharts(data);
             state.lastStatsAt = Date.now();
             updateCacheNote();
@@ -516,45 +529,23 @@
     }
 
     // Rows matching the filters in the ACTIVE SNAPSHOT — the file the exports
-    // read (same count as POST /dashboard/export). Drives the "Total" card
-    // and the export modal's "Résultats"; never replaced by an Oracle figure.
+    // read (same count as POST /dashboard/export). Drives the export modal's
+    // "Résultats"; never replaced by an Oracle figure.
     var countSeq = 0;
 
     function loadCount(key) {
         var seq = ++countSeq;
         state.filterTotal = null;
-        state.snapshotCount = null;
-        state.countKey = null;
         refreshExportCount();
-        renderSourceWarning();
 
         return json(EP.count + '?' + key).then(function (data) {
             if (seq !== countSeq) return; // superseded by a newer filter set
             if (!data || data.error || typeof data.count !== 'number') throw data;
             state.filterTotal = data.count;
-            state.snapshotCount = data.count;
-            state.countKey = key;
-            state.snapshot = data.snapshot || null;
-            document.querySelector('[data-kpi="total"]').textContent = fmt(data.count);
-            document.querySelector('[data-kpi-sub="total"]').textContent = 'contrats correspondant aux filtres';
-            if (els.sourceNote) els.sourceNote.textContent = SOURCE.sourceNote(state.snapshot);
             refreshExportCount();
-            renderSourceWarning();
         }).catch(function () {
-            if (seq !== countSeq) return;
-            document.querySelector('[data-kpi="total"]').textContent = '—';
-            document.querySelector('[data-kpi-sub="total"]').textContent = 'référentiel indisponible';
+            // No snapshot count: the modal keeps showing '…', never an Oracle stand-in.
         });
-    }
-
-    // Warns when live Oracle (ratios, charts, table) and the snapshot (total,
-    // exports) disagree — only when both figures describe the same filters.
-    function renderSourceWarning() {
-        if (!els.sourceWarning) return;
-        var text = state.countKey !== null && state.countKey === state.liveKey
-            ? SOURCE.divergenceNote(state.snapshotCount, state.liveTotal) : '';
-        els.sourceWarning.textContent = text;
-        els.sourceWarning.classList.toggle('d-none', text === '');
     }
 
     // The export modal reads the snapshot count — refreshed in place when it
@@ -563,7 +554,6 @@
         var modal = document.getElementById('bscdExportModal');
         if (!modal || !modal.classList.contains('show')) return;
         document.getElementById('bscdExportCount').textContent = state.filterTotal != null ? fmt(state.filterTotal) : '…';
-        document.getElementById('bscdExportSource').textContent = SOURCE.sourceNote(state.snapshot);
     }
 
     var rowsSeq = 0;
@@ -593,30 +583,52 @@
     }
 
     // ── renderers ─────────────────────────────────────────────────────
+    // "Total clients" only when STATUT is not exactly the 4 active statuses
+    // (it would just repeat "Clients actifs"). The KPI columns are equal flex
+    // columns (col-lg), so the visible cards — 3 or 4 — always share one
+    // desktop line. Decided from the filters the stats are requested for.
+    function applyKpiLayout() {
+        var showTotal = !DEFAULTS.isExactlyActiveStatuses(state.applied.status, ACTIVE_STATUSES);
+        document.querySelector('[data-kpi-col="total"]').classList.toggle('d-none', !showTotal);
+    }
+
     function setKpiSkeleton(on) {
-        ['total', 'actifs', 'avecCompteur', 'contacts'].forEach(function (k) {
+        ['total', 'actifs', 'nuiCorrects', 'contacts'].forEach(function (k) {
             var v = document.querySelector('[data-kpi="' + k + '"]');
             var s = document.querySelector('[data-kpi-sub="' + k + '"]');
             if (on) { v.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>'; s.innerHTML = '&nbsp;'; }
         });
     }
 
-    function renderKpis(stats, key) {
+    function renderKpis(stats) {
         var k = stats.kpis;
-        // Live Oracle total for these filters: base of the ratios below, and
-        // compared with the snapshot count to flag a divergence.
-        state.liveTotal = stats.totalRows;
-        state.liveKey = key;
-        if (!EP.count) { // no count endpoint (older page shell): previous behaviour
-            state.filterTotal = stats.totalRows;
-            document.querySelector('[data-kpi="total"]').textContent = fmt(k.total);
-            document.querySelector('[data-kpi-sub="total"]').textContent = 'contrats correspondant aux filtres';
-        }
-        renderSourceWarning();
-        [['actifs', k.actifs], ['avecCompteur', k.avecCompteur], ['contacts', k.contacts]].forEach(function (pair) {
+        if (!EP.count) state.filterTotal = stats.totalRows; // no count endpoint (older page shell): previous behaviour
+        // Same filters and same query as the other cards (QueryBuilder::kpiStatement() NUI_CORRECT).
+        // "% du total" = NUI corrects (filtered) / all NUI of the unfiltered reference.
+        document.querySelector('[data-kpi="nuiCorrects"]').textContent = k.nuiCorrects ? fmt(k.nuiCorrects.value) : '—';
+        setKpiSub('nuiCorrects', k.nuiCorrects ? pct(k.nuiCorrects.pct) + ' du total' : '', 'NUI corrects correspondant aux filtres');
+        // Same query and filters as the other cards (QueryBuilder::kpiStatement() TOTAL);
+        // "% du total" = selected contracts / unfiltered reference total.
+        document.querySelector('[data-kpi="total"]').textContent = fmt(k.total);
+        setKpiSub('total', k.totalPct != null ? pct(k.totalPct) + ' du total' : '', 'contrats correspondant aux filtres');
+        [['actifs', k.actifs], ['contacts', k.contacts]].forEach(function (pair) {
+            if (!pair[1]) { // stats cached before this card existed
+                document.querySelector('[data-kpi="' + pair[0] + '"]').textContent = '—';
+                return;
+            }
             document.querySelector('[data-kpi="' + pair[0] + '"]').textContent = fmt(pair[1].value);
             document.querySelector('[data-kpi-sub="' + pair[0] + '"]').textContent = pct(pair[1].pct) + ' du total';
         });
+    }
+
+    // Percentage line + the card's descriptive note underneath (both text only).
+    function setKpiSub(key, pctText, note) {
+        var s = document.querySelector('[data-kpi-sub="' + key + '"]');
+        s.textContent = pctText;
+        var n = document.createElement('span');
+        n.className = 'bscd-kpi-note';
+        n.textContent = note;
+        s.appendChild(n);
     }
 
     function destroyChart(id) { if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; } }
@@ -854,6 +866,8 @@
     var downloadedJobs = {};  // job ids whose file download was already triggered — one download per job
     var EXPORT_PROGRESS = window.bscdExportProgress; // public/assets/js/export-progress.js
     var exportTracker = EXPORT_PROGRESS.createTracker(downloadedJobs); // active job + one download per job
+    // Async job shown in the modal: {jobId, clock, finished, stop()} — what "Annuler" cancels.
+    var activeExport = null;
 
     function openExportModal(format) {
         currentExportFormat = format;
@@ -865,7 +879,6 @@
         // count as a stand-in: '…' until it arrives, then refreshExportCount().
         var total = state.filterTotal != null ? state.filterTotal : (EP.count ? null : state.table.total);
         document.getElementById('bscdExportCount').textContent = total != null ? fmt(total) : '…';
-        document.getElementById('bscdExportSource').textContent = SOURCE.sourceNote(state.snapshot);
 
         var rows = Object.keys(state.applied).map(function (k) {
             return '<div><strong>' + escapeHtml(FILTER_LABELS[k] || k) + '</strong> : ' +
@@ -882,6 +895,8 @@
         var status = document.getElementById('bscdExportStatus');
         status.classList.add('d-none'); status.innerHTML = '';
         exportTracker.deactivate(); // a job still polling from a previous launch no longer owns the modal
+        activeExport = null;        // …nor the "Annuler" button
+        setCancelButton(false);
         var launch = document.getElementById('bscdExportLaunch');
         launch.disabled = false;
         launch.textContent = "Lancer l'export";
@@ -971,11 +986,25 @@
         renderExportProgress(status, EXPORT_PROGRESS.progressView({ status: 'pending' }), queued);
         btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> En cours…';
 
+        // Duration line: reference = the server's `timing` (fed by each poll),
+        // redrawn every second in between. Independent of the polling below.
+        var clock = EXPORT_PROGRESS.createDurationClock();
+        var current = activeExport = {
+            jobId: jobId, clock: clock, finished: false,
+            stop: function () { current.finished = true; clearInterval(timer); clearInterval(ticker); }
+        };
+        var ticker = setInterval(function () {
+            if (!exportTracker.isActive(jobId)) { clearInterval(ticker); return; }
+            showDuration(status, clock);
+            if (clock.isFinal()) clearInterval(ticker);
+        }, 1000);
+
         var url = EP.jobStatus + '/' + jobId;
         var timer = setInterval(function () {
             bscdFetch(url).then(function (job) {
                 var step = exportTracker.handle(jobId, job);
-                if (step.stop) clearInterval(timer);
+                if (step.stop) { clearInterval(timer); current.finished = true; }
+                if (step.kind !== 'unreachable' && step.kind !== 'duplicate') clock.sync(job, Date.now());
 
                 // Another "done" answer for an already downloaded job (an
                 // in-flight poll that raced the one clearing the timer).
@@ -989,7 +1018,9 @@
 
                 if (!step.render) return;
 
-                if (step.kind === 'progress') {
+                if (step.kind === 'unreachable') {
+                    showPollWarning(status, job);
+                } else if (step.kind === 'progress') {
                     if (step.view) renderExportProgress(status, step.view, queued);
                 } else if (step.kind === 'done') {
                     exportLocked = true;
@@ -1001,13 +1032,100 @@
                     }
                     step.view.title = 'Fichier prêt (' + fmt(Math.round((job.fileSize || 0) / 1048576)) + ' Mo) — téléchargement…';
                     renderExportProgress(status, step.view, queued);
+                } else if (step.kind === 'cancelled') {
+                    // Cancelled elsewhere (another tab): same end as "Annuler".
+                    current.stop();
+                    showCancelled(status, clock);
                 } else if (step.kind === 'error') {
                     exportLocked = true;
-                    status.innerHTML = '<span class="text-danger">Échec de l\'export (' + escapeHtml(job.reference || '') + ').</span>';
+                    var spent = clock.display(Date.now());
+                    status.innerHTML = '<span class="text-danger">Échec de l\'export (' + escapeHtml(job.reference || '') + ').</span>' +
+                        (spent ? '<div class="text-muted">' + escapeHtml(spent.text) + '</div>' : '');
                     btn.textContent = 'Fermer'; btn.disabled = false;
                 }
-            }).catch(function () { /* transient — keep polling */ });
+                showDuration(status, clock);
+            }).catch(function () {
+                // Network failure — keep polling, but say so (never a frozen bar).
+                if (exportTracker.isActive(jobId)) showPollWarning(status, null);
+            });
         }, 3000);
+    }
+
+    // "Annuler" — a real cancellation of the job shown in the modal
+    // (POST /exports/{id}/cancel), never just closing it: the server stops
+    // the worker and deletes the partial file. No async job running = close.
+    function cancelExport() {
+        var job = activeExport;
+        if (!job || job.finished) { $('#bscdExportModal').modal('hide'); return; }
+
+        var status = document.getElementById('bscdExportStatus');
+        setCancelButton(true);
+
+        bscdFetch(EP.jobStatus + '/' + job.jobId + '/cancel', { method: 'POST' })
+            .then(function (res) {
+                if (activeExport !== job) return; // the modal moved on meanwhile
+
+                var cancelled = res && (res.success || (res.error === 'already_finished' && res.status === 'cancelled'));
+                if (cancelled) {
+                    exportTracker.markCancelled(job.jobId); // an in-flight "done"/"running" answer is ignored
+                    job.stop();
+                    job.clock.sync({ status: 'cancelled', timing: res.timing }, Date.now());
+                    showCancelled(status, job.clock);
+                    setTimeout(function () { if (activeExport === job) $('#bscdExportModal').modal('hide'); }, 1500);
+                    return;
+                }
+
+                setCancelButton(false);
+                if (res && res.error === 'already_finished') {
+                    // done / error: left as is — polling shows (and downloads) the real end.
+                    showPollWarning(status, null, res.message || 'Cet export est déjà terminé.');
+                    return;
+                }
+                var detail = res && (res.message || (res.status ? 'HTTP ' + res.status : res.error));
+                showPollWarning(status, null, "L'annulation n'a pas abouti" + (detail ? ' (' + detail + ')' : '') + '. Réessayez.');
+            })
+            .catch(function () {
+                if (activeExport !== job) return;
+                setCancelButton(false);
+                showPollWarning(status, null, "L'annulation n'a pas abouti (erreur réseau). Réessayez.");
+            });
+    }
+
+    function setCancelButton(busy) {
+        var cancel = document.getElementById('bscdExportCancel');
+        cancel.disabled = busy;
+        cancel.innerHTML = busy ? '<i class="fas fa-spinner fa-spin mr-1"></i> Annulation…' : 'Annuler';
+    }
+
+    // Terminal "cancelled" state: no bar, no counts, the frozen duration.
+    function showCancelled(status, clock) {
+        var spent = clock.display(Date.now());
+        status.classList.remove('d-none');
+        status.innerHTML = '<span class="text-muted">Export annulé.</span>' +
+            (spent ? '<div class="text-muted">' + escapeHtml(spent.text) + '</div>' : '');
+        exportLocked = true;
+        var btn = document.getElementById('bscdExportLaunch');
+        btn.textContent = 'Fermer'; btn.disabled = false;
+        setCancelButton(false);
+    }
+
+    // "Durée d'attente / écoulée / totale : HH:MM:SS" under the line counts
+    // (empty until the server gave a usable timestamp).
+    function showDuration(status, clock) {
+        var line = status.querySelector('[data-progress-duration]');
+        if (!line) return;
+        var shown = clock.display(Date.now());
+        line.textContent = shown ? shown.text : '';
+    }
+
+    // A failed poll: the last known progress stays on screen, with the reason
+    // underneath. Cleared by the next successful answer (renderExportProgress).
+    function showPollWarning(status, job, text) {
+        var warning = status.querySelector('[data-progress-warning]');
+        if (!warning) return;
+        var detail = job && job.status ? ' (HTTP ' + job.status + ')' : '';
+        warning.textContent = text || ("État de l'export momentanément illisible" + detail +
+            ' — nouvelle tentative… Si cela persiste, rechargez la page (session expirée ?).');
     }
 
     // Progress block of an asynchronous export (pending / running / done),
@@ -1023,14 +1141,23 @@
                     '<div class="d-flex justify-content-between align-items-baseline mb-1">' +
                         '<strong>Progression de l\'export</strong><span class="text-muted" data-progress-title></span>' +
                     '</div>' +
-                    '<div class="progress bscd-export-progress-track" data-progress-track>' +
-                        '<div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>' +
+                    // The % sits beside the bar, not inside it: the filled part
+                    // is exactly view.percent wide (0 % = nothing filled).
+                    '<div class="d-flex align-items-center" data-progress-track>' +
+                        '<div class="progress bscd-export-progress-track flex-grow-1">' +
+                            '<div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>' +
+                        '</div>' +
+                        '<span class="bscd-export-progress-pct" data-progress-percent></span>' +
                     '</div>' +
                     '<div class="text-muted mt-1" data-progress-processed></div>' +
                     '<div class="text-muted" data-progress-exported></div>' +
+                    '<div class="text-muted" data-progress-duration></div>' +
+                    '<div class="text-warning small mt-1" data-progress-warning></div>' +
                 '</div>';
             box = status.querySelector('.bscd-export-progress');
         }
+
+        box.querySelector('[data-progress-warning]').textContent = '';
 
         box.querySelector('[data-progress-queued]').textContent = queued || '';
         box.querySelector('[data-progress-title]').textContent = view.title;
@@ -1042,7 +1169,7 @@
             var bar = track.querySelector('.progress-bar');
             bar.style.width = view.percent + '%';
             bar.setAttribute('aria-valuenow', String(view.percent));
-            bar.textContent = view.percent + ' %';
+            track.querySelector('[data-progress-percent]').textContent = view.percent + ' %';
         }
 
         var counted = view.processed !== null && view.total !== null;
@@ -1078,6 +1205,7 @@
         state.table.page = 1;
         loadRows().catch(handleError);
     });
+    document.getElementById('bscdExportCancel').addEventListener('click', cancelExport);
     document.querySelectorAll('[data-export]').forEach(function (b) {
         b.addEventListener('click', function () { openExportModal(b.dataset.export); });
     });
@@ -1086,7 +1214,7 @@
     function resetFilters() {
         window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo);
         MS_DIMS.forEach(function (d) { ms[d].clear(); }); // STATUT: reset leaves it empty, like every other filter
-        ms.segmentation.setOptions(segmentationOptionsForMeters([]));
+        refreshSegmentationOptions(); // meter now empty -> all options, label "Postpaid"
         refreshCascade();
         apply();
     }
@@ -1094,11 +1222,10 @@
     function bootstrapAll() {
         hideGlobalError();
         renderColumnsMenu();
-        // Fresh start: clear the staged form and chips so nothing on screen
-        // contradicts the unfiltered data we are about to load. STATUT has no
-        // default selection — the "Clients actifs" / "Contrats actifs" KPIs
-        // are a fixed business rule (Config\Oracle::$activeStatuses), not
-        // derived from this filter, so leaving it empty never changes them.
+        // Fresh start: clear the staged form and chips, then — once the
+        // options are known — pre-check the "Contrats actifs" statuses and
+        // apply them, so the very first KPI / chart / table / count / export
+        // requests carry exactly what the STATUT checkboxes show.
         window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo); els.search.value = '';
         MS_DIMS.forEach(function (d) { ms[d].clear(); });
         state.applied = {};
@@ -1106,6 +1233,9 @@
         state.table.page = 1;
         renderChips();
         loadFilterOptions().then(function () {
+            ms.status.setValues(DEFAULTS.initialStatuses(state.options.statuses, ACTIVE_STATUSES));
+            state.applied = readForm();
+            renderChips();
             return Promise.all([loadStats().catch(handleError), loadRows().catch(handleError)]);
         }).catch(handleError);
     }

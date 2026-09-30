@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="<?= base_url('assets/vendor/bootstrap/bootstrap.min.css') ?>">
     <link rel="stylesheet" href="<?= base_url('assets/vendor/fontawesome/css/all.min.css') ?>">
     <link rel="stylesheet" href="<?= base_url('assets/vendor/adminlte/adminlte.min.css') ?>">
-    <link rel="stylesheet" href="<?= base_url('assets/css/custom.css') ?>">
+    <link rel="stylesheet" href="<?= base_url('assets/css/custom.css') ?>?v=<?= @filemtime(FCPATH . 'assets/css/custom.css') ?: 0 ?>">
     <?= $this->renderSection('styles') ?>
 </head>
 <body class="hold-transition sidebar-mini layout-fixed">

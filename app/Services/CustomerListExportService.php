@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\QueryBuilder;
 use App\Services\Export\CsvRowWriter;
+use App\Services\Export\ExportCancelledException;
 use App\Services\Export\ReportsProgress;
 use App\Services\Export\ReportsStreamStats;
 use App\Services\Export\OracleRowSource;
@@ -283,6 +284,18 @@ class CustomerListExportService
                 @fclose($handle);
             }
             @unlink($tmpPath);
+
+            if ($e instanceof ExportCancelledException) {
+                log_message('info', '[CSV EXPORT] cancelled export={export} source={source} rows_exported_before_cancel={rows} elapsed_ms={ms} partial_file_deleted={deleted}', [
+                    'export'  => $filename,
+                    'source'  => $source,
+                    'rows'    => $written,
+                    'ms'      => round((microtime(true) - $t0) * 1000),
+                    'deleted' => is_file($tmpPath) ? 'no' : 'yes',
+                ]);
+
+                throw $e;
+            }
 
             log_message('error', '[CSV EXPORT] failed export={export} source={source} filters={filters} rows_exported_before_failure={rows} elapsed_ms={ms} error={error}', [
                 'export'  => $filename,

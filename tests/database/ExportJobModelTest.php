@@ -132,6 +132,7 @@ final class ExportJobModelTest extends CIUnitTestCase
     public function testMarkErrorStoresAReference(): void
     {
         $id = $this->makeJob();
+        $this->model->claimNext(); // only a running job can fail
 
         $this->model->markError($id, 'EXPJOB-20260829-00042');
 

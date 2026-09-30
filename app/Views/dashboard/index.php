@@ -20,10 +20,6 @@
     </div>
 </div>
 
-<?php // Filled by dashboard.js from GET /dashboard/count (active snapshot metadata only). ?>
-<p class="bscd-source-note" id="bscdSourceNote"></p>
-<div class="bscd-alert bscd-alert--warning d-none" id="bscdSourceWarning" role="status"></div>
-
 <div class="bscd-alert bscd-alert--error d-none" id="bscdGlobalError">
     <div>
         <strong>Impossible de charger les données.</strong>
@@ -34,7 +30,7 @@
 
 <!-- ── Filtres ─────────────────────────────────────────────── -->
 <form class="bscd-filters" id="bscdFilters" autocomplete="off">
-    <div class="bscd-filters__grid">
+    <div class="bscd-filters__grid bscd-filters__grid--main">
         <div class="bscd-filter-group">
             <label for="bscdDateFrom_d">Date d'abonnement — début</label>
             <span class="frdate" data-frdate>
@@ -121,13 +117,17 @@
 <div class="row bscd-kpi-row" id="bscdKpis">
     <?php
     $kpiCards = [
-        ['total', 'Total clients', 'fa-users', 'blue'],
+        // "Total clients" is shown only when STATUT is not exactly the 4 active
+        // statuses (dashboard.js applyKpiLayout()). col-lg (Bootstrap 4 equal
+        // flex columns): the VISIBLE cards always share one desktop line
+        // equally — 3 or 4 columns; below lg they wrap as before.
+        ['total', 'Total clients', 'fa-users', 'purple'],
         ['actifs', 'Clients actifs', 'fa-circle-check', 'green'],
-        ['avecCompteur', 'Clients avec compteur', 'fa-gauge', 'purple'],
+        ['nuiCorrects', 'NOMBRE DE NUI CORRECTS', 'fa-id-card', 'blue'],
         ['contacts', 'Contacts renseignés', 'fa-address-book', 'orange'],
     ];
     foreach ($kpiCards as [$key, $label, $icon, $color]): ?>
-        <div class="col-12 col-sm-6 col-xl-3 mb-3">
+        <div class="col-12 col-sm-6 col-lg mb-3<?= $key === 'total' ? ' d-none' : '' ?>" data-kpi-col="<?= $key ?>">
             <div class="bscd-kpi-card" data-kpi-card="<?= $key ?>">
                 <div class="bscd-kpi-icon bscd-kpi-icon--<?= $color ?>"><i class="fas <?= $icon ?>"></i></div>
                 <div class="bscd-kpi-body">
@@ -240,11 +240,11 @@
                 <div class="bscd-export-summary" id="bscdExportFilters"></div>
                 <p class="mb-1"><strong>Résultats :</strong> <span id="bscdExportCount">—</span> ligne(s)</p>
                 <p class="mb-1"><strong>Format :</strong> <span id="bscdExportFormat">—</span></p>
-                <p class="mb-3 small text-muted" id="bscdExportSource"></p>
                 <div class="bscd-export-status d-none" id="bscdExportStatus"></div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-dismiss="modal" id="bscdExportCancel">Annuler</button>
+                <?php // Not data-dismiss: cancels the running export job for real (dashboard.js cancelExport). ?>
+                <button type="button" class="btn btn-outline-secondary" id="bscdExportCancel">Annuler</button>
                 <button type="button" class="btn btn-primary" id="bscdExportLaunch">Lancer l'export</button>
             </div>
         </div>
@@ -258,6 +258,6 @@
 <script type="application/json" id="bscd-dashboard-data"><?= json_encode($bootstrap, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?></script>
 <?php // ?v=<mtime>: a reload always fetches the deployed version, never a stale cached copy. ?>
 <script src="<?= base_url('assets/js/export-progress.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/export-progress.js') ?: 0 ?>"></script>
-<script src="<?= base_url('assets/js/dashboard-source.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/dashboard-source.js') ?: 0 ?>"></script>
+<script src="<?= base_url('assets/js/dashboard-defaults.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/dashboard-defaults.js') ?: 0 ?>"></script>
 <script src="<?= base_url('assets/js/dashboard.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/dashboard.js') ?: 0 ?>"></script>
 <?= $this->endSection() ?>

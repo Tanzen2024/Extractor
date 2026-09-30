@@ -32,6 +32,7 @@ final class DashboardServiceTest extends TestCase
                 'PHONE_OK' => '800', 'EMAIL_OK' => '21', 'REFGEO_OK' => '1000',
                 'METERNO_OK' => '984', 'NIU_OK' => '786', 'NAME_OK' => '1000', 'CONTACT_OK' => '804',
             ]],
+            'ref'  => [['TOTAL' => '1000', 'NUI_TOTAL' => '1000']],
             'dist' => [
                 ['DIM' => 'region', 'VAL' => 'DCUD', 'N' => '600'],
                 ['DIM' => 'region', 'VAL' => 'DCUY', 'N' => '400'],
@@ -60,6 +61,105 @@ final class DashboardServiceTest extends TestCase
             $stats['charts']['meterType'],
         );
         $this->assertArrayNotHasKey('completeness', $stats['charts']);
+    }
+
+    public function testStatsExposesInactifsAlongsideActifs(): void
+    {
+        $oracle = new FakeOracle([
+            'kpi'  => [['TOTAL' => '1000', 'ACTIFS' => '660', 'INACTIFS' => '340', 'AVEC_COMPTEUR' => '0', 'NUI_CORRECT' => '0', 'CONTACT_OK' => '0']],
+            'ref'  => [['TOTAL' => '1000', 'NUI_TOTAL' => '1000']],
+            'dist' => [],
+        ]);
+
+        $stats = $this->service($oracle)->stats(FilterCriteria::none());
+
+        $this->assertSame(['value' => 660, 'pct' => 66.0], $stats['kpis']['actifs']);
+        $this->assertSame(['value' => 340, 'pct' => 34.0], $stats['kpis']['inactifs']);
+        $this->assertStringContainsString('INACTIFS', $oracle->lastQueries['kpi']['sql']);
+    }
+
+    public function testStatsExposesNuiCorrectsComputedUnderTheAppliedFilters(): void
+    {
+        $oracle = new FakeOracle([
+            'kpi'  => [['TOTAL' => '1000', 'ACTIFS' => '1000', 'AVEC_COMPTEUR' => '0', 'NUI_CORRECT' => '795', 'CONTACT_OK' => '0']],
+            'ref'  => [['TOTAL' => '1000', 'NUI_TOTAL' => '1000']],
+            'dist' => [],
+        ]);
+        $allowed = new AllowedValues(
+            regions: [], divisions: [], agences: [],
+            statuses: ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVE.'],
+            segmentations: [], segmentsTresor: [], meters: [], voltages: [], niuQualities: [],
+        );
+        $active   = ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)'];
+        $criteria = FilterCriteria::fromRequest(['status' => $active], $allowed);
+
+        $stats = $this->service($oracle)->stats($criteria);
+
+        $this->assertSame(['value' => 795, 'pct' => 79.5], $stats['kpis']['nuiCorrects']);
+        $kpi = $oracle->lastQueries['kpi'];
+        $this->assertStringContainsString('NUI_CORRECT', $kpi['sql']);
+        $this->assertMatchesRegularExpression('/ WHERE .*STATUS IN \(/s', $kpi['sql']);
+        foreach ($active as $status) {
+            $this->assertContains($status, $kpi['binds']);
+        }
+    }
+
+    /**
+     * "% du total" of Total clients / Clients actifs / NUI corrects uses the
+     * UNFILTERED reference (global contracts, all NUI) — never the filtered
+     * total — while Contacts renseignés keeps its filtered-total rule.
+     */
+    public function testKpiPercentagesUseTheUnfilteredReferenceDenominators(): void
+    {
+        $oracle = new FakeOracle([
+            'kpi'  => [['TOTAL' => '1000000', 'ACTIFS' => '980000', 'INACTIFS' => '20000', 'AVEC_COMPTEUR' => '0', 'NUI_CORRECT' => '900000', 'CONTACT_OK' => '500000']],
+            'ref'  => [['TOTAL' => '2480095', 'NUI_TOTAL' => '2473000']],
+            'dist' => [],
+        ]);
+        $allowed  = new AllowedValues(
+            regions: ['DCUD', 'DCUY'], divisions: [], agences: [], statuses: [],
+            segmentations: [], segmentsTresor: [], meters: [], voltages: [], niuQualities: [],
+        );
+        $criteria = FilterCriteria::fromRequest(['region' => ['DCUD']], $allowed);
+
+        $k = $this->service($oracle)->stats($criteria)['kpis'];
+
+        $this->assertSame(1000000, $k['total']);
+        $this->assertSame(40.3, $k['totalPct']);                                  // 1 000 000 / 2 480 095
+        $this->assertSame(['value' => 980000, 'pct' => 39.5], $k['actifs']);       // / 2 480 095
+        $this->assertSame(['value' => 900000, 'pct' => 36.4], $k['nuiCorrects']);  // / 2 473 000
+        $this->assertSame(['value' => 500000, 'pct' => 50.0], $k['contacts']);     // unchanged: / filtered total
+        $this->assertSame(['totalClients' => 2480095, 'totalNui' => 2473000], $k['reference']);
+    }
+
+    public function testUnfilteredTotalIsHundredPercentAndActifsIsOverTheGlobalTotal(): void
+    {
+        $oracle = new FakeOracle([
+            'kpi'  => [['TOTAL' => '2480095', 'ACTIFS' => '2430857', 'AVEC_COMPTEUR' => '0', 'NUI_CORRECT' => '2272992', 'CONTACT_OK' => '0']],
+            'ref'  => [['TOTAL' => '2480095', 'NUI_TOTAL' => '2480095']],
+            'dist' => [],
+        ]);
+
+        $k = $this->service($oracle)->stats(FilterCriteria::none())['kpis'];
+
+        $this->assertSame(100.0, $k['totalPct']);
+        $this->assertSame(98.0, $k['actifs']['pct']);
+        $this->assertSame(91.6, $k['nuiCorrects']['pct']);
+    }
+
+    public function testEmptyReferenceNeverDividesByZero(): void
+    {
+        $oracle = new FakeOracle([
+            'kpi'  => [['TOTAL' => '5', 'ACTIFS' => '5', 'AVEC_COMPTEUR' => '0', 'NUI_CORRECT' => '5', 'CONTACT_OK' => '0']],
+            'ref'  => [['TOTAL' => '0', 'NUI_TOTAL' => '0']],
+            'dist' => [],
+        ]);
+
+        $k = $this->service($oracle)->stats(FilterCriteria::none())['kpis'];
+
+        $this->assertSame(0.0, $k['totalPct']);
+        $this->assertSame(0.0, $k['actifs']['pct']);
+        $this->assertSame(0.0, $k['nuiCorrects']['pct']);
     }
 
     public function testStatsShapesTheDistributionsAndFoldsTheSegmentationTail(): void
@@ -282,8 +382,12 @@ final class FakeOracle extends OracleExtractionService
         return ['columns' => $rows === [] ? [] : array_keys($rows[0]), 'rows' => $rows];
     }
 
+    /** @var array<string, array{sql:string, binds:array<string,mixed>}> last selectMany() batch */
+    public array $lastQueries = [];
+
     public function selectMany(array $queries, int $maxRows = 5000): array
     {
+        $this->lastQueries = $queries;
         $out = [];
         foreach ($queries as $k => $spec) {
             $out[$k] = $this->many[$k] ?? ($this->canned[$this->classify($spec['sql'])] ?? []);
@@ -294,6 +398,7 @@ final class FakeOracle extends OracleExtractionService
 
     private function classify(string $sql): string
     {
+        if (str_contains($sql, 'NUI_TOTAL'))           { return 'ref'; }
         if (str_contains($sql, 'CONTACT_OK'))          { return 'kpi'; }
         if (str_contains($sql, 'GROUPING SETS'))       { return 'dist'; }
         if (str_contains($sql, 'COUNT(*) N'))          { return 'count'; }

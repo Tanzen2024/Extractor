@@ -145,6 +145,22 @@ test('unknown status is ignored (keeps polling, no render, no download)', () => 
     assert.deepEqual([step.stop, step.render, step.download], [false, false, null]);
 });
 
+test('failed poll (HTTP error, login redirect, empty) → "unreachable": keeps polling, renders a warning, no download', () => {
+    const t = createTracker({});
+    t.activate(5);
+    for (const answer of [
+        { error: 'http', status: 200, message: 'Réponse inattendue du serveur (HTTP 200).' }, // /login page
+        { error: 'not_found', status: 404 },
+        { error: 'http', status: 500 },
+        null,
+    ]) {
+        const step = t.handle(5, answer);
+        assert.deepEqual([step.stop, step.render, step.download, step.kind], [false, true, null, 'unreachable']);
+    }
+    // The next good answer is rendered normally.
+    assert.equal(t.handle(5, running(40, 1321136)).view.percent, 40);
+});
+
 test('dashboard: Export Excel button still hidden, no "Télécharger" button, script order', () => {
     const view = fs.readFileSync(path.join(__dirname, '../../app/Views/dashboard/index.php'), 'utf8');
     const rendered = view.replace(/<\?php\s*\/\*[\s\S]*?\*\/\s*\?>/g, '');
@@ -155,4 +171,146 @@ test('dashboard: Export Excel button still hidden, no "Télécharger" button, sc
     const js = fs.readFileSync(path.join(__dirname, '../../public/assets/js/dashboard.js'), 'utf8');
     assert.ok(!js.includes('>Télécharger<'), 'no manual download button');
     assert.ok(js.includes('var downloadedJobs = {}'), 'downloadedJobs kept');
+});
+
+// ── duration line (server `timing`, animated locally between polls) ──
+const { formatDuration, createDurationClock } = require('../../public/assets/js/export-progress.js');
+const at = (s) => s * 1000; // local clock in ms
+
+test('formatDuration → HH:MM:SS', () => {
+    assert.equal(formatDuration(3), '00:00:03');
+    assert.equal(formatDuration(27), '00:00:27');
+    assert.equal(formatDuration(102), '00:01:42');
+    assert.equal(formatDuration(440), '00:07:20');
+    assert.equal(formatDuration(90061), '25:01:01');
+    assert.equal(formatDuration(-5), '00:00:00');
+    assert.equal(formatDuration(null), '00:00:00');
+});
+
+test('pending → "Durée d\'attente" from the server wait time; nothing when unavailable', () => {
+    const c = createDurationClock();
+    assert.equal(c.display(at(0)), null);
+    c.sync({ status: 'pending', timing: { waitSeconds: null, elapsedSeconds: null, final: false } }, at(0));
+    assert.equal(c.display(at(1)), null);
+    c.sync({ status: 'pending', timing: { waitSeconds: 26, elapsedSeconds: null, final: false } }, at(3));
+    assert.equal(c.display(at(3)).text, "Durée d'attente : 00:00:26");
+});
+
+test('running → starts from started_at (never the queue time) and ticks every second between polls', () => {
+    const c = createDurationClock();
+    c.sync({ status: 'pending', timing: { waitSeconds: 40, elapsedSeconds: null, final: false } }, at(0));
+    c.sync({ status: 'running', timing: { waitSeconds: null, elapsedSeconds: 30, final: false } }, at(3));
+    assert.deepEqual([at(3), at(4), at(5), at(6)].map((t) => c.display(t).text),
+        ['Durée écoulée : 00:00:30', 'Durée écoulée : 00:00:31', 'Durée écoulée : 00:00:32', 'Durée écoulée : 00:00:33']);
+});
+
+test('running → a new poll never makes the value go back (nor to zero)', () => {
+    const c = createDurationClock();
+    c.sync({ status: 'running', timing: { elapsedSeconds: 30 } }, at(0));
+    assert.equal(c.display(at(3.9)).text, 'Durée écoulée : 00:00:33');
+    // Late answer: the server says 32 s at local 3.9 s.
+    c.sync({ status: 'running', timing: { elapsedSeconds: 32 } }, at(3.9));
+    assert.equal(c.display(at(4)).text, 'Durée écoulée : 00:00:33');
+    assert.equal(c.display(at(5.9)).text, 'Durée écoulée : 00:00:34');
+    // Poll without usable timing keeps counting from the last reference.
+    c.sync({ status: 'running', timing: { elapsedSeconds: null } }, at(7));
+    assert.equal(c.display(at(7)).text, 'Durée écoulée : 00:00:35');
+});
+
+test('done → "Durée totale" = finished_at - started_at, fixed for good', () => {
+    const c = createDurationClock();
+    c.sync({ status: 'running', timing: { elapsedSeconds: 400 } }, at(0));
+    c.sync({ status: 'done', timing: { elapsedSeconds: 440, final: true } }, at(3));
+    assert.equal(c.isFinal(), true);
+    assert.equal(c.display(at(3)).text, 'Durée totale : 00:07:20');
+    assert.equal(c.display(at(600)).text, 'Durée totale : 00:07:20');
+    c.sync({ status: 'done', timing: { elapsedSeconds: 999, final: true } }, at(700)); // duplicate answer
+    assert.equal(c.display(at(700)).text, 'Durée totale : 00:07:20');
+});
+
+test('done without a server total → fallback: frozen at the moment "done" is received', () => {
+    const c = createDurationClock();
+    c.sync({ status: 'running', timing: { elapsedSeconds: 100 } }, at(0));
+    c.sync({ status: 'done' }, at(5));
+    assert.equal(c.display(at(5)).text, 'Durée totale : 00:01:45');
+    assert.equal(c.display(at(60)).text, 'Durée totale : 00:01:45');
+});
+
+test('error → stops with the time actually spent', () => {
+    const c = createDurationClock();
+    c.sync({ status: 'running', timing: { elapsedSeconds: 50 } }, at(0));
+    c.sync({ status: 'error', timing: { elapsedSeconds: 52, final: true } }, at(3));
+    assert.equal(c.isFinal(), true);
+    assert.equal(c.display(at(90)).text, 'Durée totale : 00:00:52');
+});
+
+test('dashboard: duration line sits right after the exported-rows line', () => {
+    const js = fs.readFileSync(path.join(__dirname, '../../public/assets/js/dashboard.js'), 'utf8');
+    assert.match(js, /data-progress-exported><\/div>' \+\s*'<div class="text-muted" data-progress-duration><\/div>/);
+    assert.doesNotMatch(js, /[Dd]urée du téléchargement/);
+});
+
+test('progress bar: filled width = API percent, no minimum width (0 % = empty bar)', () => {
+    const css = fs.readFileSync(path.join(__dirname, '../../public/assets/css/custom.css'), 'utf8');
+    const rule = css.match(/\.bscd-export-progress-track \.progress-bar\s*\{([^}]*)\}/);
+    assert.ok(rule, 'progress-bar rule present');
+    assert.doesNotMatch(rule[1], /min-width|padding/);
+    const js = fs.readFileSync(path.join(__dirname, '../../public/assets/js/dashboard.js'), 'utf8');
+    assert.match(js, /bar\.style\.width = view\.percent \+ '%'/);
+    // The % label lives beside the bar, never inside it.
+    assert.match(js, /\[data-progress-percent\]'\)\.textContent = view\.percent \+ ' %'/);
+    assert.doesNotMatch(js, /bar\.textContent/);
+});
+
+// ── cancellation ────────────────────────────────────────────────────
+
+test('cancelled → terminal, no download, no progress shown', () => {
+    const t = createTracker({});
+    t.activate(7);
+    const step = t.handle(7, { status: 'cancelled', progress: { percent: 61, processed: 2025000, total: TOTAL, exported: 1850000 } });
+    assert.equal(step.kind, 'cancelled');
+    assert.equal(step.stop, true);
+    assert.equal(step.download, null);
+    assert.equal(step.view.percent, null);
+    assert.equal(step.view.processed, null);
+    assert.equal(step.view.title, 'Export annulé.');
+});
+
+test('confirmed cancellation → a "done" or "running" answer still in flight is ignored, never downloaded', () => {
+    const downloaded = {};
+    const t = createTracker(downloaded);
+    t.activate(7);
+    t.markCancelled(7);
+    [{ status: 'done', downloadUrl: '/exports/7/download' }, running(61, 2025000)].forEach((job) => {
+        const step = t.handle(7, job);
+        assert.equal(step.kind, 'cancelled');
+        assert.equal(step.download, null);
+        assert.equal(step.render, false);
+        assert.equal(step.stop, true);
+    });
+    assert.deepEqual(downloaded, {});
+});
+
+test('cancelling one job does not affect another job', () => {
+    const t = createTracker({});
+    t.markCancelled(7);
+    const step = t.handle(8, { status: 'done', downloadUrl: '/exports/8/download' });
+    assert.equal(step.kind, 'done');
+    assert.equal(step.download, '/exports/8/download');
+});
+
+test('duration clock → cancelled freezes the elapsed time ("Durée écoulée")', () => {
+    const clock = createDurationClock();
+    clock.sync({ status: 'running', timing: { elapsedSeconds: 250 } }, 0);
+    clock.sync({ status: 'cancelled', timing: { elapsedSeconds: 252, final: true } }, 1000);
+    assert.equal(clock.isFinal(), true);
+    assert.equal(clock.display(60000).text, 'Durée écoulée : 00:04:12');
+    assert.equal(clock.display(600000).text, 'Durée écoulée : 00:04:12'); // no longer ticking
+});
+
+test('duration clock → cancelled without a server total keeps what was shown', () => {
+    const clock = createDurationClock();
+    clock.sync({ status: 'running', timing: { elapsedSeconds: 10 } }, 0);
+    clock.sync({ status: 'cancelled' }, 5000);
+    assert.equal(clock.display(99000).text, 'Durée écoulée : 00:00:15');
 });

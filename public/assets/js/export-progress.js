@@ -66,6 +66,11 @@
                 processed: counts.processed, total: counts.total, exported: counts.exported
             };
         }
+        if (status === 'cancelled') {
+            // No progress shown for a cancelled export (the API's frozen
+            // counters are history, not something still moving).
+            return { state: 'cancelled', title: 'Export annulé.', percent: null, processed: null, total: null, exported: null };
+        }
         if (status === 'done') {
             return {
                 state: 'done', title: 'Fichier prêt — téléchargement…', percent: 100,
@@ -77,23 +82,46 @@
 
     function createTracker(downloadedJobs) {
         var downloaded = downloadedJobs || {};
+        var cancelled = {};     // job ids whose cancellation the server confirmed
         var activeJobId = null;
 
         return {
             activate: function (jobId) { activeJobId = jobId; },
             deactivate: function () { activeJobId = null; },
             isActive: function (jobId) { return activeJobId !== null && activeJobId === jobId; },
+            /** POST /exports/{id}/cancel succeeded: from now on this job is never downloaded or redrawn. */
+            markCancelled: function (jobId) { cancelled[jobId] = true; },
 
             /**
              * Decides what one poll answer means for job `jobId`:
              *   stop      clear this job's polling timer;
              *   render    this job is the one the modal shows — update it;
              *   download  URL to open (at most once per job), else null;
-             *   kind      'progress' | 'done' | 'duplicate' | 'error' | 'unknown'.
+             *   kind      'progress' | 'done' | 'duplicate' | 'error' | 'cancelled' | 'unreachable' | 'unknown'.
+             *
+             * 'cancelled' (answer or local confirmation) is terminal and never
+             * downloads — not even a poll answer that was in flight when the
+             * cancellation was confirmed.
+             *
+             * 'unreachable' = the poll itself failed (bscdFetch's {error} for a
+             * 404, a 500, a redirect to /login after the session expired, ...).
+             * Polling goes on — the worker keeps running server-side — but the
+             * modal must say so instead of staying frozen on the last state.
              */
             handle: function (jobId, job) {
                 var render = this.isActive(jobId);
                 var status = job && job.status;
+
+                if (cancelled[jobId]) {
+                    return { stop: true, render: false, download: null, kind: 'cancelled', view: null };
+                }
+                if (!job || job.error) {
+                    return { stop: false, render: render, download: null, kind: 'unreachable', view: null };
+                }
+                if (status === 'cancelled') {
+                    cancelled[jobId] = true;
+                    return { stop: true, render: render, download: null, kind: 'cancelled', view: progressView(job) };
+                }
 
                 if (status === 'done') {
                     if (downloaded[jobId]) {
@@ -113,5 +141,80 @@
         };
     }
 
-    return { clampPercent: clampPercent, progressView: progressView, createTracker: createTracker };
+    /** Whole seconds → "HH:MM:SS" (hours not capped at 24). */
+    function formatDuration(seconds) {
+        var s = Math.max(0, Math.floor(Number(seconds) || 0));
+        var pad = function (n) { return n < 10 ? '0' + n : String(n); };
+        return pad(Math.floor(s / 3600)) + ':' + pad(Math.floor(s / 60) % 60) + ':' + pad(s % 60);
+    }
+
+    /**
+     * Duration line of one job. The reference always comes from the server
+     * (`timing` of GET /exports/{id}, in seconds); between two polls the
+     * value only advances with the local clock (`nowMs`, e.g. Date.now()).
+     *
+     *   sync(job, nowMs)   feed one poll answer;
+     *   display(nowMs)     {label, text} to show, or null (nothing reliable);
+     *   isFinal()          true once the total is fixed (stop ticking).
+     *
+     * Within one phase (attente / traitement) the shown value never goes
+     * back, so a poll arriving a bit late never makes the counter jump down.
+     */
+    function createDurationClock() {
+        var phase = null;       // 'wait' | 'run' | 'final'
+        var finalLabel = 'Durée totale';
+        var base = null;        // server seconds at `baseAt`
+        var baseAt = 0;         // local ms when `base` was received
+        var shown = 0;          // highest value displayed in this phase
+
+        function current(nowMs) {
+            if (base === null) return null;
+            var value = phase === 'final' ? base : base + Math.max(0, Math.floor((nowMs - baseAt) / 1000));
+            if (phase !== 'final') shown = Math.max(shown, value);
+            return phase === 'final' ? value : shown;
+        }
+
+        function enter(next) {
+            // A new phase never inherits the previous one's value (the queue
+            // time is not processing time).
+            if (phase !== next) { phase = next; base = null; shown = 0; }
+        }
+
+        return {
+            sync: function (job, nowMs) {
+                if (phase === 'final') return;                 // fixed for good
+                var t = job && job.timing;
+                var status = job && job.status;
+                if (status === 'done' || status === 'error' || status === 'cancelled') {
+                    // Cancelled: time spent until the cancellation, then frozen.
+                    finalLabel = status === 'cancelled' ? 'Durée écoulée' : 'Durée totale';
+                    // Fallback: no server total → freeze what is shown now.
+                    var total = t && isNumber(t.elapsedSeconds) ? t.elapsedSeconds : (phase === 'run' ? current(nowMs) : null);
+                    phase = 'final'; base = total; baseAt = nowMs;
+                    return;
+                }
+                if (status === 'running') {
+                    enter('run');
+                    if (t && isNumber(t.elapsedSeconds)) { base = t.elapsedSeconds; baseAt = nowMs; }
+                    return;
+                }
+                if (status === 'pending') {
+                    enter('wait');
+                    if (t && isNumber(t.waitSeconds)) { base = t.waitSeconds; baseAt = nowMs; }
+                }
+            },
+            display: function (nowMs) {
+                var value = current(nowMs);
+                if (value === null) return null;
+                var label = phase === 'final' ? finalLabel : (phase === 'run' ? 'Durée écoulée' : "Durée d'attente");
+                return { label: label, text: label + ' : ' + formatDuration(value) };
+            },
+            isFinal: function () { return phase === 'final'; }
+        };
+    }
+
+    return {
+        clampPercent: clampPercent, progressView: progressView, createTracker: createTracker,
+        formatDuration: formatDuration, createDurationClock: createDurationClock
+    };
 }));

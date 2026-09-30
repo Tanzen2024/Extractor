@@ -23,6 +23,7 @@ $routes->get('dashboard/export/download', 'DashboardController::downloadSync');
 // ---- Asynchronous export jobs ---------------------------------------
 $routes->get('exports/(:num)', 'ExportJobController::show/$1');
 $routes->get('exports/(:num)/download', 'ExportJobController::download/$1');
+$routes->post('exports/(:num)/cancel', 'ExportJobController::cancel/$1');
 
 // ---- Extraction back-end (no menu entry; reachable by deep link / tools) ----
 $routes->get('extractor', 'ExtractorController::index');

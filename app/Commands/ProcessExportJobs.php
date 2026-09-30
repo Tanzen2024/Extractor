@@ -3,12 +3,9 @@
 namespace App\Commands;
 
 use App\Models\ExportJobModel;
-use App\Services\CustomerListExportService;
-use App\Services\CustomersList\FilterCriteria;
-use App\Services\Export\ThrottledProgress;
+use App\Services\Export\ExportJobRunner;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
-use Throwable;
 
 /**
  * Worker for asynchronous CUSTOMERS_LIST exports.
@@ -35,15 +32,16 @@ class ProcessExportJobs extends BaseCommand
 
     public function run(array $params): int
     {
-        $watch = CLI::getOption('watch') !== null;
-        $sleep = max(1, (int) (CLI::getOption('sleep') ?? 5));
-        $jobs  = new ExportJobModel();
+        $watch  = CLI::getOption('watch') !== null;
+        $sleep  = max(1, (int) (CLI::getOption('sleep') ?? 5));
+        $jobs   = new ExportJobModel();
+        $runner = new ExportJobRunner($jobs, null, self::PROGRESS_MIN_INTERVAL_SECONDS);
 
         do {
             $processed = 0;
 
             while (($job = $jobs->claimNext()) !== null) {
-                $this->process($jobs, $job);
+                $this->process($runner, $job);
                 $processed++;
             }
 
@@ -57,44 +55,19 @@ class ProcessExportJobs extends BaseCommand
         return EXIT_SUCCESS;
     }
 
-    private function process(ExportJobModel $jobs, array $job): void
+    private function process(ExportJobRunner $runner, array $job): void
     {
         $id = (int) $job['id'];
         CLI::write("Job #{$id} ({$job['format']}) — démarrage...", 'yellow');
 
-        try {
-            $criteria = FilterCriteria::fromArray(json_decode($job['filters'] ?? '[]', true) ?: []);
-            $service  = new CustomerListExportService();
-
-            // CSV only: progress is persisted in batches, at most once a
-            // second (ThrottledProgress), never per row.
-            $progress = new ThrottledProgress(
-                static function (int $processed, int $total, int $exported) use ($jobs, $id): void {
-                    $jobs->updateProgress($id, $processed, $total, $exported);
-                },
-                self::PROGRESS_MIN_INTERVAL_SECONDS,
-            );
-
-            $meta = $job['format'] === 'xlsx'
-                ? $service->exportXlsx($criteria)
-                : $service->exportCsv($criteria, $progress);
-
-            $jobs->markDone($id, $meta['path'], $meta['filename'], (int) $meta['fileSize'], (int) $meta['rows']);
-
-            CLI::write("Job #{$id} — terminé : {$meta['rows']} lignes, " . round($meta['fileSize'] / 1048576, 1) . ' Mo'
-                . " ({$progress->writes()} mises à jour de progression).", 'green');
-        } catch (Throwable $e) {
-            $reference = bscd_error_reference('EXPJOB');
-
-            log_message('error', 'Echec job export #{id} [{ref}] : {message}', [
-                'id'      => $id,
-                'ref'     => $reference,
-                'message' => $e->getMessage(),
-            ]);
-
-            $jobs->markError($id, $reference);
-
-            CLI::write("Job #{$id} — échec ({$reference}). Voir les logs.", 'red');
-        }
+        // One job's cancellation (cooperative, see ExportJobRunner) only ever
+        // ends that job: the loop goes on with the next pending one.
+        match ($runner->run($job)) {
+            ExportJobRunner::DONE => CLI::write("Job #{$id} — terminé : {$runner->last['meta']['rows']} lignes, "
+                . round($runner->last['meta']['fileSize'] / 1048576, 1) . ' Mo'
+                . " ({$runner->last['progressWrites']} mises à jour de progression).", 'green'),
+            ExportJobRunner::CANCELLED => CLI::write("Job #{$id} — annulé par l'utilisateur ({$runner->last['detail']}).", 'light_gray'),
+            default => CLI::write("Job #{$id} — échec ({$runner->last['reference']}). Voir les logs.", 'red'),
+        };
     }
 }

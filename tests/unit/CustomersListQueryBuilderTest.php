@@ -230,6 +230,60 @@ final class CustomersListQueryBuilderTest extends TestCase
         $this->assertStringContainsString('> :blank', $stmt['sql']);
     }
 
+    public function testKpiStatementCountsNuiCorrectsWithTheExistingNuiQcRuleUnderTheSameFilters(): void
+    {
+        $where = $this->qb->where($this->criteria(['status' => ['ACTIVE'], 'region' => ['DCUD']]));
+        $stmt  = $this->qb->kpiStatement($where);
+
+        // Same rule as the "Qualité NIU" labels (dashboard.js DIM_LABELS.niu_qc):
+        // NUI_QC containing "CORRECT", case-insensitive; counted per CONTRACT
+        // like TOTAL / ACTIFS / AVEC_COMPTEUR.
+        $this->assertStringContainsString('COUNT(DISTINCT CASE WHEN UPPER(NUI_QC) LIKE :nuiCorrect THEN CONTRACT END) NUI_CORRECT', $stmt['sql']);
+        $this->assertSame('%CORRECT%', $stmt['binds']['nuiCorrect']);
+
+        // Same WHERE (and binds) as every other KPI of the call.
+        $this->assertStringEndsWith(' WHERE ' . $where['sql'], $stmt['sql']);
+        foreach ($where['binds'] as $name => $value) {
+            $this->assertSame($value, $stmt['binds'][$name]);
+        }
+        $this->assertContains('ACTIVE', $where['binds']);
+        $this->assertContains('DCUD', $where['binds']);
+    }
+
+    public function testKpiStatementCountsInactifsAsTheStatutFilterInactiveGroupUnderTheSameFilters(): void
+    {
+        $where = $this->qb->where($this->criteria(['region' => ['DCUD']]));
+        $stmt  = $this->qb->kpiStatement($where);
+
+        // Same rule as the STATUT filter's "Contrats inactifs" group
+        // (dashboard.js configureStatusGroups()): every status that is NOT one
+        // of the configured active statuses — blank/NULL included — counted
+        // per CONTRACT like ACTIFS, with the very same active-status binds.
+        $this->assertMatchesRegularExpression(
+            '/COUNT\(DISTINCT CASE WHEN STATUS IN \((:active\d+(, )?)+\) THEN CONTRACT END\) ACTIFS/',
+            $stmt['sql'],
+        );
+        preg_match('/STATUS IN \(([^)]*)\) THEN CONTRACT END\) ACTIFS/', $stmt['sql'], $actifs);
+        $this->assertStringContainsString(
+            'COUNT(DISTINCT CASE WHEN STATUS IS NULL OR STATUS NOT IN (' . $actifs[1] . ') THEN CONTRACT END) INACTIFS',
+            $stmt['sql'],
+        );
+
+        // Same WHERE (and binds) as every other KPI of the call.
+        $this->assertStringEndsWith(' WHERE ' . $where['sql'], $stmt['sql']);
+        $this->assertContains('DCUD', $stmt['binds']);
+    }
+
+    public function testReferenceStatementIsUnfilteredAndCountsContractsAndAllNui(): void
+    {
+        $stmt = $this->qb->referenceStatement();
+
+        $this->assertStringContainsString('COUNT(DISTINCT CONTRACT) TOTAL', $stmt['sql']);
+        $this->assertStringContainsString('COUNT(DISTINCT CASE WHEN NUI_QC > :blank THEN CONTRACT END) NUI_TOTAL', $stmt['sql']);
+        $this->assertStringNotContainsString('WHERE', $stmt['sql']);
+        $this->assertSame(['blank' => ' '], $stmt['binds']);
+    }
+
     public function testKpiStatementCountsTotalActifsAndAvecCompteurByDistinctContract(): void
     {
         $stmt = $this->qb->kpiStatement(['sql' => '', 'binds' => []]);

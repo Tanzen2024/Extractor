@@ -119,6 +119,43 @@ final class ExportJobStatusEndpointTest extends CIUnitTestCase
         $this->assertArrayNotHasKey('downloadUrl', $json);
     }
 
+    public function testTimingPendingIsQueueTimeOnly(): void
+    {
+        $json = $this->show($this->job(["status" => "pending"]));
+
+        $this->assertIsInt($json["timing"]["waitSeconds"]);
+        $this->assertNull($json["timing"]["elapsedSeconds"]);
+        $this->assertFalse($json["timing"]["final"]);
+    }
+
+    public function testTimingRunningCountsFromStartedAt(): void
+    {
+        $json = $this->show($this->job(["status" => "running", "started_at" => date("Y-m-d H:i:s", time() - 102)]));
+
+        $this->assertEqualsWithDelta(102, $json["timing"]["elapsedSeconds"], 2);
+        $this->assertNull($json["timing"]["waitSeconds"]);
+        $this->assertFalse($json["timing"]["final"]);
+    }
+
+    public function testTimingDoneAndErrorAreFixedTotals(): void
+    {
+        foreach (["done", "error"] as $status) {
+            $json = $this->show($this->job([
+                "status" => $status, "started_at" => "2026-09-30 16:42:41", "finished_at" => "2026-09-30 16:50:01",
+            ]));
+
+            $this->assertSame(["waitSeconds" => null, "elapsedSeconds" => 440, "final" => true], $json["timing"], $status);
+        }
+    }
+
+    public function testTimingIsNullWithoutTimestamps(): void
+    {
+        $this->assertSame(
+            ["waitSeconds" => null, "elapsedSeconds" => null, "final" => false],
+            App\Models\ExportJobModel::timing(["status" => "running", "started_at" => null])
+        );
+    }
+
     public function testAnotherUsersJobIsNotVisible(): void
     {
         $id     = $this->job(['status' => 'running', 'requested_by' => 'bob']);

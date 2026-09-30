@@ -52,6 +52,9 @@ final class QueryBuilder
         'CUST_NAME', 'DATE_AB', 'DATE_RESILIATION', 'SEGMENTATION',
     ];
 
+    /** LIKE pattern on UPPER(NUI_QC) for a "NUI correct" row — see kpiStatement(). */
+    public const NUI_CORRECT_PATTERN = '%CORRECT%';
+
     private const DEFAULT_SORT = 'CONTRACT';
 
     private OracleConfig $config;
@@ -208,12 +211,23 @@ final class QueryBuilder
         }
         $activeIn = implode(', ', $activePlaceholders) ?: "NULL";
 
+        // "NUI correct" = the project's existing NUI_QC rule (dashboard.js
+        // DIM_LABELS.niu_qc, the "Qualité NIU" filter labels): the value
+        // contains "CORRECT", case-insensitive; anything else is "NUI à
+        // RECLASSER" (that value is corrupted upstream, so it is never
+        // matched directly). Real values: 'NUI CORRECT' / 'NUI àECLASSER'.
+        $binds['nuiCorrect'] = self::NUI_CORRECT_PATTERN;
+
         // NOTE: the text columns store " " (a single space), not NULL, for
         // "no value". `col > :blank` (blank = a single space) is the "has real
         // content" test: NULL -> NULL (uncounted), " " -> false, any real
         // string -> true. Used here only for the "Contacts renseignés" KPI.
         //
-        // TOTAL / ACTIFS / AVEC_COMPTEUR are explicit CONTRACT counts
+        // INACTIFS = the "Contrats inactifs" group of the STATUT filter
+        // (dashboard.js configureStatusGroups()): every status that is NOT one
+        // of the active ones, blank/NULL included — so ACTIFS + INACTIFS = TOTAL.
+        //
+        // TOTAL / ACTIFS / INACTIFS / AVEC_COMPTEUR / NUI_CORRECT are explicit CONTRACT counts
         // (COUNT(DISTINCT CONTRACT), CONTRACT being the row's own unique
         // identifier) — a deliberate business decision: the KPI cards keep
         // their "Clients ..." labels, but count CONTRACTS, not distinct
@@ -226,11 +240,31 @@ final class QueryBuilder
         $sql = 'SELECT
                 COUNT(DISTINCT CONTRACT) TOTAL,
                 COUNT(DISTINCT CASE WHEN STATUS IN (' . $activeIn . ') THEN CONTRACT END) ACTIFS,
+                COUNT(DISTINCT CASE WHEN STATUS IS NULL OR STATUS NOT IN (' . $activeIn . ') THEN CONTRACT END) INACTIFS,
                 COUNT(DISTINCT CASE WHEN METER IN (' . $meterIn . ') THEN CONTRACT END) AVEC_COMPTEUR,
+                COUNT(DISTINCT CASE WHEN UPPER(NUI_QC) LIKE :nuiCorrect THEN CONTRACT END) NUI_CORRECT,
                 SUM(CASE WHEN PHONE_NUMBERS > :blank OR E_MAIL > :blank THEN 1 ELSE 0 END) CONTACT_OK
             FROM ' . self::TABLE . $this->whereSuffix($where['sql']);
 
         return ['sql' => $sql, 'binds' => $binds];
+    }
+
+    /**
+     * Unfiltered reference totals — the denominators of the KPI percentages
+     * ("% du total"), independent of the applied filters. Same CONTRACT
+     * counting as kpiStatement(). NUI_TOTAL = every contract whose NUI_QC
+     * carries a verdict (NUI correct + NUI à reclasser); " " = no value.
+     *
+     * @return array{sql: string, binds: array<string, mixed>}
+     */
+    public function referenceStatement(): array
+    {
+        $sql = 'SELECT
+                COUNT(DISTINCT CONTRACT) TOTAL,
+                COUNT(DISTINCT CASE WHEN NUI_QC > :blank THEN CONTRACT END) NUI_TOTAL
+            FROM ' . self::TABLE;
+
+        return ['sql' => $sql, 'binds' => ['blank' => ' ']];
     }
 
     /**
