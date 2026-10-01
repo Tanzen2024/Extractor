@@ -53,15 +53,22 @@
     // every POSTPAID value below occurs only on POSTPAID (and Compteurs
     // Communicants) contracts, every PREPAID value only on PREPAID ones.
     // "8 Autre" (Postpaid) and "Other" (Prepaid) are two distinct values that
-    // merely share the "Other" display label. POSTPAID order is the display
-    // order; PREPAID keeps the backend's count order. Drives the dropdown
-    // groups and the Type compteur -> Segmentation cascade only — never used
-    // to build a filter or a query.
+    // merely share the "Other" display label. Both lists are in the STRICT
+    // business display order (dropdown and "Répartition par segmentation"
+    // chart — never by volume, alphabet or arrival order). PREPAID = the 8
+    // exact SQL values of prepaid_profile_p.sql, mirrored from
+    // App\Services\CustomersList\PrepaidSegmentations (the backend adds the
+    // ones absent from the data at count 0, so all 8 are always offered).
+    // Drives the dropdown groups/order, the chart order and the Type compteur
+    // -> Segmentation cascade only — never used to build a filter or a query.
     var POSTPAID_SEGMENTATIONS = [
         '1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk', '5 Delinquant',
         '6 Always Late', '8 Never Paid', '7 sometime Paid', '8 Autre'
     ];
-    var PREPAID_SEGMENTATIONS = ['5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'];
+    var PREPAID_SEGMENTATIONS = [
+        '1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant',
+        '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'
+    ];
 
     // Technical value -> friendly display label, for dimensions where the raw
     // Oracle value is either not meant to be read as-is (NIU_QC: a corrupted
@@ -74,6 +81,12 @@
         '4 At-Risk': 'At-Risk', '5 Delinquant': 'Delinquant', '6 Always Late': 'Always Late',
         '8 Never Paid': 'Never Paid', '7 sometime Paid': 'sometime Paid', '8 Autre': 'Other'
     };
+    var PREPAID_SEGMENTATION_LABELS = {
+        '1-Stable': 'Stable', '2-InStable': 'Instable', '3-At Risk': 'À risque',
+        '4-Suspect Dormant': 'Suspect Dormant', '5-Dormant': 'Dormant',
+        '6 Old_Dormant': 'Old Dormant', '7 Never Vending': 'Never Vending', 'Other': 'Other'
+    };
+    Object.keys(PREPAID_SEGMENTATION_LABELS).forEach(function (v) { SEGMENTATION_LABELS[v] = PREPAID_SEGMENTATION_LABELS[v]; });
     var DIM_LABELS = {
         // Only two real NUI_QC values exist (see QueryBuilder::TABLE_COLUMNS
         // comment). The "reclasser" one carries an upstream encoding
@@ -218,7 +231,8 @@
     MultiSelect.prototype.optionHtml = function (o) {
         var checked = this.selected.indexOf(o.value) !== -1 ? 'checked' : '';
         return '<label class="bscd-ms__opt"><input type="checkbox" value="' + escapeAttr(o.value) + '" ' + checked + '>' +
-            '<span>' + escapeHtml(dimLabel(this.dim, o.value)) + '</span><em>' + fmt(o.count) + '</em></label>';
+            '<span>' + escapeHtml(dimLabel(this.dim, o.value)) + '</span><em>' +
+            (typeof o.count === 'number' ? fmt(o.count) : escapeHtml(String(o.count))) + '</em></label>';
     };
     MultiSelect.prototype.renderList = function () {
         // Case-insensitive, and "-"/"_" count as spaces ("at risk" finds "At-Risk").
@@ -370,8 +384,10 @@
     // Label of the POSTPAID segmentation group, from the meter types actually
     // selected (display only — the options under it are the same):
     // POSTPAID + communicants -> both, one of them -> that one, neither ->
-    // unchanged "Postpaid".
+    // unchanged "Postpaid". Type de compteur = Toutes (nothing selected) ->
+    // both as well.
     function postpaidGroupLabel(meterValues) {
+        if (meterValues.length === 0) return 'Postpaid | Compteurs communicants';
         var postpaid = meterValues.some(function (m) { return normalizeMatch(m) === 'POSTPAID'; });
         var smart = meterValues.some(isSmartMeter);
         if (postpaid && smart) return 'Postpaid | Compteurs communicants';
@@ -386,8 +402,52 @@
         return null;
     }
 
+    // Numbers next to the Segmentation options = rows matching the filters
+    // currently in the form (except the segmentation one) AND that segment,
+    // from GET /dashboard/segmentation-counts (live Oracle, same WHERE as the
+    // KPIs and the table). Only the numbers change: the options, their order
+    // and their groups still come from filter-options. '…' while loading,
+    // '—' if unavailable — never the global counts as a stand-in.
+    var segCounts = { key: null, map: null, failed: false, seq: 0 };
+
+    function segmentationScopeKey() {
+        var c = readForm();
+        delete c.segmentation;
+        return toParams(c).toString();
+    }
+
+    function loadSegmentationCounts() {
+        if (!EP.segmentationCounts) return;
+        var key = segmentationScopeKey();
+        if (key === segCounts.key && (segCounts.map || !segCounts.failed)) return; // loaded or loading
+        var seq = ++segCounts.seq;
+        segCounts.key = key; segCounts.map = null; segCounts.failed = false;
+        refreshSegmentationOptions();
+
+        json(EP.segmentationCounts + '?' + key).then(function (data) {
+            if (seq !== segCounts.seq) return; // superseded by a newer filter set
+            if (!data || data.error || !Array.isArray(data.counts)) throw data;
+            var map = {};
+            data.counts.forEach(function (p) { map[normalizeMatch(p.value)] = Number(p.count) || 0; });
+            segCounts.map = map;
+            refreshSegmentationOptions();
+        }).catch(function () {
+            if (seq !== segCounts.seq) return;
+            segCounts.failed = true;
+            refreshSegmentationOptions();
+        });
+    }
+
+    function withScopedCounts(pairs) {
+        if (!EP.segmentationCounts) return pairs; // older page shell: previous behaviour
+        return pairs.map(function (p) {
+            var count = segCounts.map ? (segCounts.map[normalizeMatch(p.value)] || 0) : (segCounts.failed ? '—' : '…');
+            return { value: p.value, count: count };
+        });
+    }
+
     function segmentationOptionsForMeters(meterValues) {
-        var all = (state.options && state.options.segmentations) || [];
+        var all = withScopedCounts((state.options && state.options.segmentations) || []);
         var universes = {};
         meterValues.forEach(function (m) { var u = meterUniverse(m); if (u) universes[u] = true; });
         // No POSTPAID/PREPAID universe selected (nothing, or only a neutral
@@ -402,7 +462,14 @@
         ms.segmentation.groupLabels[0] = postpaidGroupLabel(meters);
         ms.segmentation.setOptions(segmentationOptionsForMeters(meters));
     }
-    ms.meter.onChange = refreshSegmentationOptions;
+    ms.meter.onChange = function () { refreshSegmentationOptions(); loadSegmentationCounts(); };
+    // Opening Segmentation: counts for the filters now in the form (region,
+    // dates, … may have changed without "Appliquer").
+    var segToggle = ms.segmentation.toggle;
+    ms.segmentation.toggle = function () {
+        segToggle.call(this);
+        if (this.panel.classList.contains('is-open')) loadSegmentationCounts();
+    };
 
     // Two visual groups in the STATUT dropdown — "Contrats actifs" first
     // (the 4 business-active statuses), then "Contrats inactifs" (every
@@ -429,7 +496,9 @@
         };
         ms.segmentation.orderOf = function (value) {
             var i = POSTPAID_SEGMENTATIONS.indexOf(value);
-            return i === -1 ? POSTPAID_SEGMENTATIONS.length : i;
+            if (i !== -1) return i;
+            i = prepaidRank(value);
+            return i === -1 ? PREPAID_SEGMENTATIONS.length : i;
         };
     }
 
@@ -513,18 +582,29 @@
         });
     }
 
+    var statsSeq = 0;
+
     function loadStats(fresh) {
+        var seq = ++statsSeq;
+        var applied = state.applied;
         applyKpiLayout();
         setKpiSkeleton(true);
-        var key = toParams(state.applied).toString();
+        setChartsLoading('Chargement…');
+        var key = toParams(applied).toString();
         if (EP.count) loadCount(key); // in parallel: the snapshot count behind export "Résultats"
         var url = EP.stats + '?' + key + (fresh ? '&fresh=1' : '');
         return json(url).then(function (data) {
+            // A slower answer for an older filter set never overwrites the current one.
+            if (seq !== statsSeq) return;
             if (data.error) throw data;
             renderKpis(data);
-            renderCharts(data);
+            renderCharts(data, applied);
             state.lastStatsAt = Date.now();
             updateCacheNote();
+        }).catch(function (err) {
+            if (seq !== statsSeq) return;
+            setChartsLoading('Données indisponibles.'); // never the previous charts
+            throw err;
         });
     }
 
@@ -633,12 +713,77 @@
 
     function destroyChart(id) { if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; } }
 
-    function renderCharts(stats) {
+    // `applied` = the filters these stats were computed for.
+    function renderCharts(stats, applied) {
         var ch = stats.charts;
         bar('bscdChartRegion', ch.region, true);
         donut('bscdChartStatus', ch.status);
-        bar('bscdChartSegmentation', ch.segmentation, false);
+        bar('bscdChartSegmentation', segmentationChartPairs(ch.segmentation, applied || {}), false);
         meterTypeSummary(ch.meterType);
+    }
+
+    // Position in PREPAID_SEGMENTATIONS (full normalised value), -1 if none.
+    function prepaidRank(value) {
+        var n = normalizeMatch(value);
+        for (var i = 0; i < PREPAID_SEGMENTATIONS.length; i++) {
+            if (normalizeMatch(PREPAID_SEGMENTATIONS[i]) === n) return i;
+        }
+        return -1;
+    }
+
+    // Segmentation chart categories, in the strict business order (never by
+    // volume): POSTPAID list when the Type compteur scope includes POSTPAID /
+    // Compteurs communicants (or is "Toutes"), then PREPAID ones. A value
+    // existing in the data but empty in this scope stays, at 0. Segments
+    // ticked in the Segmentation filter = only those. Counts are the API's
+    // (already filtered); a value in no list is appended, never dropped.
+    function segmentationChartPairs(pairs, applied) {
+        pairs = pairs || [];
+        var counts = {};
+        pairs.forEach(function (p) { counts[p.value] = p.count; });
+
+        var universes = {};
+        (applied.meter || []).forEach(function (m) { var u = meterUniverse(m); if (u) universes[u] = true; });
+        if (!universes.POSTPAID && !universes.PREPAID) universes = { POSTPAID: true, PREPAID: true };
+
+        var known = ((state.options && state.options.segmentations) || []).map(function (o) { return o.value; });
+        pairs.forEach(function (p) { if (known.indexOf(p.value) === -1) known.push(p.value); });
+
+        var postpaid = universes.POSTPAID ? POSTPAID_SEGMENTATIONS.filter(function (v) { return known.indexOf(v) !== -1; }) : [];
+        // All 8 PREPAID categories, always, in PREPAID_SEGMENTATIONS order.
+        var prepaid = universes.PREPAID ? PREPAID_SEGMENTATIONS.slice() : [];
+        var order = postpaid.concat(prepaid);
+
+        var selected = applied.segmentation || [];
+        if (selected.length) order = order.filter(function (v) { return selected.indexOf(v) !== -1; });
+
+        pairs.forEach(function (p) { if (order.indexOf(p.value) === -1 && p.count > 0) order.push(p.value); });
+        // PREPAID bars carry their display label (no numeric prefix).
+        return order.map(function (v) {
+            return { value: v, count: counts[v] || 0, label: PREPAID_SEGMENTATION_LABELS[v] || v };
+        });
+    }
+
+    // Loading / empty / error message in place of a chart (CSS shows
+    // data-chart-msg over a hidden canvas). null = show the chart.
+    var CHART_EMPTY = 'Aucune donnée disponible pour les filtres sélectionnés.';
+    function setChartMessage(canvasId, text) {
+        var wrap = document.getElementById(canvasId).parentNode;
+        if (!wrap || !wrap.dataset) return;
+        if (text) wrap.dataset.chartMsg = text; else delete wrap.dataset.chartMsg;
+    }
+
+    // New filter set: the previous charts are removed right away — never
+    // left on screen as if they matched the new filters.
+    function setChartsLoading(text) {
+        ['bscdChartRegion', 'bscdChartStatus', 'bscdChartSegmentation'].forEach(function (id) {
+            destroyChart(id);
+            setChartMessage(id, text);
+        });
+        var totalEl = document.querySelector('[data-metertype="total"]');
+        var listEl = document.querySelector('[data-metertype="list"]');
+        if (totalEl) totalEl.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>';
+        if (listEl) listEl.innerHTML = '<li class="bscd-metertype__empty">' + escapeHtml(text) + '</li>';
     }
 
     function bar(canvasId, pairs, horizontal) {
@@ -646,10 +791,12 @@
         var canvas = document.getElementById(canvasId);
         pairs = pairs || [];
         var total = pairs.reduce(function (s, p) { return s + p.count; }, 0);
+        setChartMessage(canvasId, total ? null : CHART_EMPTY);
+        if (!total) return;
         state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
             type: 'bar',
             data: {
-                labels: pairs.map(function (p) { return p.value; }),
+                labels: pairs.map(function (p) { return p.label || p.value; }),
                 datasets: [{
                     data: pairs.map(function (p) { return p.count; }),
                     backgroundColor: pairs.map(function (p, i) { return p.value === 'Autres' ? OTHER_COLOR : colorFor(i); }),
@@ -680,10 +827,12 @@
         var canvas = document.getElementById(canvasId);
         pairs = foldTail(pairs || [], 6);
         var total = pairs.reduce(function (s, p) { return s + p.count; }, 0);
+        setChartMessage(canvasId, total ? null : CHART_EMPTY);
+        if (!total) return;
         state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
             type: 'doughnut',
             data: {
-                labels: pairs.map(function (p) { return p.value; }),
+                labels: pairs.map(function (p) { return p.label || p.value; }),
                 datasets: [{ data: pairs.map(function (p) { return p.count; }),
                     backgroundColor: pairs.map(function (p, i) { return p.value === 'Autres' ? OTHER_COLOR : colorFor(i); }), borderWidth: 0 }]
             },
@@ -726,7 +875,7 @@
         });
 
         if (pairs.length === 0) {
-            listEl.innerHTML = '<li class="bscd-metertype__empty">Aucune donnée</li>';
+            listEl.innerHTML = '<li class="bscd-metertype__empty">' + escapeHtml(CHART_EMPTY) + '</li>';
         }
     }
 
@@ -849,6 +998,7 @@
         state.table.page = 1;
         renderChips();
         hideGlobalError();
+        loadSegmentationCounts();
         return Promise.all([
             loadStats().catch(handleError),
             loadRows().catch(handleError)
@@ -1214,7 +1364,7 @@
     function resetFilters() {
         window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo);
         MS_DIMS.forEach(function (d) { ms[d].clear(); }); // STATUT: reset leaves it empty, like every other filter
-        refreshSegmentationOptions(); // meter now empty -> all options, label "Postpaid"
+        refreshSegmentationOptions(); // meter now empty -> all options, label "Postpaid | Compteurs communicants"
         refreshCascade();
         apply();
     }
@@ -1236,6 +1386,7 @@
             ms.status.setValues(DEFAULTS.initialStatuses(state.options.statuses, ACTIVE_STATUSES));
             state.applied = readForm();
             renderChips();
+            loadSegmentationCounts();
             return Promise.all([loadStats().catch(handleError), loadRows().catch(handleError)]);
         }).catch(handleError);
     }

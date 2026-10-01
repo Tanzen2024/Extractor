@@ -162,7 +162,7 @@ final class DashboardServiceTest extends TestCase
         $this->assertSame(0.0, $k['nuiCorrects']['pct']);
     }
 
-    public function testStatsShapesTheDistributionsAndFoldsTheSegmentationTail(): void
+    public function testStatsShapesTheDistributionsAndNeverFoldsTheSegmentation(): void
     {
         $dist = [
             ['DIM' => 'region', 'VAL' => 'DCUD', 'N' => '10'],
@@ -182,9 +182,11 @@ final class DashboardServiceTest extends TestCase
 
         $this->assertCount(1, $charts['region']);
         $this->assertSame([], $charts['status']);
-        // 12 segmentation buckets -> top 7 + "Autres" (SEGMENTATION_TOP_N = 8).
-        $this->assertCount(8, $charts['segmentation']);
-        $this->assertSame('Autres', end($charts['segmentation'])['value']);
+        // Every segment kept (the chart orders them by business rule — no
+        // "Autres" bucket merging real segments), total unchanged.
+        $this->assertCount(12, $charts['segmentation']);
+        $this->assertNotContains('Autres', array_column($charts['segmentation'], 'value'));
+        $this->assertSame(array_sum(range(89, 100)), array_sum(array_column($charts['segmentation'], 'count')));
         // meter-type distribution is NOT folded — every real type is shown.
         $this->assertCount(2, $charts['meterType']);
         $this->assertSame('PREPAID', $charts['meterType'][0]['value']);
@@ -255,6 +257,37 @@ final class DashboardServiceTest extends TestCase
         $criteria = FilterCriteria::none();
         $this->assertSame(199, $svc->stats($criteria)['totalRows']);
         $this->assertSame(199, $svc->count($criteria));
+    }
+
+    /**
+     * Numbers next to the Segmentation options: every active filter (meter
+     * type, region, status, …) EXCEPT the segmentation one, one GROUP BY.
+     */
+    public function testSegmentationCountsUseEveryFilterExceptTheSegmentationOne(): void
+    {
+        $oracle = new FakeOracle(['segs' => [
+            ['VAL' => '2 RELIABLE', 'N' => '7057'],
+            ['VAL' => '1 PERFECT', 'N' => '1248'],
+            ['VAL' => null, 'N' => '3'],
+        ]]);
+
+        $counts = $this->service($oracle)->segmentationCounts(FilterCriteria::fromArray([
+            'meters' => ['COMPTEURS COMMUNICANTS'], 'regions' => ['DCUD'], 'statuses' => ['ACTIVE'], 'segmentations' => ['1 PERFECT'],
+        ]));
+
+        $this->assertSame([
+            ['value' => '2 RELIABLE', 'count' => 7057],
+            ['value' => '1 PERFECT', 'count' => 1248],
+            ['value' => 'Non renseigné', 'count' => 3],
+        ], $counts);
+
+        $sql = $oracle->lastSelect['sql'];
+        $this->assertStringContainsString('METER IN', $sql);
+        $this->assertStringContainsString('REGION IN', $sql);
+        $this->assertStringContainsString('STATUS IN', $sql);
+        $this->assertStringNotContainsString('SEGMENTATION IN', $sql);
+        $this->assertStringContainsString('GROUP BY SEGMENTATION', $sql);
+        $this->assertEqualsCanonicalizing(['COMPTEURS COMMUNICANTS', 'DCUD', 'ACTIVE'], array_values($oracle->lastSelect['binds']));
     }
 
     public function testExportDecisionUsesOnlyTheBackendCount(): void
@@ -374,8 +407,12 @@ final class FakeOracle extends OracleExtractionService
         // no parent ctor — we never connect
     }
 
+    /** @var array{sql:string, binds:array<string,mixed>}|null last select() */
+    public ?array $lastSelect = null;
+
     public function select(string $sql, array $binds = [], int $maxRows = 5000): array
     {
+        $this->lastSelect = ['sql' => $sql, 'binds' => $binds];
         $key = $this->classify($sql);
         $rows = $this->canned[$key] ?? [];
 
@@ -401,6 +438,7 @@ final class FakeOracle extends OracleExtractionService
         if (str_contains($sql, 'NUI_TOTAL'))           { return 'ref'; }
         if (str_contains($sql, 'CONTACT_OK'))          { return 'kpi'; }
         if (str_contains($sql, 'GROUPING SETS'))       { return 'dist'; }
+        if (str_contains($sql, 'GROUP BY SEGMENTATION')) { return 'segs'; }
         if (str_contains($sql, 'COUNT(*) N'))          { return 'count'; }
         if (str_contains($sql, 'FETCH NEXT'))          { return 'page'; }
 

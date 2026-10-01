@@ -70,18 +70,37 @@ final class FilterCriteria
             throw new InvalidFilterException('La date de début est postérieure à la date de fin.');
         }
 
+        // Every value of a dimension ticked = no restriction on it, exactly
+        // like nothing ticked: an IN (all listed values) would silently drop
+        // the rows whose value is blank (e.g. 19 013 empty SEGMENT_TRESOR on
+        // 2026-09-30), which no option can select. assertSubset() returns a
+        // de-duplicated subset of $allowed, so same size = every value.
+        $pick = static function (string $label, array $values, string $key) use ($allowed, $list): array {
+            $clean = $allowed->assertSubset($label, $values, $list($key));
+
+            return $values !== [] && count($clean) === count(array_unique($values)) ? [] : $clean;
+        };
+
+        $meters        = $pick('le type de compteur', $allowed->meters, 'meter');
+        $segmentations = $pick('la segmentation', $allowed->segmentations, 'segmentation');
+        // Type compteur = PREPAID only and the 8 PREPAID categories ticked =
+        // the whole PREPAID universe, i.e. no segmentation restriction.
+        if (PrepaidSegmentations::coversPrepaidScope($segmentations, $meters)) {
+            $segmentations = [];
+        }
+
         return new self(
             dateFrom: $dateFrom,
             dateTo: $dateTo,
-            regions: $allowed->assertSubset('la région', $allowed->regions, $list('region')),
-            divisions: $allowed->assertSubset('la division', $allowed->divisions, $list('division')),
-            agences: $allowed->assertSubset("l'agence", $allowed->agences, $list('agence')),
-            statuses: $allowed->assertSubset('le statut', $allowed->statuses, $list('status')),
-            segmentations: $allowed->assertSubset('la segmentation', $allowed->segmentations, $list('segmentation')),
-            segmentsTresor: $allowed->assertSubset('le segment trésor', $allowed->segmentsTresor, $list('segment_tresor')),
-            meters: $allowed->assertSubset('le type de compteur', $allowed->meters, $list('meter')),
-            voltages: $allowed->assertSubset('la tension', $allowed->voltages, $list('voltage')),
-            niuQualities: $allowed->assertSubset('la qualité NIU', $allowed->niuQualities, $list('niu_qc')),
+            regions: $pick('la région', $allowed->regions, 'region'),
+            divisions: $pick('la division', $allowed->divisions, 'division'),
+            agences: $pick("l'agence", $allowed->agences, 'agence'),
+            statuses: $pick('le statut', $allowed->statuses, 'status'),
+            segmentations: $segmentations,
+            segmentsTresor: $pick('le segment trésor', $allowed->segmentsTresor, 'segment_tresor'),
+            meters: $meters,
+            voltages: $pick('la tension', $allowed->voltages, 'voltage'),
+            niuQualities: $pick('la qualité NIU', $allowed->niuQualities, 'niu_qc'),
         );
     }
 
@@ -127,6 +146,20 @@ final class FilterCriteria
             'voltages'       => $this->voltages,
             'niuQualities'   => $this->niuQualities,
         ], static fn ($v) => $v !== null && $v !== []);
+    }
+
+    /**
+     * Same filters without the SEGMENTATION one: the population behind the
+     * per-segment counts of the Segmentation dropdown (each count = the
+     * other active filters AND that segment, so ticking a segment gives
+     * exactly the number shown next to it).
+     */
+    public function withoutSegmentations(): self
+    {
+        return new self(
+            $this->dateFrom, $this->dateTo, $this->regions, $this->divisions, $this->agences, $this->statuses,
+            [], $this->segmentsTresor, $this->meters, $this->voltages, $this->niuQualities,
+        );
     }
 
     public function isEmpty(): bool

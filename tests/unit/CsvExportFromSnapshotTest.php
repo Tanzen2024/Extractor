@@ -318,8 +318,9 @@ final class CsvExportFromSnapshotTest extends TestCase
     public function testScreenSqlAndExportMatcherFilterOnTheSameColumns(): void
     {
         $all = new AllowedValues(
-            regions: ['R'], divisions: ['D'], agences: ['A'], statuses: ['S'], segmentations: ['G'],
-            segmentsTresor: ['T'], meters: ['M'], voltages: ['V'], niuQualities: ['N'],
+            // Two values each: ticking one is a real restriction (all ticked = none).
+            regions: ['R', 'R2'], divisions: ['D', 'D2'], agences: ['A', 'A2'], statuses: ['S', 'S2'], segmentations: ['G', 'G2'],
+            segmentsTresor: ['T', 'T2'], meters: ['M', 'M2'], voltages: ['V', 'V2'], niuQualities: ['N', 'N2'],
         );
         $criteria = FilterCriteria::fromRequest([
             'region' => ['R'], 'division' => ['D'], 'agence' => ['A'], 'status' => ['S'], 'segmentation' => ['G'],

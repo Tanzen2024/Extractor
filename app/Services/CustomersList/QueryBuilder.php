@@ -297,6 +297,23 @@ final class QueryBuilder
     }
 
     /**
+     * Rows per SEGMENTATION value for a WHERE built by where() — the
+     * Segmentation dropdown counts when a segmentation filter is active
+     * (the where then comes from FilterCriteria::withoutSegmentations()).
+     *
+     * @param array{sql: string, binds: array<string, mixed>} $where
+     *
+     * @return array{sql: string, binds: array<string, mixed>}
+     */
+    public function segmentationCountsStatement(array $where): array
+    {
+        $sql = "SELECT SEGMENTATION VAL, COUNT(*) N FROM " . self::TABLE . $this->whereSuffix($where['sql']) . "
+            GROUP BY SEGMENTATION";
+
+        return ['sql' => $sql, 'binds' => $where['binds']];
+    }
+
+    /**
      * A single page of the data table.
      *
      * @param array{sql: string, binds: array<string, mixed>} $where

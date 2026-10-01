@@ -205,7 +205,10 @@ final class SnapshotExportTest extends TestCase
 
         $this->assertSame(['900001', '900002'], $this->contracts($c(['region' => ['DRC']])));
         $this->assertSame(['900001', '900003', '900005'], $this->contracts($c(['status' => ['ACTIVE']])), 'exact value: ACTIVE (PENDING BILLING) is a different value');
-        $this->assertSame(['900001', '900002', '900003', '900004'], $this->contracts($c(['meter' => ['PREPAID', 'POSTPAID', 'Compteurs Communicants']])), 'blank METER matches no value');
+        // Every meter type ticked = no restriction (same as nothing ticked):
+        // the blank-METER row is included, as with no filter at all.
+        $this->assertSame(['900001', '900002', '900003', '900004', '900005'], $this->contracts($c(['meter' => ['PREPAID', 'POSTPAID', 'Compteurs Communicants']])), 'all ticked = no restriction');
+        $this->assertSame($this->contracts($c([])), $this->contracts($c(['meter' => ['PREPAID', 'POSTPAID', 'Compteurs Communicants']])));
         $this->assertSame(['900003'], $this->contracts($c(['niu_qc' => ['NUI a RECLASSER']])));
         $this->assertSame(['900004'], $this->contracts($c(['voltage' => ['MV']])));
         $this->assertSame(['900005'], $this->contracts($c(['segment_tresor' => ['PUBLIC']])));

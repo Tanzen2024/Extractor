@@ -7,6 +7,7 @@ use App\Services\CustomerListExportService;
 use App\Services\CustomersList\DashboardService;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\InvalidFilterException;
+use App\Services\CustomersList\PrepaidSegmentations;
 use App\Services\CustomersList\QueryBuilder;
 use App\Services\Snapshot\SnapshotRowSource;
 use App\Services\Snapshot\SnapshotUnavailableException;
@@ -70,6 +71,7 @@ class DashboardController extends BaseController
                     'stats'         => site_url('dashboard/stats'),
                     'count'         => site_url('dashboard/count'),
                     'rows'          => site_url('dashboard/rows'),
+                    'segmentationCounts' => site_url('dashboard/segmentation-counts'),
                     'filterOptions' => site_url('dashboard/filter-options'),
                     'export'        => site_url('dashboard/export'),
                     'jobStatus'     => site_url('exports'), // + /{id}
@@ -132,6 +134,24 @@ class DashboardController extends BaseController
         });
     }
 
+    /**
+     * GET /dashboard/segmentation-counts — the numbers next to each option of
+     * the Segmentation filter, for the filters currently in the form (sent
+     * like /stats; the segmentation filter itself is ignored). Live Oracle,
+     * same WHERE as the KPIs and the table. Session lock released first:
+     * it runs alongside /stats and /rows.
+     */
+    public function segmentationCounts()
+    {
+        session()->close();
+
+        return $this->guarded(function () {
+            return $this->response->setJSON([
+                'counts' => $this->dashboard->segmentationCounts($this->criteria()),
+            ]);
+        });
+    }
+
     public function rows()
     {
         return $this->guarded(function () {
@@ -158,14 +178,16 @@ class DashboardController extends BaseController
             // Snapshot mode: the values (with counts) computed when the active
             // snapshot was installed — same shape as the Oracle query, instant,
             // and exactly the values an export accepts.
+            // Either way, the 8 PREPAID categories are always offered (the
+            // absent ones at 0) — same completion as AllowedValues.
             $source = $this->snapshotSourceOrNull();
             if ($source !== null) {
-                return $this->response->setJSON($source->snapshot()->filterOptions());
+                return $this->response->setJSON(PrepaidSegmentations::completeOptions($source->snapshot()->filterOptions()));
             }
 
             $fresh = $this->request->getGet('fresh') === '1';
 
-            return $this->response->setJSON($this->dashboard->filterOptions($fresh));
+            return $this->response->setJSON(PrepaidSegmentations::completeOptions($this->dashboard->filterOptions($fresh)));
         });
     }
 

@@ -46,6 +46,9 @@ final class AllowedValues
      */
     public static function fromFilterOptions(array $options): self
     {
+        // Every PREPAID category is selectable, even one absent from the data.
+        $options = PrepaidSegmentations::completeOptions($options);
+
         $values = static fn (string $key): array => array_values(array_map(
             static fn (array $row): string => (string) $row['value'],
             $options[$key] ?? []

@@ -24,8 +24,6 @@ use Config\Services;
 class DashboardService
 {
     private const EMPTY_LABEL = 'Non renseigné';
-    private const SEGMENTATION_TOP_N = 8;
-
     private OracleExtractionService $oracle;
     private QueryBuilder $queryBuilder;
     private OracleConfig $config;
@@ -57,8 +55,9 @@ class DashboardService
     public function stats(FilterCriteria $criteria, bool $fresh = false): array
     {
         // v4: payload gained kpis.nuiCorrects (v2), kpis.inactifs (v3), then
-        // kpis.totalPct / kpis.reference (v4) — never serve an older entry.
-        return $this->remember('stats_v4_' . $criteria->cacheKey(), $this->config->dashboardCacheTtl, $fresh, function () use ($criteria, $fresh): array {
+        // kpis.totalPct / kpis.reference (v4), every segmentation value
+        // unfolded (v5) — never serve an older entry.
+        return $this->remember('stats_v5_' . $criteria->cacheKey(), $this->config->dashboardCacheTtl, $fresh, function () use ($criteria, $fresh): array {
             // "% du total" of Total clients / Clients actifs / NUI corrects is
             // taken against the unfiltered reference, not the filtered total.
             // Contacts (and the non-displayed cards) keep the filtered total.
@@ -91,7 +90,10 @@ class DashboardService
                 'charts'    => [
                     'region'       => $this->distribution($distRows, 'region'),
                     'status'       => $this->distribution($distRows, 'status'),
-                    'segmentation' => $this->foldTail($this->distribution($distRows, 'segmentation'), self::SEGMENTATION_TOP_N),
+                    // Every segment, never folded into "Autres": the chart
+                    // shows them in the business order (dashboard.js
+                    // segmentationChartPairs()), not by volume.
+                    'segmentation' => $this->distribution($distRows, 'segmentation'),
                     // Répartition des compteurs par type (colonne METER). Chaque
                     // ligne de la population filtrée tombe dans exactement un
                     // bucket (les valeurs vides -> "Non renseigné"), donc la
@@ -99,6 +101,27 @@ class DashboardService
                     'meterType'    => $this->distribution($distRows, 'meterType'),
                 ],
             ];
+        });
+    }
+
+    /**
+     * Numbers next to the options of the Segmentation filter: rows per
+     * SEGMENTATION value under every active filter EXCEPT the segmentation
+     * one (so ticking a segment gives exactly the number shown next to it).
+     * Same WHERE as the KPIs / table (QueryBuilder::where()), one GROUP BY,
+     * cached per filter set like stats().
+     *
+     * @return list<array{value:string,count:int}>
+     */
+    public function segmentationCounts(FilterCriteria $criteria, bool $fresh = false): array
+    {
+        $scope = $criteria->withoutSegmentations();
+
+        return $this->remember('segcounts_v1_' . $scope->cacheKey(), $this->config->dashboardCacheTtl, $fresh, function () use ($scope): array {
+            $stmt = $this->queryBuilder->segmentationCountsStatement($this->queryBuilder->where($scope));
+            $rows = $this->oracle->select($stmt['sql'], $stmt['binds'], 500)['rows'];
+
+            return $this->distribution(array_map(static fn (array $r): array => $r + ['DIM' => 'segmentation'], $rows), 'segmentation');
         });
     }
 
@@ -256,9 +279,10 @@ class DashboardService
 
             // Type de compteur (POSTPAID/PREPAID) <-> Segmentation is a fixed
             // business mapping, not derived from the data — see
-            // RFM_SEGMENTATIONS in dashboard.js (2026-09: PREPAID and
-            // POSTPAID share the same 8-value RFM list). Nothing to compute
-            // server-side for it.
+            // POSTPAID_SEGMENTATIONS / PREPAID_SEGMENTATIONS in dashboard.js.
+            // The PREPAID categories absent from the data are added by
+            // PrepaidSegmentations::completeOptions() (controller /
+            // AllowedValues), not cached here.
 
             return [
                 'regions'        => $lists['regions'],
@@ -301,24 +325,6 @@ class DashboardService
         usort($out, static fn ($a, $b) => $b['count'] <=> $a['count']);
 
         return $out;
-    }
-
-    /**
-     * @param list<array{value:string,count:int}> $pairs
-     *
-     * @return list<array{value:string,count:int}>
-     */
-    private function foldTail(array $pairs, int $topN): array
-    {
-        if (count($pairs) <= $topN) {
-            return $pairs;
-        }
-
-        $head = array_slice($pairs, 0, $topN - 1);
-        $tail = array_slice($pairs, $topN - 1);
-        $head[] = ['value' => 'Autres', 'count' => array_sum(array_column($tail, 'count'))];
-
-        return $head;
     }
 
     /**

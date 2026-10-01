@@ -16,6 +16,7 @@ $routes->get('dashboard', 'DashboardController::index');
 $routes->get('dashboard/stats', 'DashboardController::stats');
 $routes->get('dashboard/count', 'DashboardController::count');
 $routes->get('dashboard/rows', 'DashboardController::rows');
+$routes->get('dashboard/segmentation-counts', 'DashboardController::segmentationCounts');
 $routes->get('dashboard/filter-options', 'DashboardController::filterOptions');
 $routes->post('dashboard/export', 'DashboardController::export');
 $routes->get('dashboard/export/download', 'DashboardController::downloadSync');

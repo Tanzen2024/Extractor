@@ -25,13 +25,15 @@ final class CustomersListQueryBuilderTest extends TestCase
     private function allowed(): AllowedValues
     {
         return new AllowedValues(
-            regions: ['DCUD', 'DCUY'],
+            // One more value than the tests tick: a selection covering every
+            // allowed value means no restriction (FilterCriteria::fromRequest).
+            regions: ['DCUD', 'DCUY', 'DRE'],
             divisions: ['DVC DOUALA NORD'],
             agences: ['CSC_LOGPOM'],
             statuses: ['ACTIVE', 'INACTIVE.'],
             segmentations: ['1 PERFECT'],
             segmentsTresor: ['PRIVATE'],
-            meters: ['PREPAID', 'POSTPAID'],
+            meters: ['PREPAID', 'POSTPAID', 'COMPTEURS COMMUNICANTS'],
             voltages: ['LV'],
             niuQualities: ['NUI correct', 'NUI a RECLASSER'],
         );
@@ -93,6 +95,24 @@ final class CustomersListQueryBuilderTest extends TestCase
         $this->assertStringNotContainsString('METER_TECHNOLOGY IN (', $w['sql']);
         $this->assertContains('PREPAID', $w['binds']);
         $this->assertContains('POSTPAID', $w['binds']);
+    }
+
+    /** Nothing ticked, every value ticked: the same perimeter (no restriction); a subset: IN (...). */
+    public function testEveryValueTickedIsTheSameAsNothingTicked(): void
+    {
+        $all = $this->criteria([
+            'region' => ['DCUD', 'DCUY', 'DRE'], 'status' => ['INACTIVE.', 'ACTIVE'], 'meter' => ['PREPAID', 'POSTPAID', 'COMPTEURS COMMUNICANTS'],
+            'segmentation' => ['1 PERFECT'], 'segment_tresor' => ['PRIVATE'], 'voltage' => ['LV'], 'niu_qc' => ['NUI correct', 'NUI a RECLASSER'],
+            'division' => ['DVC DOUALA NORD'], 'agence' => ['CSC_LOGPOM'],
+        ]);
+
+        $this->assertTrue($all->isEmpty());
+        $this->assertSame($this->qb->where(FilterCriteria::none()), $this->qb->where($all));
+        $this->assertSame(FilterCriteria::none()->cacheKey(), $all->cacheKey(), 'same perimeter = same cache entry');
+
+        $subset = $this->qb->where($this->criteria(['region' => ['DCUD', 'DRE'], 'region_x' => 'ignored']));
+        $this->assertSame('REGION IN (:f0, :f1)', $subset['sql']);
+        $this->assertSame(['f0' => 'DCUD', 'f1' => 'DRE'], $subset['binds']);
     }
 
     public function testDateToIsInclusiveOfItsWholeDay(): void

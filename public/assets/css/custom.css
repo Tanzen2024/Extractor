@@ -370,6 +370,14 @@ body {
 .bscd-chart-card__title { font-size: .88rem; font-weight: 700; color: #1f2937; margin: 0; }
 .bscd-chart-card__subtitle { font-size: .7rem; color: #9ca3af; }
 .bscd-chart-card__body { position: relative; min-height: 240px; }
+/* Loading / empty state (dashboard.js setChartMessage): message instead of a
+   stale or blank chart. */
+.bscd-chart-card__body[data-chart-msg] canvas { visibility: hidden; }
+.bscd-chart-card__body[data-chart-msg]::after {
+    content: attr(data-chart-msg); position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    padding: 1rem; color: #9ca3af; font-size: .82rem;
+}
 .bscd-donut-wrap { position: relative; }
 
 /* ── "Type de compteurs" summary (replaces the old data-quality chart) ── */
