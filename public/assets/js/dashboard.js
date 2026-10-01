@@ -446,8 +446,21 @@
         });
     }
 
+    // The 8 PREPAID categories are always offered, whatever the backend
+    // lists (it may send only the values present in the data): a missing
+    // one is added at count 0 — its real scoped count, if any, still comes
+    // from withScopedCounts(). Same completion as
+    // PrepaidSegmentations::completeOptions() server-side.
+    function withAllPrepaid(pairs) {
+        var present = {};
+        pairs.forEach(function (p) { present[normalizeMatch(p.value)] = true; });
+        return pairs.concat(PREPAID_SEGMENTATIONS
+            .filter(function (v) { return !present[normalizeMatch(v)]; })
+            .map(function (v) { return { value: v, count: 0 }; }));
+    }
+
     function segmentationOptionsForMeters(meterValues) {
-        var all = withScopedCounts((state.options && state.options.segmentations) || []);
+        var all = withScopedCounts(withAllPrepaid((state.options && state.options.segmentations) || []));
         var universes = {};
         meterValues.forEach(function (m) { var u = meterUniverse(m); if (u) universes[u] = true; });
         // No POSTPAID/PREPAID universe selected (nothing, or only a neutral

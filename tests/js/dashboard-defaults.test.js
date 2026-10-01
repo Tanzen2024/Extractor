@@ -262,16 +262,20 @@ async function bootWithMeters(selectedMeters) {
     };
 }
 
-test('segmentation group, Type de compteur = Toutes: "Postpaid | Compteurs communicants", Prepaid, every option', async () => {
+// The 8 PREPAID categories, business order — always offered by the dropdown.
+const PREPAID_8 = ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'];
+
+test('segmentation group, Type de compteur = Toutes: "Postpaid | Compteurs communicants", Prepaid, every option + the 8 PREPAID', async () => {
     const r = await bootWithMeters([]);
     assert.deepEqual(r.groups, ['Postpaid | Compteurs communicants', 'Prepaid']);
-    assert.deepEqual([...r.options].sort(), SEG_OPTIONS.map((o) => o.value).sort());
+    const expected = new Set(SEG_OPTIONS.map((o) => o.value).concat(PREPAID_8));
+    assert.deepEqual([...r.options].sort(), [...expected].sort());
 });
 
-test('segmentation group, PREPAID only: "Prepaid", PREPAID segmentations only (unchanged)', async () => {
+test('segmentation group, PREPAID only: "Prepaid", the 8 PREPAID categories in business order (backend sent 2)', async () => {
     const r = await bootWithMeters(['PREPAID']);
     assert.deepEqual(r.groups, ['Prepaid']);
-    assert.deepEqual(r.options, ['5-Dormant', 'Other']);
+    assert.deepEqual(r.options, PREPAID_8);
 });
 
 test('segmentation group, POSTPAID only: "Postpaid", POSTPAID segmentations only', async () => {
@@ -363,9 +367,12 @@ test('segment counts, Type = Toutes: scope of every meter, group "Postpaid | Com
     assert.equal(r.counts['5-Dormant'], n(1091001));
 });
 
-test('segment counts, PREPAID: prepaid numbers, option list unchanged', async () => {
+test('segment counts, PREPAID: real numbers for the returned values, 0 for the 6 others, all 8 listed', async () => {
     const r = await bootScoped(['PREPAID']);
-    assert.deepEqual(r.counts, { '5-Dormant': n(1091001), Other: n(3890) });
+    assert.deepEqual(r.counts, {
+        '1-Stable': '0', '2-InStable': '0', '3-At Risk': '0', '4-Suspect Dormant': '0',
+        '5-Dormant': n(1091001), '6 Old_Dormant': '0', '7 Never Vending': '0', Other: n(3890),
+    });
 });
 
 test('segment counts follow the other form filters (region), and never send the segmentation filter', async () => {
@@ -492,6 +499,134 @@ test('Segmentation filter, PREPAID: the 8 options in the business order, labelle
     const opts = [...html.matchAll(/<input type="checkbox" value="([^"]*)"[^>]*><span>([^<]*)<\/span>/g)].map((m) => [unescapeHtml(m[1]), unescapeHtml(m[2])]);
     assert.deepEqual(opts.map((o) => o[0]), PREPAID_VALUES);
     assert.deepEqual(opts.map((o) => o[1]), PREPAID_ORDER);
+});
+
+// ── Segmentation filter, PREPAID: the 8 categories are guaranteed by the
+// frontend, even when the backend only lists the values present in the data.
+
+// Figures of the validated customers_list fix (PREPAID, 4 active statuses);
+// 4-Suspect Dormant, 5-Dormant and Other are absent from the data.
+const CURRENT_PREPAID = { '1-Stable': 252345, '2-InStable': 251888, '3-At Risk': 425372, '6 Old_Dormant': 151490, '7 Never Vending': 11192 };
+const CURRENT_POSTPAID = { '1 PERFECT': 28570, '4 At-Risk': 223375 };
+
+async function bootCurrent() {
+    const seen = [];
+    const ctx = bootDashboard({
+        // No completion here: only the values present in the data.
+        '/dashboard/filter-options': {
+            meters: METER_OPTIONS, regions: [{ value: 'DCUD', count: 1 }],
+            segmentations: Object.keys({ ...CURRENT_POSTPAID, ...CURRENT_PREPAID }).map((value) => ({ value, count: 1 })),
+        },
+        '/dashboard/segmentation-counts': (url) => {
+            const q = new URLSearchParams(url.split('?')[1] || '');
+            seen.push(q);
+            const meters = q.getAll('meter[]');
+            const src = !meters.length ? { ...CURRENT_POSTPAID, ...CURRENT_PREPAID }
+                : (meters.includes('PREPAID') ? CURRENT_PREPAID : CURRENT_POSTPAID);
+            return { counts: Object.entries(src).map(([value, count]) => ({ value, count })) };
+        },
+        '/dashboard/stats': (url) => statsFor(url),
+    }, { segmentationCounts: '/dashboard/segmentation-counts' });
+    await settle();
+    const tick = (dim, value, on = true) => {
+        const cb = msList(ctx, dim).querySelectorAll('input[type=checkbox]').find((c) => c.value === value);
+        cb.checked = on; cb.fire('change');
+    };
+    const read = () => {
+        const html = msList(ctx, 'segmentation').innerHTML;
+        const opts = [...html.matchAll(/<input type="checkbox" value="([^"]*)"[^>]*><span>([^<]*)<\/span><em>([^<]*)<\/em>/g)]
+            .map((m) => ({ value: unescapeHtml(m[1]), label: unescapeHtml(m[2]), count: m[3] }));
+        return {
+            groups: [...html.matchAll(/<div class="bscd-ms__group-label">([^<]*)<\/div>/g)].map((m) => unescapeHtml(m[1])),
+            values: opts.map((o) => o.value), labels: opts.map((o) => o.label), counts: opts.map((o) => o.count),
+        };
+    };
+    const statsParams = () => {
+        const urls = ctx.requests.filter((u) => u.startsWith('/dashboard/stats'));
+        return new URLSearchParams(urls[urls.length - 1].split('?')[1] || '');
+    };
+    const apply = async () => { ctx.byId.bscdFilters.fire('submit'); await settle(); };
+    return { ctx, seen, tick, read, statsParams, apply };
+}
+
+test('PREPAID filter, current data: exactly the 8 categories, business order, labels, real counts and 0 for the absent ones', async () => {
+    const r = await bootCurrent();
+    r.tick('meter', 'PREPAID');
+    await settle();
+    const s = r.read();
+    assert.deepEqual(s.groups, ['Prepaid']);
+    assert.equal(s.values.length, 8);
+    assert.deepEqual(s.values, PREPAID_VALUES);
+    assert.deepEqual(s.labels, PREPAID_ORDER);
+    assert.deepEqual(s.counts, [n(252345), n(251888), n(425372), '0', '0', n(151490), n(11192), '0']);
+    // No technical value shown to the user (numeric prefixes, underscores).
+    assert.ok(s.labels.every((l) => !/^\d/.test(l) && !l.includes('_')));
+});
+
+test('PREPAID filter + a segment ticked: the 8 options stay, the technical value is sent, counts ignore the segmentation filter', async () => {
+    const r = await bootCurrent();
+    r.tick('meter', 'PREPAID');
+    await settle();
+    r.tick('segmentation', '1-Stable');
+    await r.apply();
+    assert.deepEqual(r.statsParams().getAll('segmentation[]'), ['1-Stable']);
+    assert.deepEqual(r.statsParams().getAll('meter[]'), ['PREPAID']);
+    assert.deepEqual(r.read().values, PREPAID_VALUES);
+    assert.ok(r.seen.every((q) => q.getAll('segmentation[]').length === 0));
+});
+
+test('PREPAID filter, no segmentation ticked: no segmentation filter sent', async () => {
+    const r = await bootCurrent();
+    r.tick('meter', 'PREPAID');
+    await r.apply();
+    assert.deepEqual(r.statsParams().getAll('segmentation[]'), []);
+    assert.deepEqual(r.read().values, PREPAID_VALUES);
+});
+
+test('Type de compteur POSTPAID -> PREPAID -> POSTPAID: each switch reloads the right list and counts', async () => {
+    const r = await bootCurrent();
+    r.tick('meter', 'POSTPAID');
+    await settle();
+    let s = r.read();
+    assert.deepEqual(s.values, ['1 PERFECT', '4 At-Risk']);
+    assert.deepEqual(s.counts, [n(28570), n(223375)]);
+
+    r.tick('meter', 'POSTPAID', false);
+    r.tick('meter', 'PREPAID');
+    await settle();
+    s = r.read();
+    assert.deepEqual(s.values, PREPAID_VALUES);
+    assert.deepEqual(s.counts, [n(252345), n(251888), n(425372), '0', '0', n(151490), n(11192), '0']);
+
+    r.tick('meter', 'PREPAID', false);
+    r.tick('meter', 'POSTPAID');
+    await settle();
+    s = r.read();
+    assert.deepEqual(s.groups, ['Postpaid']);
+    assert.deepEqual(s.values, ['1 PERFECT', '4 At-Risk']);
+});
+
+test('PREPAID filter + another filter (region): counts follow the region, the 8 categories stay', async () => {
+    const r = await bootCurrent();
+    r.tick('region', 'DCUD');
+    r.tick('meter', 'PREPAID');
+    await settle();
+    const last = r.seen[r.seen.length - 1];
+    assert.deepEqual(last.getAll('region[]'), ['DCUD']);
+    assert.deepEqual(last.getAll('meter[]'), ['PREPAID']);
+    assert.deepEqual(r.read().values, PREPAID_VALUES);
+});
+
+test('PREPAID filter: a category at 0 can be ticked and unticked like any other', async () => {
+    const r = await bootCurrent();
+    r.tick('meter', 'PREPAID');
+    await settle();
+    r.tick('segmentation', '4-Suspect Dormant');
+    await r.apply();
+    assert.deepEqual(r.statsParams().getAll('segmentation[]'), ['4-Suspect Dormant']);
+    r.tick('segmentation', '4-Suspect Dormant', false);
+    await r.apply();
+    assert.deepEqual(r.statsParams().getAll('segmentation[]'), []);
 });
 
 test('segmentation chart, Toutes: POSTPAID order then PREPAID order, every segment, no "Autres" bucket', async () => {
