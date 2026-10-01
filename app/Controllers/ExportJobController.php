@@ -31,15 +31,12 @@ class ExportJobController extends BaseController
             'label'    => $job['filters_label'],
         ];
 
-        // Real scan progress (0..100, see ExportJobModel::progress()). Not
-        // sent for 'error', whose payload stays as it was. For 'cancelled' it
-        // is where the scan stopped (history only — never a download).
-        if (in_array($job['status'], ['pending', 'running', 'done', 'cancelled'], true)) {
-            $payload['progress'] = ExportJobModel::progress($job);
-        }
-
-        // Processing duration (started_at → finished_at, server clock).
-        $payload['timing'] = ExportJobModel::timing($job);
+        // Same shape for every status: real scan progress (0..100, see
+        // ExportJobModel::progress()) — for 'cancelled' / 'error' it is
+        // where the scan stopped (history only, never a download) — and the
+        // processing duration (started_at → finished_at, server clock).
+        $payload['progress'] = ExportJobModel::progress($job);
+        $payload['timing']   = ExportJobModel::timing($job);
 
         if ($job['status'] === 'done') {
             $payload['downloadUrl'] = site_url("exports/{$job['id']}/download");
@@ -48,7 +45,14 @@ class ExportJobController extends BaseController
         }
 
         if ($job['status'] === 'error') {
+            // The reference only: the exception, its trace and the server
+            // paths stay in the worker's log, under this same reference.
             $payload['reference'] = $job['error_reference'];
+            $payload['failure']   = [
+                'reference' => $job['error_reference'],
+                'message'   => "L'export a échoué côté serveur. Relancez-le ; si l'échec se répète, "
+                    . "transmettez la référence {$job['error_reference']} à l'administrateur.",
+            ];
         }
 
         return $this->response->setJSON($payload);

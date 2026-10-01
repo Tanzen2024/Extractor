@@ -21,8 +21,12 @@ use Throwable;
  * is conditional, so a job cancelled while its file was being finalised is
  * never marked done: its (complete) file is deleted instead.
  *
- * XLSX and the Oracle source report no progress: for them the cancellation
- * only takes effect at the end (file deleted, never 'done').
+ * CSV and XLSX from the snapshot report progress (hence cancellation) the
+ * same way; the Oracle source reports none: there the cancellation only
+ * takes effect at the end (file deleted, never 'done').
+ *
+ * A failure is logged in full (ExportJobFailure) under the short reference
+ * stored in error_reference — see fail().
  */
 final class ExportJobRunner
 {
@@ -63,7 +67,7 @@ final class ExportJobRunner
             $criteria = FilterCriteria::fromArray(json_decode($job['filters'] ?? '[]', true) ?: []);
             $service  = ($this->serviceFactory)();
 
-            // CSV only: progress is persisted in batches, at most once per
+            // Progress is persisted in batches, at most once per
             // interval (ThrottledProgress), never per row — and each write
             // tells whether the job is still running.
             $progress = new ThrottledProgress(
@@ -75,8 +79,12 @@ final class ExportJobRunner
                 $this->progressIntervalSeconds,
             );
 
+            log_message('info', '[EXPORT JOB] started job={id} uuid={uuid} format={format} expected_rows={rows}', [
+                'id' => $id, 'uuid' => $job['uuid'] ?? '', 'format' => $job['format'] ?? '', 'rows' => $job['row_count'] ?? '',
+            ]);
+
             $meta = $job['format'] === 'xlsx'
-                ? $service->exportXlsx($criteria)
+                ? $service->exportXlsx($criteria, $progress)
                 : $service->exportCsv($criteria, $progress);
 
             $this->last += ['meta' => $meta, 'progressWrites' => $progress->writes()];
@@ -97,25 +105,49 @@ final class ExportJobRunner
 
             return self::CANCELLED;
         } catch (Throwable $e) {
-            $reference = bscd_error_reference('EXPJOB');
+            return $this->fail($job, $e);
+        }
+    }
 
-            log_message('error', 'Echec job export #{id} [{ref}] : {message}', [
-                'id'      => $id,
-                'ref'     => $reference,
-                'message' => $e->getMessage(),
-            ]);
+    /**
+     * Any failure: a short reference for the user (error_reference), the
+     * full exception — class, message, file, line, trace, causes — in the
+     * log under that same reference. Never throws: the worker must survive
+     * one job's failure, even when the database refuses the error write.
+     *
+     * @param array<string, mixed> $job
+     */
+    private function fail(array $job, Throwable $e): string
+    {
+        $id        = (int) $job['id'];
+        $reference = bscd_error_reference('EXPJOB');
+        $report    = ExportJobFailure::report($job, $reference, $e);
 
+        $this->last += [
+            'reference' => $reference,
+            'exception' => $e::class,
+            'summary'   => ExportJobFailure::summary($e),
+            'report'    => $report,
+        ];
+
+        log_message('error', $report);
+
+        try {
             // Conditional: a job cancelled meanwhile stays 'cancelled'.
-            if (! $jobs->markError($id, $reference)) {
-                $this->logCancelled($id, 'échec après annulation : ' . $e->getMessage());
+            if (! $this->jobs->markError($id, $reference)) {
+                $this->logCancelled($id, 'échec après annulation : ' . ExportJobFailure::summary($e));
 
                 return self::CANCELLED;
             }
-
-            $this->last['reference'] = $reference;
-
-            return self::ERROR;
+        } catch (Throwable $dbError) {
+            // The row stays 'running'; the worker's stale-job recovery ends
+            // it later. Logged so neither cause is lost.
+            $this->last['markErrorFailed'] = ExportJobFailure::summary($dbError);
+            log_message('critical', "[EXPORT JOB ERROR] job_id={$id} reference={$reference} : statut 'error' non enregistré\n"
+                . ExportJobFailure::report($job, $reference, $dbError));
         }
+
+        return self::ERROR;
     }
 
     private function logCancelled(int $id, string $detail): void

@@ -85,6 +85,29 @@ test('error → no download, polling stops', () => {
     assert.equal(step.render, true);
 });
 
+test('error answer with its progress + failure payload → still a terminal "error", never "unreachable"', () => {
+    // GET /exports/{id} for an error now carries progress, timing and
+    // `failure` (never a key named `error`: that is bscdFetch's failed-poll shape).
+    const t = createTracker({});
+    t.activate(45);
+    const step = t.handle(45, {
+        status: 'error', reference: 'EXPJOB-20261001-24093',
+        progress: { percent: 0, processed: 0, total: null, exported: 0 },
+        timing: { waitSeconds: null, elapsedSeconds: 0, final: true },
+        failure: { reference: 'EXPJOB-20261001-24093', message: "L'export a échoué côté serveur." }
+    });
+    assert.equal(step.kind, 'error');
+    assert.equal(step.stop, true);
+    assert.equal(step.download, null);
+});
+
+test('progressView: error → no bar, no counts', () => {
+    const view = progressView({ status: 'error', progress: { percent: 28, processed: 950000, total: TOTAL, exported: 950000 } });
+    assert.equal(view.state, 'error');
+    assert.equal(view.percent, null);
+    assert.equal(view.processed, null);
+});
+
 test('done → automatic download triggered exactly once, even with several "done" answers', () => {
     const downloadedJobs = {};
     const t = createTracker(downloadedJobs);

@@ -349,8 +349,13 @@ class CustomerListExportService
      * @return array{path:string, filename:string, format:string, rows:int, sheets:int,
      *     fileSize:int, sqlDurationMs:float, fetchDurationMs:float, writeDurationMs:float,
      *     totalDurationMs:float, peakMemoryMb:float}
+     *
+     * @param (callable(int $processed, int $total, int $exported): void)|null $onProgress
+     *     Same contract as exportCsv(): batched scan progress, only from a
+     *     ReportsProgress source. An exception thrown by it (cancellation)
+     *     unwinds like any failure: the partial workbook is deleted.
      */
-    public function exportXlsx(?FilterCriteria $filters = null): array
+    public function exportXlsx(?FilterCriteria $filters = null, ?callable $onProgress = null): array
     {
         OracleExtractionService::ensurePhpTimeLimitAtLeast($this->config->exportTimeLimitSeconds);
 
@@ -388,6 +393,11 @@ class CustomerListExportService
             $writeTime  = 0.0; // Time spent handing rows to the writer, measured inside the fetch loop.
             $saveTime   = 0.0; // Time spent finalising the zip (writer->close()), measured after the loop.
 
+            $reportsProgress = $onProgress !== null && $this->rowSource instanceof ReportsProgress;
+            if ($reportsProgress) {
+                $this->rowSource->setProgressListener($onProgress);
+            }
+
             try {
                 $rowCount = $this->rowSource->stream($filters, function (array $row) use ($writer, &$written, &$firstRowAt, &$writeTime, $t0): void {
                     if ($firstRowAt === null) {
@@ -418,6 +428,10 @@ class CustomerListExportService
                 }
 
                 throw $e;
+            } finally {
+                if ($reportsProgress) {
+                    $this->rowSource->setProgressListener(null);
+                }
             }
 
             foreach ($writer->cleanupWarnings() as $warning) {

@@ -40,11 +40,13 @@ class CreateExportJobsTable extends Migration
         $this->forge->addUniqueKey('uuid');
         $this->forge->addKey(['status', 'id']);
         $this->forge->addKey('requested_by');
-        $this->forge->createTable('export_jobs');
+        // IF NOT EXISTS: a table created by hand (or by a restored dump)
+        // without its migration row must not block `php spark migrate`.
+        $this->forge->createTable('export_jobs', true);
     }
 
     public function down()
     {
-        $this->forge->dropTable('export_jobs');
+        $this->forge->dropTable('export_jobs', true);
     }
 }

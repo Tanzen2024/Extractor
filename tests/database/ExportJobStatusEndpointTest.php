@@ -7,8 +7,8 @@ use CodeIgniter\Test\ControllerTestTrait;
 use CodeIgniter\Test\DatabaseTestTrait;
 
 /**
- * GET /exports/{id} — the JSON the dashboard polls: `progress` for
- * pending / running / done, error payload unchanged.
+ * GET /exports/{id} — the JSON the dashboard polls: same shape (`progress`,
+ * `timing`) for every status, plus a browser-safe `failure` for 'error'.
  *
  * @internal
  */
@@ -109,14 +109,53 @@ final class ExportJobStatusEndpointTest extends CIUnitTestCase
         $this->assertSame(3_302_841, $json['rowCount']);
     }
 
-    public function testErrorPayloadIsUnchanged(): void
+    public function testErrorPayloadHasReferenceSafeMessageAndSameShape(): void
     {
         $json = $this->show($this->job(['status' => 'error', 'error_reference' => 'EXPJOB-20260929-00001', 'rows_processed' => 10]));
 
         $this->assertSame('error', $json['status']);
-        $this->assertSame('EXPJOB-20260929-00001', $json['reference']);
-        $this->assertArrayNotHasKey('progress', $json);
+        $this->assertSame('EXPJOB-20260929-00001', $json['reference']); // kept for older pages
+        $this->assertSame('EXPJOB-20260929-00001', $json['failure']['reference']);
+        $this->assertStringContainsString('EXPJOB-20260929-00001', $json['failure']['message']);
+        // Same shape as the other statuses; frozen counters, no total = 0 %.
+        $this->assertSame(['percent' => 0, 'processed' => 10, 'total' => null, 'exported' => 0], $json['progress']);
+        $this->assertTrue($json['timing']['final']);
         $this->assertArrayNotHasKey('downloadUrl', $json);
+        // Never the exception: no trace, class or server path reaches the browser.
+        // ('error' itself must stay absent: the dashboard reads it as a failed poll.)
+        $this->assertArrayNotHasKey('error', $json);
+        $body = json_encode($json);
+        foreach (['trace', 'exception', 'Exception', '.php', 'file_path'] as $leak) {
+            $this->assertStringNotContainsString($leak, $body);
+        }
+    }
+
+    public function testEveryStatusHasTheSameCoreShape(): void
+    {
+        foreach (['pending', 'running', 'done', 'error', 'cancelled'] as $status) {
+            $json = $this->show($this->job([
+                'status' => $status, 'rows_total' => 3_305_219, 'rows_processed' => 950_000, 'rows_exported' => 700_000,
+                'started_at' => $status === 'pending' ? null : date('Y-m-d H:i:s', time() - 26),
+                'finished_at' => in_array($status, ['done', 'error', 'cancelled'], true) ? date('Y-m-d H:i:s') : null,
+            ]));
+
+            foreach (['id', 'status', 'format', 'rowCount', 'progress', 'timing'] as $key) {
+                $this->assertArrayHasKey($key, $json, "{$status}: {$key}");
+            }
+            $this->assertSame($status, $json['status']);
+            $this->assertSame(['percent', 'processed', 'total', 'exported'], array_keys($json['progress']), $status);
+            $this->assertSame(['waitSeconds', 'elapsedSeconds', 'final'], array_keys($json['timing']), $status);
+
+            $expected = ['pending' => 0, 'running' => 28, 'done' => 100, 'error' => 28, 'cancelled' => 28][$status];
+            $this->assertSame($expected, $json['progress']['percent'], $status);
+        }
+    }
+
+    public function testRunningWithZeroTotalNeverDividesByZero(): void
+    {
+        $json = $this->show($this->job(['status' => 'running', 'rows_total' => 0, 'rows_processed' => 5]));
+
+        $this->assertSame(0, $json['progress']['percent']);
     }
 
     public function testTimingPendingIsQueueTimeOnly(): void

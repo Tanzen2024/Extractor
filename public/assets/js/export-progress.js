@@ -71,6 +71,10 @@
             // counters are history, not something still moving).
             return { state: 'cancelled', title: 'Export annulé.', percent: null, processed: null, total: null, exported: null };
         }
+        if (status === 'error') {
+            // Like cancelled: frozen counters are not shown as a moving bar.
+            return { state: 'error', title: "Échec de l'export.", percent: null, processed: null, total: null, exported: null };
+        }
         if (status === 'done') {
             return {
                 state: 'done', title: 'Fichier prêt — téléchargement…', percent: 100,

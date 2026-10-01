@@ -31,11 +31,12 @@ class SetCustomersListQuery extends Migration
         $content = file_get_contents($path);
         $position = strpos($content, self::MARKER);
 
-        if ($position === false) {
-            throw new RuntimeException('Could not locate the start of the SQL query in Extractor.sql.');
-        }
-
-        $sql = substr($content, $position);
+        // The file has since been replaced by a flat SELECT without that
+        // marker (and without the glued label). Throwing here made a
+        // from-scratch `php spark migrate` impossible; the whole trimmed file
+        // is the right value — SyncCustomersListQuery (next) stores exactly
+        // that anyway, so the end state is unchanged.
+        $sql = $position === false ? trim($content) : substr($content, $position);
 
         $this->db->table('tools')
             ->where('code', 'CUSTOMERS_LIST')

@@ -82,6 +82,7 @@ Vagrantfile
 !/writable/debugbar/index.html
 
 /writable/tmp/
+/writable/export-worker/
 
 php_errors.log
 

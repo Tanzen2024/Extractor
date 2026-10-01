@@ -1,0 +1,39 @@
+# systemd unit for the asynchronous export worker (php spark export:process --watch).
+#
+# Install (as root), adapting User/Group/WorkingDirectory/php path if needed:
+#   cp docs/deploy/extractor-export-worker.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now extractor-export-worker
+#
+# User MUST be the account Apache/PHP-FPM runs as (www-data on Debian/Ubuntu,
+# apache on RHEL): the worker writes the same writable/ tree (logs, exports,
+# tmp) as the web server. Another user = files or logs it cannot write,
+# failures with no log line (see docs/deploy/export-worker.md).
+
+[Unit]
+Description=Extractor - asynchronous export worker
+After=network-online.target mysql.service mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/extractor
+ExecStart=/usr/bin/php spark export:process --watch
+# The worker exits on its own after a deployment (code changed on disk) and
+# is restarted here on the new code; also restarted after any crash.
+Restart=always
+RestartSec=5
+# SIGTERM: the current job finishes first (needs php-pcntl), then exit.
+# A full CSV takes ~1 min, a full XLSX up to ~30 min.
+KillSignal=SIGTERM
+TimeoutStopSec=1800
+# stdout/stderr (including the full error reports) go to the journal:
+#   journalctl -u extractor-export-worker -f
+StandardOutput=journal
+StandardError=journal
+UMask=0002
+
+[Install]
+WantedBy=multi-user.target

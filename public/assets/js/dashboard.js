@@ -1202,7 +1202,9 @@
                 } else if (step.kind === 'error') {
                     exportLocked = true;
                     var spent = clock.display(Date.now());
-                    status.innerHTML = '<span class="text-danger">Échec de l\'export (' + escapeHtml(job.reference || '') + ').</span>' +
+                    var failure = job.failure || {};
+                    status.innerHTML = '<span class="text-danger">Échec de l\'export (' + escapeHtml(failure.reference || job.reference || '') + ').</span>' +
+                        (failure.message ? '<div class="text-muted small">' + escapeHtml(failure.message) + '</div>' : '') +
                         (spent ? '<div class="text-muted">' + escapeHtml(spent.text) + '</div>' : '');
                     btn.textContent = 'Fermer'; btn.disabled = false;
                 }

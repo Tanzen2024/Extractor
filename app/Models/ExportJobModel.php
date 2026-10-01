@@ -77,9 +77,10 @@ class ExportJobModel extends Model
             ->where('id', $id)
             ->where('status', 'running')
             ->update([
-                'rows_total'     => $total,
-                'rows_processed' => $processed,
-                'rows_exported'  => $exported,
+                // Unsigned columns: never send a negative (strict mode error).
+                'rows_total'     => max(0, $total),
+                'rows_processed' => max(0, $processed),
+                'rows_exported'  => max(0, $exported),
                 'updated_at'     => date('Y-m-d H:i:s'),
             ]);
 
@@ -135,8 +136,9 @@ class ExportJobModel extends Model
      * Progress as reported by GET /exports/{id}. The percentage is derived
      * here, never stored: rows_processed / rows_total, always within 0..100 —
      * pending = 0, running = 0..99 (the file is still being finalised after
-     * the scan), done = 100, cancelled = where the scan stopped (0..99, kept
-     * for diagnosis), unknown or zero total = 0.
+     * the scan), done = 100, cancelled / error = where the scan stopped
+     * (0..99, kept for diagnosis), unknown or zero total = 0 (never a
+     * division by zero).
      *
      * @param array<string, mixed> $job
      *
@@ -150,7 +152,7 @@ class ExportJobModel extends Model
 
         $percent = match ($job['status'] ?? null) {
             'done'    => 100,
-            'running', 'cancelled' => $total > 0 ? min(99, intdiv($processed * 100, $total)) : 0,
+            'running', 'cancelled', 'error' => $total > 0 ? min(99, intdiv($processed * 100, $total)) : 0,
             default   => 0,
         };
 
@@ -208,12 +210,50 @@ class ExportJobModel extends Model
     public function markDone(int $id, string $filePath, string $fileName, int $fileSize, int $rowCount): bool
     {
         return $this->finish($id, [
-            'status'      => 'done',
-            'file_path'   => $filePath,
-            'file_name'   => $fileName,
-            'file_size'   => $fileSize,
-            'row_count'   => $rowCount,
+            'status'        => 'done',
+            'file_path'     => $filePath,
+            'file_name'     => $fileName,
+            'file_size'     => $fileSize,
+            'row_count'     => $rowCount,
+            // Exact final count, also for sources that report no progress
+            // (Oracle) — the batched counters may stop one batch short.
+            'rows_exported' => $rowCount,
         ]);
+    }
+
+    /**
+     * Ends jobs left 'running' by a worker that died (killed during a
+     * restart, OOM, server reboot): no progress write for $silentSeconds.
+     * Only the worker holding the single-watcher lock calls this, at start.
+     * Same conditional UPDATE as finish(): a job that moves meanwhile is
+     * left alone.
+     *
+     * @param callable(): string $reference new error_reference per job
+     *
+     * @return list<array{id: int, uuid: string, reference: string, updated_at: string|null}>
+     */
+    public function failStale(int $silentSeconds, callable $reference): array
+    {
+        $limit  = date('Y-m-d H:i:s', time() - max(60, $silentSeconds));
+        $failed = [];
+
+        $rows = $this->db->table($this->table)
+            ->select('id, uuid, updated_at, started_at')
+            ->where('status', 'running')
+            ->groupStart()
+                ->where('updated_at <', $limit)
+                ->orGroupStart()->where('updated_at', null)->where('started_at <', $limit)->groupEnd()
+            ->groupEnd()
+            ->get()->getResultArray();
+
+        foreach ($rows as $row) {
+            $ref = $reference();
+            if ($this->markError((int) $row['id'], $ref)) {
+                $failed[] = ['id' => (int) $row['id'], 'uuid' => (string) $row['uuid'], 'reference' => $ref, 'updated_at' => $row['updated_at']];
+            }
+        }
+
+        return $failed;
     }
 
     /** running -> error; a cancelled job stays cancelled. */
