@@ -257,6 +257,74 @@
         };
     }
 
+    /**
+     * Reads a download response (fetch) chunk by chunk and counts the bytes
+     * really received — the figure behind the download bar:
+     *   onProgress(loaded, total)   total = Content-Length, null when absent.
+     *
+     * Large files (600 Mo+): the raw chunks are packed into Blob parts of
+     * ~segmentBytes as they arrive, so the page never holds more than one
+     * segment of chunks; the browser keeps the parts in its blob storage
+     * (on disk for large blobs in Chromium) — the whole file is never read
+     * into the page at once (no Response blob / arrayBuffer of the body).
+     *
+     * @return Promise<{blob, loaded, total}> once the stream has ENDED, and
+     *   only if every announced byte arrived. Rejects with {kind, loaded,
+     *   total}: 'unsupported' (no ReadableStream), 'network' (stream broken),
+     *   'incomplete' (ended before Content-Length).
+     */
+    function readDownload(response, onProgress, options) {
+        var opts = options || {};
+        var BlobCtor = opts.Blob || Blob;
+        var segmentBytes = opts.segmentBytes || 8 * 1048576;
+        var header = response.headers && response.headers.get('Content-Length');
+        var announced = header === null || header === undefined || header === '' ? NaN : Number(header);
+        var total = isFinite(announced) && announced > 0 ? announced : null;
+        var type = (response.headers && response.headers.get('Content-Type')) || 'application/octet-stream';
+
+        if (!response.body || typeof response.body.getReader !== 'function') {
+            return Promise.reject({ kind: 'unsupported', loaded: 0, total: total });
+        }
+
+        var reader = response.body.getReader();
+        var parts = [];
+        var pending = [];
+        var pendingBytes = 0;
+        var loaded = 0;
+
+        function flush() {
+            if (pending.length === 0) return;
+            parts.push(new BlobCtor(pending));
+            pending = [];
+            pendingBytes = 0;
+        }
+
+        onProgress(0, total);
+
+        function pump() {
+            return reader.read().then(function (step) {
+                if (step.done) {
+                    flush();
+                    if (total !== null && loaded !== total) {
+                        throw { kind: 'incomplete', loaded: loaded, total: total };
+                    }
+                    return { blob: new BlobCtor(parts, { type: type }), loaded: loaded, total: total };
+                }
+                var chunk = step.value;
+                pending.push(chunk);
+                pendingBytes += chunk.byteLength;
+                loaded += chunk.byteLength;
+                if (pendingBytes >= segmentBytes) flush();
+                onProgress(loaded, total);
+                return pump();
+            }, function (cause) {
+                throw { kind: 'network', loaded: loaded, total: total, cause: cause };
+            });
+        }
+
+        return pump();
+    }
+
     /** Whole seconds → "HH:MM:SS" (hours not capped at 24). */
     function formatDuration(seconds) {
         var s = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -333,7 +401,7 @@
 
     return {
         PHASE: PHASE, clampPercent: clampPercent, progressView: progressView, createTracker: createTracker,
-        createExportPhase: createExportPhase, formatSize: formatSize,
+        createExportPhase: createExportPhase, formatSize: formatSize, readDownload: readDownload,
         formatDuration: formatDuration, createDurationClock: createDurationClock
     };
 }));

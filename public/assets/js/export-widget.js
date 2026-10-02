@@ -17,11 +17,15 @@
  *
  * Two operations, never one percentage (export-progress.js createExportPhase):
  *   generation  determinate bar = rows scanned by the worker (API figures only);
- *   download    the browser downloads the file itself (window.location +
- *               Content-Disposition): the page sees neither the bytes nor the
- *               end, so "Fichier prêt — Téléchargement lancé, géré par votre
- *               navigateur": no bar, never 100 %, never "en cours" nor
- *               "terminé", never closed on a timer — the user closes it.
+ *   download    measured by the page itself (deps.downloader: fetch +
+ *               ReadableStream, export-progress.js readDownload): the SAME bar
+ *               then shows bytes received / Content-Length, capped at 99 %
+ *               until the stream has ended with every byte — only then 100 %
+ *               and "Téléchargement terminé"; the file is then saved by the
+ *               browser (<a download>), still automatically.
+ *               Fallback when the browser cannot stream (no downloader):
+ *               window.location — "Téléchargement lancé, géré par votre
+ *               navigateur", no bar, never 100 %, never "terminé".
  * While the job runs the only action is "Annuler", a real
  * POST /exports/{id}/cancel after a confirmation.
  *
@@ -46,9 +50,8 @@
 
     var FORMATS = { csv: 'CSV', xlsx: 'Excel (.xlsx)' };
     // Terminal for the SERVER job (polling over, window closable). 'downloading'
-    // is one of them on purpose: the file is generated and handed to the
-    // browser, whose download the page can neither measure nor see end — so it
-    // is never turned into "terminé" / 100 % (see export-progress.js).
+    // is one of them on purpose: the file is generated; what remains is the
+    // download, followed by its own measure (s.dl), never by polling.
     var TERMINAL = { downloading: true, cancelled: true, error: true, empty: true };
 
     function fmt(n) {
@@ -64,7 +67,10 @@
      *   session / local      {get(key), set(key, value), remove(key)} — JSON values, never throw
      *   setTimer(fn, ms) → id, clearTimer(id)
      *   now() → ms
-     *   download(url)
+     *   download(url)        browser-managed fallback (window.location)
+     *   downloader(url, fileName, {progress(loaded, total), done({loaded, total}), error(err)})
+     *                        optional measured download; saves the file itself
+     *                        once complete, whether the window is still open or not
      *   render(model|null)   null = hidden
      *   isHidden() → bool    tab in background: slower polling
      */
@@ -82,6 +88,7 @@
         var tickTimer = null;
         var closeTimer = null;
         var failures = 0;      // consecutive unreadable polls: backoff
+        var downloading = null; // export whose measured download is running (even with its window closed)
 
         // downloadedJobs of export-progress.js createTracker(), kept in
         // localStorage: one download per job across pages, reloads and tabs.
@@ -115,6 +122,9 @@
                 jobId: null, format: format || null, count: count > 0 ? count : null,
                 phase: 'preparing', view: null, exported: null, fileSize: null, warning: '',
                 confirming: false, cancelling: false, failure: null,
+                // Download of the generated file: {mode: 'measured'|'browser',
+                // state: 'running'|'done'|'error', loaded, total}.
+                dl: null,
                 clock: EP.createDurationClock(),
                 // serverProgress (generation) and downloadProgress kept apart.
                 machine: EP.createExportPhase(),
@@ -174,18 +184,42 @@
                     m.indeterminate = m.percent === null;
                     break;
                 case 'downloading':
-                    // Generated ≠ downloaded: the browser downloads the file on
-                    // its own and the page sees neither the bytes nor the end.
-                    // Generation figures stay; the download part only says
-                    // what stays true whatever the browser does: launched.
-                    // No bar, no percentage, no "en cours", no "terminé".
+                    // Generation figures stay; the bar now measures the download.
                     m.state = '✓ Fichier généré';
                     m.size = s.fileSize ? 'Taille : ' + EP.formatSize(s.fileSize) : '';
+                    m.closeLabel = 'Fermer la fenêtre';
+                    var dl = s.dl || { mode: 'browser' };
+                    if (dl.mode === 'measured') {
+                        // Bytes really received by the page: bar = loaded / Content-Length,
+                        // 99 % at most until the stream has ended with every byte.
+                        m.status = 'Téléchargement du fichier';
+                        var bytes = dl.total
+                            ? EP.formatSize(dl.loaded) + ' / ' + EP.formatSize(dl.total)
+                            : EP.formatSize(dl.loaded) + ' reçus';
+                        if (dl.state === 'done') {
+                            // Every byte received and the stream ended: the only way here.
+                            m.state = '✓ Téléchargement terminé';
+                            m.percent = s.machine.downloadProgress(); // 100, set by completed() only
+                            m.download = {
+                                title: 'Le fichier a été entièrement téléchargé.',
+                                text: bytes + ' reçus — enregistré par votre navigateur dans vos téléchargements.'
+                            };
+                        } else {
+                            m.percent = dl.total ? s.machine.downloadProgress() : null;
+                            m.indeterminate = !dl.total; // no Content-Length: no percentage
+                            m.download = {
+                                title: 'Téléchargement en cours',
+                                text: bytes + (dl.total ? ' reçus' : '') + '. Restez sur cette page jusqu\'à la fin ; fermer cette fenêtre ne l\'interrompt pas.'
+                            };
+                        }
+                        break;
+                    }
+                    // Browser-managed (window.location): the page sees neither the
+                    // bytes nor the end — no bar, no percentage, no "terminé".
                     m.download = {
                         title: 'Téléchargement lancé',
                         text: 'Géré par votre navigateur. Le téléchargement continue dans votre navigateur, même si vous fermez cette fenêtre.'
                     };
-                    m.closeLabel = 'Fermer la fenêtre';
                     break;
                 case 'cancelled':
                     m.state = 'Export annulé';
@@ -197,7 +231,7 @@
                     m.status = 'Aucune ligne ne correspond aux filtres.';
                     break;
                 case 'error':
-                    m.state = "Échec de l'export";
+                    m.state = (s.failure && s.failure.title) || "Échec de l'export";
                     m.message = (s.failure && s.failure.message) || "L'export a échoué. Relancez-le.";
                     m.reference = (s.failure && s.failure.reference) || '';
                     m.warning = '';
@@ -278,10 +312,12 @@
                     if (view && view.total !== null) s.view = view;
                     s.machine.ready(); // generation complete — the download has not even started
                     if (step.download) {
-                        saveDownloaded(s.downloaded);
-                        deps.download(step.download);
+                        startDownload(step.download, job.fileName || null);
+                        return;
                     }
-                    s.machine.downloading(false); // browser-managed: unmeasured, never COMPLETED
+                    // Already downloaded by an earlier page: nothing to measure again.
+                    s.dl = { mode: 'browser' };
+                    s.machine.downloading(false);
                     finish('downloading');
                     return;
                 case 'cancelled':
@@ -304,14 +340,82 @@
             schedule(pollMs); // progress, or an unknown status: keep asking
         }
 
+        /**
+         * The ONE download of a generated file (async job or sync export).
+         * Measured when deps.downloader exists: the bar follows the bytes,
+         * 100 % only through the machine's completed step once the stream has ended
+         * with every byte. The downloader saves the file itself at the end,
+         * so closing the window (s gone) never loses it; only the redraws of
+         * an export no longer shown are dropped.
+         */
+        function startDownload(url, fileName) {
+            var jobId = s.jobId;
+            if (!deps.downloader) {
+                // Browser-managed fallback: no measure, never "terminé".
+                if (jobId) saveDownloaded(s.downloaded);
+                deps.download(url);
+                s.dl = { mode: 'browser' };
+                s.machine.downloading(false);
+                finish('downloading');
+                return;
+            }
+
+            var owner = s;
+            downloading = owner; // one download at a time: no new export until it ends
+            // total: the server's fileSize until the response's Content-Length replaces it.
+            owner.dl = { mode: 'measured', state: 'running', loaded: 0, total: owner.fileSize || null };
+            owner.machine.downloading(true);
+            finish('downloading'); // polling stopped: the server's part is over
+
+            deps.downloader(url, fileName, {
+                progress: function (loaded, total) {
+                    if (owner.dl.state !== 'running') return;
+                    owner.dl.loaded = loaded;
+                    owner.dl.total = total || null;
+                    if (total) owner.machine.received(loaded, total);
+                    if (owner === s) render();
+                },
+                done: function (result) {
+                    if (downloading === owner) downloading = null;
+                    owner.dl.state = 'done';
+                    owner.dl.loaded = result.loaded;
+                    owner.dl.total = result.total || result.loaded;
+                    owner.machine.completed();
+                    // Only now is the file really downloaded: never again for this job,
+                    // and nothing left to resume on the next page.
+                    if (jobId) {
+                        saveDownloaded(owner.downloaded);
+                        var saved = deps.session.get(ACTIVE_KEY);
+                        if (saved && saved.jobId === jobId) deps.session.remove(ACTIVE_KEY);
+                    }
+                    if (owner === s) render();
+                },
+                error: function (err) {
+                    if (downloading === owner) downloading = null;
+                    owner.dl.state = 'error';
+                    owner.machine.failed();
+                    if (owner !== s) return;
+                    var e = err || {};
+                    var message = e.kind === 'incomplete'
+                        ? 'Téléchargement incomplet : ' + EP.formatSize(e.loaded) + ' reçus sur ' + EP.formatSize(e.total) + '.'
+                        : e.kind === 'http'
+                            ? (e.message || 'Le serveur a refusé le téléchargement (HTTP ' + e.status + ').')
+                            : 'Le téléchargement a été interrompu (erreur réseau).';
+                    finish('error', { failure: { title: 'Échec du téléchargement', message: message + ' Relancez l\'export pour réessayer.', reference: '' } });
+                }
+            });
+        }
+
         function finish(phase, extra) {
             stopTimers();
             s.phase = phase;
             s.confirming = false;
             s.cancelling = false;
             if (extra && extra.failure) s.failure = extra.failure;
-            // Server job over: nothing left to resume on the next page.
-            if (phase === 'downloading' || phase === 'cancelled') {
+            // Server job over: nothing left to resume on the next page — except a
+            // measured download still running (a reload restarts it, see done()).
+            var measuring = phase === 'downloading' && s.dl && s.dl.mode === 'measured' && s.dl.state === 'running';
+            if ((phase === 'downloading' && !measuring) || phase === 'cancelled') {
                 deps.session.remove(ACTIVE_KEY);
             }
             // Only a cancellation closes by itself. 'downloading' stays until
@@ -325,7 +429,19 @@
         }
 
         // ── public API ───────────────────────────────────────────────
-        function busy() { return !!s && !isTerminal(); }
+        /**
+         * An export is running (generation), or a measured download is still
+         * receiving bytes — then no second export / download may start. If
+         * that download's window had been closed, it is shown again so the
+         * user sees why ("Un export est déjà en cours" in the dashboard).
+         */
+        function busy() {
+            if (downloading) {
+                if (s !== downloading) { s = downloading; render(); }
+                return true;
+            }
+            return !!s && !isTerminal();
+        }
 
         function begin(info) {
             if (busy()) return false;
@@ -363,9 +479,7 @@
                 finish('error', { failure: { message: 'Fichier prêt mais lien de téléchargement indisponible. Réessayez.', reference: '' } });
                 return;
             }
-            deps.download(info.downloadUrl);
-            s.machine.downloading(false);
-            finish('downloading');
+            startDownload(info.downloadUrl, null);
         }
 
         function fail(failure) {
@@ -500,6 +614,73 @@
             '<button type="button" class="btn btn-sm btn-primary" data-xw-close>Fermer</button>' +
         '</div>';
 
+    /** File name of a Content-Disposition header (RFC 5987 filename* first), or null. */
+    function dispositionFileName(header) {
+        if (!header) return null;
+        var star = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(header);
+        if (star) { try { return decodeURIComponent(star[1].trim()); } catch (e) { /* fall through */ } }
+        var plain = /filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)/.exec(header);
+        return plain ? (plain[1] || plain[2]).trim() : null;
+    }
+
+    /**
+     * The measured downloader handed to the controller (deps.downloader):
+     * GET the file with fetch, count the bytes as they arrive
+     * (export-progress.js readDownload), then save it with the browser's
+     * own download (env.save: <a download> on an object URL) — automatic,
+     * no click asked from the user.
+     *
+     *   env.fetch(url, init) → Promise<Response>
+     *   env.save(blob, fileName)
+     *   env.frame(fn)          coalesces progress redraws (requestAnimationFrame)
+     *   env.active(delta)      +1 / -1 around each download (leave-page guard)
+     *
+     * Errors: 'http' (non-2xx, with the server's JSON message when there is
+     * one), 'session' (answered by an HTML page — e.g. redirected to /login),
+     * 'network', 'incomplete' (fewer bytes than Content-Length).
+     */
+    function createStreamDownloader(env) {
+        return function (url, fileName, on) {
+            var latest = null;
+            var queued = false;
+            function flushProgress() {
+                queued = false;
+                if (latest) on.progress(latest[0], latest[1]);
+            }
+            env.active(1);
+            var finished = function () { env.active(-1); };
+
+            env.fetch(url, { credentials: 'same-origin', cache: 'no-store' }).then(function (response) {
+                var type = (response.headers.get('Content-Type') || '').toLowerCase();
+                if (!response.ok) {
+                    var fail = function (data) {
+                        throw { kind: 'http', status: response.status, message: data && data.message ? data.message : '' };
+                    };
+                    return type.indexOf('json') !== -1 ? response.json().then(fail, function () { fail(null); }) : fail(null);
+                }
+                if (response.redirected || type.indexOf('text/html') !== -1) {
+                    throw { kind: 'session' };
+                }
+                var name = fileName || dispositionFileName(response.headers.get('Content-Disposition')) || 'export';
+                return EP.readDownload(response, function (loaded, total) {
+                    latest = [loaded, total];
+                    if (!queued) { queued = true; env.frame(flushProgress); }
+                }).then(function (result) {
+                    flushProgress();
+                    env.save(result.blob, name);
+                    on.done({ loaded: result.loaded, total: result.total });
+                });
+            }).then(finished, function (err) {
+                finished();
+                var e = err && err.kind ? err : { kind: 'network' };
+                if (e.kind === 'session') {
+                    e = { kind: 'http', status: 401, message: 'Session expirée : rechargez la page puis relancez l\'export.' };
+                }
+                on.error(e);
+            });
+        };
+    }
+
     var ICONS = {
         downloading: 'fas fa-file-download', error: 'fas fa-exclamation-circle', cancelled: 'fas fa-ban',
         empty: 'fas fa-info-circle', busy: 'fas fa-circle-notch fa-spin'
@@ -579,10 +760,44 @@
             setTimer: function (fn, ms) { return win.setTimeout(fn, ms); },
             clearTimer: function (id) { win.clearTimeout(id); },
             now: function () { return Date.now(); },
-            download: function (url) { win.location = url; }, // Content-Disposition: attachment → the page stays
+            download: function (url) { win.location = url; }, // fallback: Content-Disposition: attachment → the page stays
+            downloader: null,
             render: render,
             isHidden: function () { return !!doc.hidden; }
         };
+
+        // Measured download where the browser can stream a response body;
+        // otherwise deps.download (window.location) stays the only path.
+        var canStream = typeof win.fetch === 'function' && typeof win.ReadableStream === 'function' &&
+            !!(win.URL && win.URL.createObjectURL) && 'download' in doc.createElement('a');
+        var activeDownloads = 0;
+        if (canStream) {
+            deps.downloader = createStreamDownloader({
+                fetch: function (url, init) { return win.fetch(url, init); },
+                save: function (blob, name) {
+                    var href = win.URL.createObjectURL(blob);
+                    var a = doc.createElement('a');
+                    a.href = href;
+                    a.download = name;
+                    a.style.display = 'none';
+                    doc.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    // Memory cleanup only (the browser has its own reference
+                    // once the save has started) — never a completion signal.
+                    win.setTimeout(function () { win.URL.revokeObjectURL(href); }, 60000);
+                },
+                frame: function (fn) { (win.requestAnimationFrame || win.setTimeout)(fn); },
+                active: function (delta) { activeDownloads = Math.max(0, activeDownloads + delta); }
+            });
+            // Leaving the page would abort a download the page itself is
+            // receiving: the browser asks for a confirmation first.
+            win.addEventListener('beforeunload', function (e) {
+                if (activeDownloads === 0) return;
+                e.preventDefault();
+                e.returnValue = '';
+            });
+        }
         controller = createExportController(deps);
 
         function boot() {
@@ -609,5 +824,8 @@
         };
     }
 
-    return { createExportController: createExportController, mount: mount, ACTIVE_KEY: ACTIVE_KEY, DOWNLOADED_KEY: DOWNLOADED_KEY };
+    return {
+        createExportController: createExportController, createStreamDownloader: createStreamDownloader,
+        dispositionFileName: dispositionFileName, mount: mount, ACTIVE_KEY: ACTIVE_KEY, DOWNLOADED_KEY: DOWNLOADED_KEY
+    };
 }));

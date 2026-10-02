@@ -438,11 +438,17 @@ test('dashboard + widget: no fake 100 %, no blob, no timer-driven end of a downl
     const dash = fs.readFileSync(path.join(__dirname, '../../public/assets/js/dashboard.js'), 'utf8');
     const exportPart = dash.slice(dash.indexOf('// ── export'), dash.indexOf('// ── wiring'));
     const widget = fs.readFileSync(path.join(__dirname, '../../public/assets/js/export-widget.js'), 'utf8');
-    for (const [name, js] of [['dashboard.js export section', exportPart], ['export-widget.js', widget]]) {
+    const progress = fs.readFileSync(path.join(__dirname, '../../public/assets/js/export-progress.js'), 'utf8');
+    for (const [name, js] of [['dashboard.js export section', exportPart], ['export-widget.js', widget], ['export-progress.js', progress]]) {
         assert.doesNotMatch(js, /percent\s*=\s*100|percent:\s*100|'100 ?%'/, name + ': nothing sets 100 % by hand');
-        assert.doesNotMatch(js, /\.blob\(\)/, name + ': never loads the file in memory');
-        assert.doesNotMatch(js, /\.completed\(\)/, name + ': COMPLETED is unreachable with a browser-managed download');
+        assert.doesNotMatch(js, /\.blob\(\)|\.arrayBuffer\(\)/, name + ': never loads the whole file in the page');
     }
+    assert.doesNotMatch(exportPart, /\.completed\(\)/);
+    // COMPLETED (100 %) has exactly one way in: the end of a measured stream.
+    const calls = widget.match(/\.completed\(\)/g) || [];
+    assert.equal(calls.length, 1, 'one call to completed()');
+    const doneHandler = widget.slice(widget.indexOf('done: function (result)'), widget.indexOf('error: function (err)'));
+    assert.match(doneHandler, /owner\.machine\.completed\(\)/, 'completed() only in the downloader done() callback');
     assert.doesNotMatch(exportPart, /window\.location/, 'the dashboard hands the download to the widget');
     assert.equal((widget.match(/win\.location = url/g) || []).length, 1, 'one download primitive');
     assert.doesNotMatch(widget, /doneCloseMs/, 'a generated file never closes the window on a timer');
