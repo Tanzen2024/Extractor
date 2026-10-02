@@ -243,8 +243,8 @@
                 <div class="bscd-export-status d-none" id="bscdExportStatus"></div>
             </div>
             <div class="modal-footer">
-                <?php // Not data-dismiss: cancels the running export job for real (dashboard.js cancelExport). ?>
-                <button type="button" class="btn btn-outline-secondary" id="bscdExportCancel">Annuler</button>
+                <?php // Before launch only: closes this dialog. A launched export is cancelled from its floating window (export-widget.js). ?>
+                <button type="button" class="btn btn-outline-secondary" id="bscdExportCancel" data-dismiss="modal">Annuler</button>
                 <button type="button" class="btn btn-primary" id="bscdExportLaunch">Lancer l'export</button>
             </div>
         </div>
@@ -256,8 +256,8 @@
 <?= $this->section('scripts') ?>
 <script src="<?= base_url('assets/vendor/chartjs/chart.umd.min.js') ?>"></script>
 <script type="application/json" id="bscd-dashboard-data"><?= json_encode($bootstrap, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?></script>
-<?php // ?v=<mtime>: a reload always fetches the deployed version, never a stale cached copy. ?>
-<script src="<?= base_url('assets/js/export-progress.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/export-progress.js') ?: 0 ?>"></script>
+<?php // ?v=<mtime>: a reload always fetches the deployed version, never a stale cached copy.
+      // export-progress.js / export-widget.js: loaded by layout/main.php, before these. ?>
 <script src="<?= base_url('assets/js/dashboard-defaults.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/dashboard-defaults.js') ?: 0 ?>"></script>
 <script src="<?= base_url('assets/js/dashboard.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/dashboard.js') ?: 0 ?>"></script>
 <?= $this->endSection() ?>

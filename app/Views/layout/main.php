@@ -152,10 +152,17 @@
     </footer>
 </div>
 
+<?php // Floating export progress window (export-widget.js): one per tab, follows an export across pages. ?>
+<div class="bscd-xw" id="bscdExportWidget" hidden role="region" aria-label="Export en cours"
+     data-endpoint="<?= esc(site_url('exports'), 'attr') ?>"></div>
+
 <script src="<?= base_url('assets/vendor/jquery/jquery.min.js') ?>"></script>
 <script src="<?= base_url('assets/vendor/bootstrap/bootstrap.bundle.min.js') ?>"></script>
 <script src="<?= base_url('assets/js/frdatepicker.js') ?>"></script>
 <script src="<?= base_url('assets/js/app.js') ?>"></script>
+<?php // Before the page scripts: dashboard.js reads window.bscdExportWidget when it starts. ?>
+<script src="<?= base_url('assets/js/export-progress.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/export-progress.js') ?: 0 ?>"></script>
+<script src="<?= base_url('assets/js/export-widget.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/export-widget.js') ?: 0 ?>"></script>
 <?= $this->renderSection('scripts') ?>
 </body>
 </html>

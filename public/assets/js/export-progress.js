@@ -6,7 +6,11 @@
  *   progressView(job)       what to show for one GET /exports/{id} answer.
  *                           Only the API's own figures are used — nothing is
  *                           estimated or animated: no usable progress while
- *                           running = no percentage at all.
+ *                           running = no percentage at all. Its percent is
+ *                           the GENERATION of the file; 'done' = file ready,
+ *                           download in progress (indeterminate, never 100 %).
+ *   createExportPhase()     GENERATING → READY → DOWNLOADING → COMPLETED state
+ *                           machine (serverProgress / downloadProgress kept apart).
  *   createTracker(done)     per-page state: which job the modal currently
  *                           shows (only that one may touch it) and which jobs
  *                           were already downloaded (`done` = downloadedJobs —
@@ -53,35 +57,143 @@
             ? { processed: Math.min(count(p.processed), total), total: total, exported: count(p.exported) }
             : { processed: null, total: null, exported: null };
 
+        // percent = progress of the SERVER-SIDE GENERATION only (rows scanned).
+        // It never stands for the download: see 'done' below.
         if (status === 'pending') {
-            return { state: 'pending', title: 'Export en attente…', percent: 0, processed: null, total: null, exported: null };
+            return {
+                state: 'pending', phase: PHASE.GENERATING, heading: 'Export en cours', title: 'En attente du traitement…',
+                percent: 0, indeterminate: false, processed: null, total: null, exported: null, fileSize: null
+            };
         }
         if (status === 'running') {
             if (!p || total === 0 || !isNumber(p.percent)) {
-                return { state: 'running', title: 'Export en cours…', percent: null, processed: null, total: null, exported: null };
+                return {
+                    state: 'running', phase: PHASE.GENERATING, heading: 'Export en cours', title: 'Préparation du fichier…',
+                    percent: null, indeterminate: false, processed: null, total: null, exported: null, fileSize: null
+                };
             }
             // Still running = never 100 %: the file is finalised after the scan.
             return {
-                state: 'running', title: 'Export en cours…', percent: clampPercent(p.percent, 99),
-                processed: counts.processed, total: counts.total, exported: counts.exported
+                state: 'running', phase: PHASE.GENERATING, heading: 'Export en cours', title: 'Préparation du fichier…',
+                percent: clampPercent(p.percent, 99), indeterminate: false,
+                processed: counts.processed, total: counts.total, exported: counts.exported, fileSize: null
             };
         }
         if (status === 'cancelled') {
             // No progress shown for a cancelled export (the API's frozen
             // counters are history, not something still moving).
-            return { state: 'cancelled', title: 'Export annulé.', percent: null, processed: null, total: null, exported: null };
+            return { state: 'cancelled', phase: PHASE.CANCELLED, heading: 'Export annulé', title: 'Export annulé.', percent: null, indeterminate: false, processed: null, total: null, exported: null, fileSize: null };
         }
         if (status === 'error') {
             // Like cancelled: frozen counters are not shown as a moving bar.
-            return { state: 'error', title: "Échec de l'export.", percent: null, processed: null, total: null, exported: null };
+            return { state: 'error', phase: PHASE.ERROR, heading: "Échec de l'export", title: "Échec de l'export.", percent: null, indeterminate: false, processed: null, total: null, exported: null, fileSize: null };
         }
         if (status === 'done') {
+            // The file is generated, NOT downloaded: the browser downloads it
+            // on its own (window.location → Content-Disposition: attachment)
+            // and the page sees neither the bytes received nor the end. So no
+            // percentage, no bar, and no "en cours" either (false as soon as
+            // the browser has finished): only what stays true — launched.
             return {
-                state: 'done', title: 'Fichier prêt — téléchargement…', percent: 100,
-                processed: counts.processed, total: counts.total, exported: counts.exported
+                state: 'done', phase: PHASE.DOWNLOADING, heading: 'Fichier prêt', title: 'Téléchargement lancé',
+                percent: null, indeterminate: false,
+                processed: counts.processed, total: counts.total, exported: counts.exported,
+                fileSize: job && isNumber(job.fileSize) && job.fileSize > 0 ? job.fileSize : null
             };
         }
         return null;
+    }
+
+    /** Bytes → "7,5 Mo" / "606 Mo" / "1,2 Go" (French decimal comma). */
+    function formatSize(bytes) {
+        var n = Number(bytes);
+        if (!isFinite(n) || n < 0) return '';
+        var units = ['o', 'Ko', 'Mo', 'Go'];
+        var i = 0;
+        while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+        var digits = i === 0 || n >= 10 ? 0 : 1;
+        return n.toFixed(digits).replace('.', ',') + ' ' + units[i];
+    }
+
+    /**
+     * The modal's state machine — two separate measures, never mixed:
+     *   serverProgress    generation of the file by the worker (0..99 while
+     *                     running, 100 once generated);
+     *   downloadProgress  bytes received by the browser, 0..100 — only for a
+     *                     download the page itself measures; null = unknown
+     *                     (browser-managed download: indeterminate bar).
+     *
+     *   GENERATING → READY → DOWNLOADING → COMPLETED
+     *   GENERATING → CANCELLED | ERROR,  READY / DOWNLOADING → ERROR
+     *
+     * Any other move is refused (returns false): e.g. a late "running" poll
+     * answer can never redraw the generation bar over the download phase,
+     * and an unmeasured download can never become COMPLETED / 100 %.
+     */
+    var PHASE = {
+        GENERATING: 'generating', READY: 'ready', DOWNLOADING: 'downloading',
+        COMPLETED: 'completed', CANCELLED: 'cancelled', ERROR: 'error'
+    };
+    var TRANSITIONS = {
+        generating: [PHASE.READY, PHASE.CANCELLED, PHASE.ERROR],
+        ready: [PHASE.DOWNLOADING, PHASE.ERROR],
+        downloading: [PHASE.COMPLETED, PHASE.ERROR]
+    };
+
+    function createExportPhase() {
+        var phase = PHASE.GENERATING;
+        var serverProgress = null;
+        var downloadProgress = null;
+        var measured = false;
+
+        function go(next) {
+            if ((TRANSITIONS[phase] || []).indexOf(next) === -1) return false;
+            phase = next;
+            return true;
+        }
+
+        return {
+            phase: function () { return phase; },
+            serverProgress: function () { return serverProgress; },
+            downloadProgress: function () { return downloadProgress; },
+            /** A generation answer (progressView); accepted only while generating. */
+            server: function (view) {
+                if (phase !== PHASE.GENERATING) return false;
+                serverProgress = view ? view.percent : null;
+                return true;
+            },
+            /** Job done: generation complete (serverProgress = 100, a real figure). */
+            ready: function () {
+                if (!go(PHASE.READY)) return false;
+                serverProgress = 100;
+                return true;
+            },
+            /**
+             * Download handed over. isMeasured = the page reads the bytes
+             * itself; false for window.location (browser-managed): progress
+             * stays null and the phase can never be confirmed complete.
+             */
+            downloading: function (isMeasured) {
+                if (!go(PHASE.DOWNLOADING)) return false;
+                measured = isMeasured === true;
+                downloadProgress = measured ? 0 : null;
+                return true;
+            },
+            /** Bytes really received (measured download only); capped at 99 until completed(). */
+            received: function (loaded, total) {
+                if (phase !== PHASE.DOWNLOADING || !measured || !(total > 0)) return false;
+                downloadProgress = clampPercent((loaded / total) * 100, 99);
+                return true;
+            },
+            /** End of a measured download — the only way to reach 100 %. */
+            completed: function () {
+                if (!measured || !go(PHASE.COMPLETED)) return false;
+                downloadProgress = 100;
+                return true;
+            },
+            cancelled: function () { return go(PHASE.CANCELLED); },
+            failed: function () { return go(PHASE.ERROR); }
+        };
     }
 
     function createTracker(downloadedJobs) {
@@ -191,7 +303,9 @@
                 var status = job && job.status;
                 if (status === 'done' || status === 'error' || status === 'cancelled') {
                     // Cancelled: time spent until the cancellation, then frozen.
-                    finalLabel = status === 'cancelled' ? 'Durée écoulée' : 'Durée totale';
+                    // Done: the server's started_at → finished_at, i.e. the
+                    // GENERATION only — the download is still going on.
+                    finalLabel = status === 'cancelled' ? 'Durée écoulée' : (status === 'done' ? 'Durée de génération' : 'Durée totale');
                     // Fallback: no server total → freeze what is shown now.
                     var total = t && isNumber(t.elapsedSeconds) ? t.elapsedSeconds : (phase === 'run' ? current(nowMs) : null);
                     phase = 'final'; base = total; baseAt = nowMs;
@@ -218,7 +332,8 @@
     }
 
     return {
-        clampPercent: clampPercent, progressView: progressView, createTracker: createTracker,
+        PHASE: PHASE, clampPercent: clampPercent, progressView: progressView, createTracker: createTracker,
+        createExportPhase: createExportPhase, formatSize: formatSize,
         formatDuration: formatDuration, createDurationClock: createDurationClock
     };
 }));

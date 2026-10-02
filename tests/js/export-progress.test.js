@@ -12,18 +12,23 @@ const TOTAL = 3302841;
 const running = (percent, processed, total = TOTAL) =>
     ({ status: 'running', progress: { percent, processed, total, exported: processed } });
 
-test('pending → "Export en attente…" at 0 %, no line counts', () => {
+test('pending → "Export en cours" / "En attente du traitement…" at 0 %, no line counts', () => {
     const v = progressView({ status: 'pending', progress: { percent: 0, processed: 0, total: null, exported: 0 } });
     assert.equal(v.state, 'pending');
+    assert.equal(v.phase, 'generating');
     assert.equal(v.percent, 0);
-    assert.equal(v.title, 'Export en attente…');
+    assert.equal(v.heading, 'Export en cours');
+    assert.equal(v.title, 'En attente du traitement…');
     assert.equal(v.processed, null);
     assert.equal(v.exported, null);
 });
 
 test('running → the API percentage and counts, untouched', () => {
     const v = progressView({ status: 'running', progress: { percent: 42, processed: 1400000, total: TOTAL, exported: 1400000 } });
-    assert.deepEqual(v, { state: 'running', title: 'Export en cours…', percent: 42, processed: 1400000, total: TOTAL, exported: 1400000 });
+    assert.deepEqual(v, {
+        state: 'running', phase: 'generating', heading: 'Export en cours', title: 'Préparation du fichier…',
+        percent: 42, indeterminate: false, processed: 1400000, total: TOTAL, exported: 1400000, fileSize: null
+    });
 });
 
 test('running → filtered export: scan progress and exported rows differ', () => {
@@ -39,15 +44,19 @@ test('running → 99 % stays 99, and never 100 while running', () => {
     assert.equal(progressView(running(250, 5000000)).percent, 99);
 });
 
-test('done → 100 %', () => {
-    const v = progressView({ status: 'done', progress: { percent: 100, processed: TOTAL, total: TOTAL, exported: TOTAL } });
-    assert.equal(v.percent, 100);
-    assert.equal(v.title, 'Fichier prêt — téléchargement…');
-    assert.equal(v.exported, TOTAL);
-    assert.equal(progressView({ status: 'done' }).percent, 100); // job finished before progress existed
+test('done → "Fichier prêt / Téléchargement lancé", no bar, NEVER 100 % (the download has only started)', () => {
+    const v = progressView({ status: 'done', fileSize: 635437056, progress: { percent: 100, processed: 3305219, total: 3305219, exported: 2431711 } });
+    assert.equal(v.phase, 'downloading');
+    assert.equal(v.heading, 'Fichier prêt');
+    assert.equal(v.title, 'Téléchargement lancé');
+    assert.equal(v.percent, null);
+    assert.equal(v.indeterminate, false);
+    assert.equal(v.exported, 2431711);
+    assert.equal(v.fileSize, 635437056);
+    assert.equal(progressView({ status: 'done' }).percent, null); // job finished before progress existed
 });
 
-test('running with progress absent / null / undefined / total 0 → "Export en cours…" with NO percentage', () => {
+test('running with progress absent / null / undefined / total 0 → "Préparation du fichier…" with NO percentage', () => {
     [
         { status: 'running' },
         { status: 'running', progress: null },
@@ -57,8 +66,10 @@ test('running with progress absent / null / undefined / total 0 → "Export en c
         { status: 'running', progress: { percent: 'abc', processed: 10, total: TOTAL, exported: 10 } },
     ].forEach((job) => {
         const v = progressView(job);
-        assert.equal(v.title, 'Export en cours…');
+        assert.equal(v.heading, 'Export en cours');
+        assert.equal(v.title, 'Préparation du fichier…');
         assert.equal(v.percent, null, JSON.stringify(job));
+        assert.equal(v.indeterminate, false); // generation without figures: no bar at all
         assert.equal(v.processed, null);
     });
     assert.equal(progressView(null), null);
@@ -118,7 +129,8 @@ test('done → automatic download triggered exactly once, even with several "don
     assert.equal(first.kind, 'done');
     assert.equal(first.download, '/exports/25/download');
     assert.equal(first.stop, true);
-    assert.equal(first.view.percent, 100);
+    assert.equal(first.view.percent, null); // generated ≠ downloaded
+    assert.equal(first.view.indeterminate, false);
     assert.equal(downloadedJobs[25], true); // same downloadedJobs map as dashboard.js
 
     for (let i = 0; i < 3; i++) {
@@ -186,14 +198,22 @@ test('failed poll (HTTP error, login redirect, empty) → "unreachable": keeps p
 
 test('dashboard: Export Excel button still hidden, no "Télécharger" button, script order', () => {
     const view = fs.readFileSync(path.join(__dirname, '../../app/Views/dashboard/index.php'), 'utf8');
-    const rendered = view.replace(/<\?php\s*\/\*[\s\S]*?\*\/\s*\?>/g, '');
+    const rendered = view.replace(/<\?php[\s\S]*?\?>/g, '');
     assert.ok(rendered.includes('data-export="csv"'));
     assert.ok(!rendered.includes('data-export="xlsx"'));
-    assert.ok(rendered.indexOf('assets/js/export-progress.js') < rendered.indexOf('assets/js/dashboard.js'));
 
-    const js = fs.readFileSync(path.join(__dirname, '../../public/assets/js/dashboard.js'), 'utf8');
-    assert.ok(!js.includes('>Télécharger<'), 'no manual download button');
-    assert.ok(js.includes('var downloadedJobs = {}'), 'downloadedJobs kept');
+    // export-progress.js → export-widget.js → page scripts (dashboard.js reads window.bscdExportWidget at start).
+    const layout = fs.readFileSync(path.join(__dirname, '../../app/Views/layout/main.php'), 'utf8');
+    const progressAt = layout.indexOf('assets/js/export-progress.js');
+    const widgetAt = layout.indexOf('assets/js/export-widget.js');
+    assert.ok(layout.indexOf('assets/js/app.js') < progressAt && progressAt < widgetAt && widgetAt < layout.indexOf("renderSection('scripts')"));
+    assert.ok(layout.includes('id="bscdExportWidget"') && layout.includes("site_url('exports')"));
+    assert.ok(!rendered.includes('assets/js/export-progress.js'), 'loaded once, by the layout');
+
+    for (const file of ['dashboard.js', 'export-widget.js']) {
+        const js = fs.readFileSync(path.join(__dirname, '../../public/assets/js', file), 'utf8');
+        assert.ok(!js.includes('>Télécharger<'), 'no manual download button in ' + file);
+    }
 });
 
 // ── duration line (server `timing`, animated locally between polls) ──
@@ -240,23 +260,23 @@ test('running → a new poll never makes the value go back (nor to zero)', () =>
     assert.equal(c.display(at(7)).text, 'Durée écoulée : 00:00:35');
 });
 
-test('done → "Durée totale" = finished_at - started_at, fixed for good', () => {
+test('done → "Durée de génération" = finished_at - started_at (not the download), fixed for good', () => {
     const c = createDurationClock();
     c.sync({ status: 'running', timing: { elapsedSeconds: 400 } }, at(0));
     c.sync({ status: 'done', timing: { elapsedSeconds: 440, final: true } }, at(3));
     assert.equal(c.isFinal(), true);
-    assert.equal(c.display(at(3)).text, 'Durée totale : 00:07:20');
-    assert.equal(c.display(at(600)).text, 'Durée totale : 00:07:20');
+    assert.equal(c.display(at(3)).text, 'Durée de génération : 00:07:20');
+    assert.equal(c.display(at(600)).text, 'Durée de génération : 00:07:20');
     c.sync({ status: 'done', timing: { elapsedSeconds: 999, final: true } }, at(700)); // duplicate answer
-    assert.equal(c.display(at(700)).text, 'Durée totale : 00:07:20');
+    assert.equal(c.display(at(700)).text, 'Durée de génération : 00:07:20');
 });
 
 test('done without a server total → fallback: frozen at the moment "done" is received', () => {
     const c = createDurationClock();
     c.sync({ status: 'running', timing: { elapsedSeconds: 100 } }, at(0));
     c.sync({ status: 'done' }, at(5));
-    assert.equal(c.display(at(5)).text, 'Durée totale : 00:01:45');
-    assert.equal(c.display(at(60)).text, 'Durée totale : 00:01:45');
+    assert.equal(c.display(at(5)).text, 'Durée de génération : 00:01:45');
+    assert.equal(c.display(at(60)).text, 'Durée de génération : 00:01:45');
 });
 
 test('error → stops with the time actually spent', () => {
@@ -267,21 +287,22 @@ test('error → stops with the time actually spent', () => {
     assert.equal(c.display(at(90)).text, 'Durée totale : 00:00:52');
 });
 
-test('dashboard: duration line sits right after the exported-rows line', () => {
-    const js = fs.readFileSync(path.join(__dirname, '../../public/assets/js/dashboard.js'), 'utf8');
-    assert.match(js, /data-progress-exported><\/div>' \+\s*'<div class="text-muted" data-progress-duration><\/div>/);
+test('widget: line stats, then file info (format, size, duration), no invented download duration', () => {
+    const js = fs.readFileSync(path.join(__dirname, '../../public/assets/js/export-widget.js'), 'utf8');
+    assert.match(js, /data-xw-counts><\/div>' \+\s*'<div class="bscd-xw__meta" data-xw-exported><\/div>/);
+    assert.match(js, /data-xw-format><\/div>' \+\s*'<div class="bscd-xw__meta" data-xw-size><\/div>' \+\s*'<div class="bscd-xw__meta" data-xw-duration><\/div>/);
     assert.doesNotMatch(js, /[Dd]urée du téléchargement/);
 });
 
 test('progress bar: filled width = API percent, no minimum width (0 % = empty bar)', () => {
     const css = fs.readFileSync(path.join(__dirname, '../../public/assets/css/custom.css'), 'utf8');
-    const rule = css.match(/\.bscd-export-progress-track \.progress-bar\s*\{([^}]*)\}/);
+    const rule = css.match(/\.bscd-xw__track \.progress-bar\s*\{([^}]*)\}/);
     assert.ok(rule, 'progress-bar rule present');
     assert.doesNotMatch(rule[1], /min-width|padding/);
-    const js = fs.readFileSync(path.join(__dirname, '../../public/assets/js/dashboard.js'), 'utf8');
-    assert.match(js, /bar\.style\.width = view\.percent \+ '%'/);
+    const js = fs.readFileSync(path.join(__dirname, '../../public/assets/js/export-widget.js'), 'utf8');
+    assert.match(js, /bar\.style\.width = m\.percent \+ '%'/);
     // The % label lives beside the bar, never inside it.
-    assert.match(js, /\[data-progress-percent\]'\)\.textContent = view\.percent \+ ' %'/);
+    assert.match(js, /\[data-xw-pct\]'\)\.textContent = m\.percent \+ ' %'/);
     assert.doesNotMatch(js, /bar\.textContent/);
 });
 
@@ -336,4 +357,103 @@ test('duration clock → cancelled without a server total keeps what was shown',
     clock.sync({ status: 'running', timing: { elapsedSeconds: 10 } }, 0);
     clock.sync({ status: 'cancelled' }, 5000);
     assert.equal(clock.display(99000).text, 'Durée écoulée : 00:00:15');
+});
+
+// ── generation vs download: state machine, no fake 100 % ─────────────
+const { createExportPhase, formatSize, PHASE } = require('../../public/assets/js/export-progress.js');
+
+test('phase machine: GENERATING → READY → DOWNLOADING, server and download progress kept apart', () => {
+    const m = createExportPhase();
+    assert.equal(m.phase(), PHASE.GENERATING);
+    assert.equal(m.server(progressView(running(61, 2025000))), true);
+    assert.equal(m.serverProgress(), 61);
+    assert.equal(m.downloadProgress(), null);
+
+    assert.equal(m.ready(), true);
+    assert.equal(m.serverProgress(), 100); // generation really complete
+    assert.equal(m.downloadProgress(), null); // ...download not even started
+
+    assert.equal(m.downloading(false), true);
+    assert.equal(m.phase(), PHASE.DOWNLOADING);
+    assert.equal(m.downloadProgress(), null); // browser-managed: unknown, indeterminate
+});
+
+test('browser-managed download (window.location): never COMPLETED, never 100 %', () => {
+    const m = createExportPhase();
+    m.ready();
+    m.downloading(false);
+    assert.equal(m.received(7.5 * 1048576, 606 * 1048576), false); // the page has no byte count
+    assert.equal(m.completed(), false);
+    assert.equal(m.phase(), PHASE.DOWNLOADING);
+    assert.equal(m.downloadProgress(), null);
+});
+
+test('measured download: percent = bytes received / Content-Length, capped at 99 until really finished', () => {
+    const MB = 1048576;
+    const m = createExportPhase();
+    m.ready();
+    m.downloading(true);
+    assert.equal(m.downloadProgress(), 0);
+    m.received(7.5 * MB, 606 * MB); assert.equal(m.downloadProgress(), 1);
+    m.received(300 * MB, 606 * MB); assert.equal(m.downloadProgress(), 49);
+    m.received(600 * MB, 606 * MB); assert.equal(m.downloadProgress(), 99);
+    m.received(606 * MB, 606 * MB); assert.equal(m.downloadProgress(), 99); // all bytes in, stream not closed yet
+    assert.equal(m.completed(), true);
+    assert.equal(m.phase(), PHASE.COMPLETED);
+    assert.equal(m.downloadProgress(), 100);
+});
+
+test('phase machine: illegal moves are refused', () => {
+    const m = createExportPhase();
+    assert.equal(m.downloading(false), false, 'no download before the file is ready');
+    assert.equal(m.completed(), false);
+    m.ready();
+    assert.equal(m.server(progressView(running(80, 2600000))), false, 'late "running" answer after done is dropped');
+    assert.equal(m.cancelled(), false, 'a generated file can no longer be cancelled server-side');
+    m.downloading(false);
+    assert.equal(m.ready(), false);
+    assert.equal(m.failed(), true); // DOWNLOADING → ERROR allowed
+
+    const c = createExportPhase();
+    assert.equal(c.cancelled(), true);
+    assert.equal(c.ready(), false, 'cancelled is terminal');
+    assert.equal(c.failed(), false);
+
+    const e = createExportPhase();
+    assert.equal(e.failed(), true);
+    assert.equal(e.ready(), false, 'error is terminal');
+});
+
+test('formatSize → French units with decimal comma', () => {
+    assert.equal(formatSize(7.5 * 1048576), '7,5 Mo');
+    assert.equal(formatSize(606 * 1048576), '606 Mo');
+    assert.equal(formatSize(635437056), '606 Mo');
+    assert.equal(formatSize(1.25 * 1073741824), '1,3 Go');
+    assert.equal(formatSize(512), '512 o');
+    assert.equal(formatSize(-1), '');
+    assert.equal(formatSize('x'), '');
+});
+
+test('dashboard + widget: no fake 100 %, no blob, no timer-driven end of a download', () => {
+    const dash = fs.readFileSync(path.join(__dirname, '../../public/assets/js/dashboard.js'), 'utf8');
+    const exportPart = dash.slice(dash.indexOf('// ── export'), dash.indexOf('// ── wiring'));
+    const widget = fs.readFileSync(path.join(__dirname, '../../public/assets/js/export-widget.js'), 'utf8');
+    for (const [name, js] of [['dashboard.js export section', exportPart], ['export-widget.js', widget]]) {
+        assert.doesNotMatch(js, /percent\s*=\s*100|percent:\s*100|'100 ?%'/, name + ': nothing sets 100 % by hand');
+        assert.doesNotMatch(js, /\.blob\(\)/, name + ': never loads the file in memory');
+        assert.doesNotMatch(js, /\.completed\(\)/, name + ': COMPLETED is unreachable with a browser-managed download');
+    }
+    assert.doesNotMatch(exportPart, /window\.location/, 'the dashboard hands the download to the widget');
+    assert.equal((widget.match(/win\.location = url/g) || []).length, 1, 'one download primitive');
+    assert.doesNotMatch(widget, /doneCloseMs/, 'a generated file never closes the window on a timer');
+});
+
+test('css: indeterminate bar is a sliding segment, never a full-width bar', () => {
+    const css = fs.readFileSync(path.join(__dirname, '../../public/assets/css/custom.css'), 'utf8');
+    const rule = css.match(/\.bscd-xw__progress\.is-indeterminate \.progress-bar\s*\{([^}]*)\}/);
+    assert.ok(rule, 'indeterminate rule present');
+    assert.match(rule[1], /width:\s*30%/);
+    assert.match(rule[1], /animation:/);
+    assert.match(css, /prefers-reduced-motion/);
+    assert.doesNotMatch(css, /\.bscd-export-progress/, 'old modal progress styles removed');
 });

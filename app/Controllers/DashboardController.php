@@ -248,10 +248,13 @@ class DashboardController extends BaseController
                 }
 
                 return $this->response->setJSON([
-                    'mode'        => 'sync',
-                    'count'       => $count,
-                    'rows'        => (int) $meta['rows'],
-                    'downloadUrl' => site_url('dashboard/export/download') . '?' . http_build_query([
+                    'mode'              => 'sync',
+                    'count'             => $count,
+                    'rows'              => (int) $meta['rows'],
+                    // Shown by the export window like an async job's fileSize / timing.
+                    'fileSize'          => (int) $meta['fileSize'],
+                    'generationSeconds' => (int) round($meta['totalDurationMs'] / 1000),
+                    'downloadUrl'       => site_url('dashboard/export/download') . '?' . http_build_query([
                         'f'   => $meta['filename'],
                         'sig' => $this->signDownload($meta['filename']),
                     ]),

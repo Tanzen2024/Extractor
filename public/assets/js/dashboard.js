@@ -1024,13 +1024,13 @@
     }
 
     // ── export ────────────────────────────────────────────────────────
+    // This modal only shows what will be exported and launches it. From the
+    // click on, the export lives in the floating window shared by every page
+    // (export-widget.js, window.bscdExportWidget): progress, "Annuler"
+    // (real POST /exports/{id}/cancel), download, errors — the one polling loop.
     var currentExportFormat = 'csv';
-    var exportLocked = false; // true once a launch has resolved to a terminal state (empty result); next click closes
-    var downloadedJobs = {};  // job ids whose file download was already triggered — one download per job
-    var EXPORT_PROGRESS = window.bscdExportProgress; // public/assets/js/export-progress.js
-    var exportTracker = EXPORT_PROGRESS.createTracker(downloadedJobs); // active job + one download per job
-    // Async job shown in the modal: {jobId, clock, finished, stop()} — what "Annuler" cancels.
-    var activeExport = null;
+    var exportLocked = false; // true once the modal shows a terminal message; next click closes
+    var WIDGET = window.bscdExportWidget || null;
 
     function openExportModal(format) {
         currentExportFormat = format;
@@ -1057,13 +1057,18 @@
 
         var status = document.getElementById('bscdExportStatus');
         status.classList.add('d-none'); status.innerHTML = '';
-        exportTracker.deactivate(); // a job still polling from a previous launch no longer owns the modal
-        activeExport = null;        // …nor the "Annuler" button
-        setCancelButton(false);
         var launch = document.getElementById('bscdExportLaunch');
-        launch.disabled = false;
         launch.textContent = "Lancer l'export";
+        launch.disabled = false;
         exportLocked = false;
+
+        // One export followed at a time: the running one stays in its window.
+        if (WIDGET && WIDGET.isBusy()) {
+            launch.disabled = true;
+            status.classList.remove('d-none');
+            status.innerHTML = '<span class="text-muted">Un export est déjà en cours (fenêtre en bas à droite). ' +
+                'Attendez sa fin ou annulez-le avant d\'en lancer un autre.</span>';
+        }
 
         $('#bscdExportModal').modal('show');
     }
@@ -1084,19 +1089,23 @@
 
     function launchExport() {
         if (exportLocked) { $('#bscdExportModal').modal('hide'); return; }
+        if (!WIDGET) { exportFail('Suivi des exports indisponible. Rechargez la page.', false); return; }
 
-        var btn = document.getElementById('bscdExportLaunch');
-        var status = document.getElementById('bscdExportStatus');
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Préparation…';
+        var format = currentExportFormat;
+        if (!WIDGET.begin({ format: format, count: state.filterTotal })) {
+            exportFail("Un export est déjà en cours. Attendez sa fin ou annulez-le.", false);
+            return;
+        }
+        // The floating window takes over ("Préparation de l'export…"): the page stays usable.
+        $('#bscdExportModal').modal('hide');
 
         var body = toParams(state.applied);
-        body.set('format', currentExportFormat);
+        body.set('format', format);
 
         bscdFetch(EP.export, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() })
             .then(function (res) {
                 if (!res) {
-                    exportFail('Réponse vide du serveur. Rechargez la page puis réessayez.');
+                    WIDGET.fail({ message: 'Réponse vide du serveur. Rechargez la page puis réessayez.' });
                     return;
                 }
                 // A server-reported failure — surface its reference/message so
@@ -1104,244 +1113,34 @@
                 // démarrer" (a 422 invalid filter, a 500 with an EXP-… ref, a
                 // 403 from a stale CSRF token, a redirect to /login, …).
                 if (res.error) {
-                    var detail = res.reference || res.message
-                        || (res.status ? ('HTTP ' + res.status) : String(res.error));
-                    exportFail("L'export a échoué : " + detail + '. Réessayez.');
+                    WIDGET.fail({
+                        message: "L'export n'a pas pu être lancé" + (res.message ? ' : ' + res.message : (res.reference ? '.' : ' (HTTP ' + (res.status || '?') + ').')) + ' Réessayez.',
+                        reference: res.reference || ''
+                    });
                     return;
                 }
                 if (res.mode === 'empty') {
-                    exportFail('Aucune ligne ne correspond aux filtres — rien à exporter.', false);
+                    WIDGET.empty();
                     return;
                 }
                 if (res.mode === 'sync') {
-                    status.classList.remove('d-none');
-                    status.textContent = 'Export de ' + fmt(res.count) + ' ligne(s) — téléchargement…';
-                    window.location = res.downloadUrl;
-                    setTimeout(function () { $('#bscdExportModal').modal('hide'); }, 1800);
+                    WIDGET.syncDone({
+                        format: format, count: res.count, rows: res.rows, downloadUrl: res.downloadUrl,
+                        fileSize: res.fileSize, generationSeconds: res.generationSeconds
+                    });
                     return;
                 }
-                if (res.mode === 'async') {
-                    pollJob(res.jobId, res.count);
+                if (res.mode === 'async' && res.jobId) {
+                    WIDGET.attach(res.jobId, { format: format, count: res.count });
                     return;
                 }
                 // No recognised mode and no error flag — never fall through to
                 // the async branch with no job id.
-                exportFail('Réponse inattendue du serveur. Rechargez la page puis réessayez.');
+                WIDGET.fail({ message: 'Réponse inattendue du serveur. Rechargez la page puis réessayez.' });
             })
             .catch(function () {
-                exportFail('Erreur réseau. Réessayez.');
+                WIDGET.fail({ message: 'Erreur réseau. Réessayez.' });
             });
-    }
-
-    function pollJob(jobId, count) {
-        var status = document.getElementById('bscdExportStatus');
-        var btn = document.getElementById('bscdExportLaunch');
-
-        if (!jobId) { exportFail("L'export n'a pas pu être mis en file. Rechargez la page."); return; }
-
-        // From now on only this job may write into the modal: an older job
-        // still being polled keeps polling (and still downloads its file
-        // once) but never touches the status area again.
-        exportTracker.activate(jobId);
-
-        var queued = 'Export volumineux' + (count ? ' (' + fmt(count) + ' lignes)' : '') + ' mis en file.';
-        status.classList.remove('d-none');
-        renderExportProgress(status, EXPORT_PROGRESS.progressView({ status: 'pending' }), queued);
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> En cours…';
-
-        // Duration line: reference = the server's `timing` (fed by each poll),
-        // redrawn every second in between. Independent of the polling below.
-        var clock = EXPORT_PROGRESS.createDurationClock();
-        var current = activeExport = {
-            jobId: jobId, clock: clock, finished: false,
-            stop: function () { current.finished = true; clearInterval(timer); clearInterval(ticker); }
-        };
-        var ticker = setInterval(function () {
-            if (!exportTracker.isActive(jobId)) { clearInterval(ticker); return; }
-            showDuration(status, clock);
-            if (clock.isFinal()) clearInterval(ticker);
-        }, 1000);
-
-        var url = EP.jobStatus + '/' + jobId;
-        var timer = setInterval(function () {
-            bscdFetch(url).then(function (job) {
-                var step = exportTracker.handle(jobId, job);
-                if (step.stop) { clearInterval(timer); current.finished = true; }
-                if (step.kind !== 'unreachable' && step.kind !== 'duplicate') clock.sync(job, Date.now());
-
-                // Another "done" answer for an already downloaded job (an
-                // in-flight poll that raced the one clearing the timer).
-                if (step.kind === 'duplicate') return;
-
-                if (step.kind === 'done' && step.download) {
-                    // Auto-download: the endpoint answers with Content-Disposition:
-                    // attachment, so the page stays on the dashboard (same as sync mode).
-                    window.location = step.download;
-                }
-
-                if (!step.render) return;
-
-                if (step.kind === 'unreachable') {
-                    showPollWarning(status, job);
-                } else if (step.kind === 'progress') {
-                    if (step.view) renderExportProgress(status, step.view, queued);
-                } else if (step.kind === 'done') {
-                    exportLocked = true;
-                    btn.textContent = 'Fermer';
-                    btn.disabled = false;
-                    if (!step.download) {
-                        status.innerHTML = '<span class="text-danger">Fichier prêt mais lien de téléchargement indisponible. Réessayez.</span>';
-                        return;
-                    }
-                    step.view.title = 'Fichier prêt (' + fmt(Math.round((job.fileSize || 0) / 1048576)) + ' Mo) — téléchargement…';
-                    renderExportProgress(status, step.view, queued);
-                } else if (step.kind === 'cancelled') {
-                    // Cancelled elsewhere (another tab): same end as "Annuler".
-                    current.stop();
-                    showCancelled(status, clock);
-                } else if (step.kind === 'error') {
-                    exportLocked = true;
-                    var spent = clock.display(Date.now());
-                    var failure = job.failure || {};
-                    status.innerHTML = '<span class="text-danger">Échec de l\'export (' + escapeHtml(failure.reference || job.reference || '') + ').</span>' +
-                        (failure.message ? '<div class="text-muted small">' + escapeHtml(failure.message) + '</div>' : '') +
-                        (spent ? '<div class="text-muted">' + escapeHtml(spent.text) + '</div>' : '');
-                    btn.textContent = 'Fermer'; btn.disabled = false;
-                }
-                showDuration(status, clock);
-            }).catch(function () {
-                // Network failure — keep polling, but say so (never a frozen bar).
-                if (exportTracker.isActive(jobId)) showPollWarning(status, null);
-            });
-        }, 3000);
-    }
-
-    // "Annuler" — a real cancellation of the job shown in the modal
-    // (POST /exports/{id}/cancel), never just closing it: the server stops
-    // the worker and deletes the partial file. No async job running = close.
-    function cancelExport() {
-        var job = activeExport;
-        if (!job || job.finished) { $('#bscdExportModal').modal('hide'); return; }
-
-        var status = document.getElementById('bscdExportStatus');
-        setCancelButton(true);
-
-        bscdFetch(EP.jobStatus + '/' + job.jobId + '/cancel', { method: 'POST' })
-            .then(function (res) {
-                if (activeExport !== job) return; // the modal moved on meanwhile
-
-                var cancelled = res && (res.success || (res.error === 'already_finished' && res.status === 'cancelled'));
-                if (cancelled) {
-                    exportTracker.markCancelled(job.jobId); // an in-flight "done"/"running" answer is ignored
-                    job.stop();
-                    job.clock.sync({ status: 'cancelled', timing: res.timing }, Date.now());
-                    showCancelled(status, job.clock);
-                    setTimeout(function () { if (activeExport === job) $('#bscdExportModal').modal('hide'); }, 1500);
-                    return;
-                }
-
-                setCancelButton(false);
-                if (res && res.error === 'already_finished') {
-                    // done / error: left as is — polling shows (and downloads) the real end.
-                    showPollWarning(status, null, res.message || 'Cet export est déjà terminé.');
-                    return;
-                }
-                var detail = res && (res.message || (res.status ? 'HTTP ' + res.status : res.error));
-                showPollWarning(status, null, "L'annulation n'a pas abouti" + (detail ? ' (' + detail + ')' : '') + '. Réessayez.');
-            })
-            .catch(function () {
-                if (activeExport !== job) return;
-                setCancelButton(false);
-                showPollWarning(status, null, "L'annulation n'a pas abouti (erreur réseau). Réessayez.");
-            });
-    }
-
-    function setCancelButton(busy) {
-        var cancel = document.getElementById('bscdExportCancel');
-        cancel.disabled = busy;
-        cancel.innerHTML = busy ? '<i class="fas fa-spinner fa-spin mr-1"></i> Annulation…' : 'Annuler';
-    }
-
-    // Terminal "cancelled" state: no bar, no counts, the frozen duration.
-    function showCancelled(status, clock) {
-        var spent = clock.display(Date.now());
-        status.classList.remove('d-none');
-        status.innerHTML = '<span class="text-muted">Export annulé.</span>' +
-            (spent ? '<div class="text-muted">' + escapeHtml(spent.text) + '</div>' : '');
-        exportLocked = true;
-        var btn = document.getElementById('bscdExportLaunch');
-        btn.textContent = 'Fermer'; btn.disabled = false;
-        setCancelButton(false);
-    }
-
-    // "Durée d'attente / écoulée / totale : HH:MM:SS" under the line counts
-    // (empty until the server gave a usable timestamp).
-    function showDuration(status, clock) {
-        var line = status.querySelector('[data-progress-duration]');
-        if (!line) return;
-        var shown = clock.display(Date.now());
-        line.textContent = shown ? shown.text : '';
-    }
-
-    // A failed poll: the last known progress stays on screen, with the reason
-    // underneath. Cleared by the next successful answer (renderExportProgress).
-    function showPollWarning(status, job, text) {
-        var warning = status.querySelector('[data-progress-warning]');
-        if (!warning) return;
-        var detail = job && job.status ? ' (HTTP ' + job.status + ')' : '';
-        warning.textContent = text || ("État de l'export momentanément illisible" + detail +
-            ' — nouvelle tentative… Si cela persiste, rechargez la page (session expirée ?).');
-    }
-
-    // Progress block of an asynchronous export (pending / running / done),
-    // fed only by the figures GET /exports/{id} returns (see
-    // export-progress.js). Built once, then updated in place; the bar width
-    // is set through element.style (CSSOM), not an inline style attribute.
-    function renderExportProgress(status, view, queued) {
-        var box = status.querySelector('.bscd-export-progress');
-        if (!box) {
-            status.innerHTML =
-                '<div class="bscd-export-progress">' +
-                    '<div class="mb-2" data-progress-queued></div>' +
-                    '<div class="d-flex justify-content-between align-items-baseline mb-1">' +
-                        '<strong>Progression de l\'export</strong><span class="text-muted" data-progress-title></span>' +
-                    '</div>' +
-                    // The % sits beside the bar, not inside it: the filled part
-                    // is exactly view.percent wide (0 % = nothing filled).
-                    '<div class="d-flex align-items-center" data-progress-track>' +
-                        '<div class="progress bscd-export-progress-track flex-grow-1">' +
-                            '<div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>' +
-                        '</div>' +
-                        '<span class="bscd-export-progress-pct" data-progress-percent></span>' +
-                    '</div>' +
-                    '<div class="text-muted mt-1" data-progress-processed></div>' +
-                    '<div class="text-muted" data-progress-exported></div>' +
-                    '<div class="text-muted" data-progress-duration></div>' +
-                    '<div class="text-warning small mt-1" data-progress-warning></div>' +
-                '</div>';
-            box = status.querySelector('.bscd-export-progress');
-        }
-
-        box.querySelector('[data-progress-warning]').textContent = '';
-
-        box.querySelector('[data-progress-queued]').textContent = queued || '';
-        box.querySelector('[data-progress-title]').textContent = view.title;
-
-        // Unknown progress (running, no usable figures): no bar, no invented %.
-        var track = box.querySelector('[data-progress-track]');
-        track.classList.toggle('d-none', view.percent === null);
-        if (view.percent !== null) {
-            var bar = track.querySelector('.progress-bar');
-            bar.style.width = view.percent + '%';
-            bar.setAttribute('aria-valuenow', String(view.percent));
-            track.querySelector('[data-progress-percent]').textContent = view.percent + ' %';
-        }
-
-        var counted = view.processed !== null && view.total !== null;
-        box.querySelector('[data-progress-processed]').textContent = counted
-            ? fmt(view.processed) + ' / ' + fmt(view.total) + ' lignes parcourues' : '';
-        box.querySelector('[data-progress-exported]').textContent = counted && view.exported !== null
-            ? fmt(view.exported) + ' lignes exportées' : '';
     }
 
     // ── wiring ────────────────────────────────────────────────────────
@@ -1370,7 +1169,6 @@
         state.table.page = 1;
         loadRows().catch(handleError);
     });
-    document.getElementById('bscdExportCancel').addEventListener('click', cancelExport);
     document.querySelectorAll('[data-export]').forEach(function (b) {
         b.addEventListener('click', function () { openExportModal(b.dataset.export); });
     });
