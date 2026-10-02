@@ -43,11 +43,12 @@ class ProcessExportJobs extends BaseCommand
     protected $group       = 'Export';
     protected $name        = 'export:process';
     protected $description  = 'Generates the files for queued CUSTOMERS_LIST export jobs.';
-    protected $usage        = 'export:process [--watch] [--sleep=5] [--stale-after=3600]';
+    protected $usage        = 'export:process [--watch] [--sleep=5] [--stale-after=3600] [--allow-root]';
     protected $options      = [
         '--watch'       => 'Keep running, polling for new jobs instead of exiting when the queue is empty.',
         '--sleep'       => 'Seconds to wait between polls in --watch mode (default 5).',
         '--stale-after' => "--watch: at start, mark 'error' the jobs still 'running' without any progress for this many seconds (default 3600, 0 = never).",
+        '--allow-root'  => 'Run even as root (not recommended: the files and folders it creates then belong to root).',
     ];
 
     /** Minimum gap between two progress UPDATEs of the same job. */
@@ -68,6 +69,17 @@ class ProcessExportJobs extends BaseCommand
         $staleAfter = max(0, (int) (CLI::getOption('stale-after') ?? 3600));
         $state      = new ExportWorkerState();
         $startedAt  = date('Y-m-d H:i:s');
+
+        // Before anything is written (log line, lock): a root worker would
+        // create a root-owned log, lock, heartbeat, exports and OpenSpout
+        // folders that the www-data worker (systemd) and the web server can
+        // no longer write.
+        if (ExportWorkerState::isRoot() && CLI::getOption('allow-root') === null) {
+            CLI::error('[EXPORT WORKER] Refus de démarrer en root : tout ce qu\'il créerait sous writable/ appartiendrait à root et bloquerait le worker www-data. '
+                . 'Utiliser `sudo -u www-data php spark export:process` ou le service systemd (--allow-root pour forcer).');
+
+            return EXIT_ERROR;
+        }
 
         $this->announce($watch);
 

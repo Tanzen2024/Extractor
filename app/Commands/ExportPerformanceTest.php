@@ -4,6 +4,7 @@ namespace App\Commands;
 
 use App\Services\CustomerListExportService;
 use App\Services\CustomersList\FilterCriteria;
+use App\Services\Export\ExportWorkerState;
 use App\Services\Export\RowSource;
 use App\Services\OracleExtractionService;
 use App\Services\Snapshot\ActiveSnapshot;
@@ -190,8 +191,12 @@ class ExportPerformanceTest extends BaseCommand
 
     private function checkWritableDirs(): void
     {
-        foreach ([WRITEPATH . 'uploads/exports', WRITEPATH . 'tmp/openspout'] as $dir) {
-            if (! is_dir($dir) && ! @mkdir($dir, 0755, true) && ! is_dir($dir)) {
+        if (ExportWorkerState::isRoot()) {
+            CLI::write('ATTENTION : exécuté en root — les dossiers créés appartiendront à root et le worker www-data ne pourra plus y écrire. Préférer `sudo -u www-data php spark ...`.', 'yellow');
+        }
+
+        foreach ([WRITEPATH . 'uploads/exports', config('Export')->openSpoutTempPath()] as $dir) {
+            if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
                 throw new RuntimeException("Répertoire introuvable/non créable : {$dir}");
             }
             $probe = $dir . DIRECTORY_SEPARATOR . 'bench_probe_' . bin2hex(random_bytes(4));
@@ -483,7 +488,7 @@ class ExportPerformanceTest extends BaseCommand
     /** @return list<string> */
     private function openSpoutScratchDirs(): array
     {
-        return glob(WRITEPATH . 'tmp/openspout/export_*', GLOB_ONLYDIR) ?: [];
+        return glob(config('Export')->openSpoutTempPath() . '/export_*', GLOB_ONLYDIR) ?: [];
     }
 
     private function formatInt(int $n): string

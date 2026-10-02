@@ -1,30 +1,64 @@
 # systemd unit for the asynchronous export worker (php spark export:process --watch).
+# Written for Ubuntu 22.04 (systemd 249); needs systemd >= 231 for "ExecStartPre=+".
 #
-# Install (as root), adapting User/Group/WorkingDirectory/php path if needed:
-#   cp docs/deploy/extractor-export-worker.service /etc/systemd/system/
+# Install / update (as root) — full procedure: docs/deploy/export-worker.md
+#   install -o root -g root -m 0755 docs/deploy/prepare-writable.sh /usr/local/sbin/extractor-prepare-writable
+#   install -o root -g root -m 0644 docs/deploy/extractor-export-worker.service /etc/systemd/system/
 #   systemctl daemon-reload
 #   systemctl enable --now extractor-export-worker
 #
-# User MUST be the account Apache/PHP-FPM runs as (www-data on Debian/Ubuntu,
-# apache on RHEL): the worker writes the same writable/ tree (logs, exports,
-# tmp) as the web server. Another user = files or logs it cannot write,
-# failures with no log line (see docs/deploy/export-worker.md).
+# User MUST be the account Apache/PHP-FPM runs as (www-data on Debian/Ubuntu):
+# the worker writes the same writable/ tree (logs, exports, tmp) as the web
+# server. If the project is not in /var/www/extractor or the account is not
+# www-data, change WorkingDirectory, User, Group, AssertPathExists and the
+# arguments of extractor-prepare-writable below (same values everywhere).
+#
+# Start sequence (each step must succeed, otherwise the unit fails and the
+# reason is in `journalctl -u extractor-export-worker`):
+#   1. AssertPathExists        the project is there;
+#   2. ExecStartPre=+...       as root ("+": User=/Group= not applied to this
+#                              line only): creates writable/tmp,
+#                              writable/tmp/openspout_tmp, uploads/exports,
+#                              export-worker... and gives them to www-data —
+#                              idempotent, runs at every start, restart and
+#                              reboot, so a directory deleted or created by
+#                              root is repaired without manual chown;
+#   3. ExecStartPre=php ...    as www-data: export:doctor --preflight really
+#                              writes / deletes a file and a folder in each
+#                              directory the worker uses (exit 1 if not);
+#   4. ExecStart               the worker itself, as www-data.
 
 [Unit]
 Description=Extractor - asynchronous export worker
+Documentation=file:///var/www/extractor/docs/deploy/export-worker.md
 After=network-online.target mysql.service mariadb.service
 Wants=network-online.target
+AssertPathExists=/var/www/extractor/spark
+# Crash loop or failing preflight: give up after 5 failed starts within
+# 5 minutes — the unit goes "failed" (visible in systemctl status) instead of
+# retrying every few seconds forever. After fixing the cause:
+#   systemctl reset-failed extractor-export-worker && systemctl start extractor-export-worker
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=/var/www/extractor
+# Files 664 / directories 775: the group (www-data) can write what the worker creates.
+UMask=0002
+ExecStartPre=+/usr/local/sbin/extractor-prepare-writable /var/www/extractor www-data www-data
+ExecStartPre=/usr/bin/php spark export:doctor --preflight
 ExecStart=/usr/bin/php spark export:process --watch
 # The worker exits on its own after a deployment (code changed on disk) and
-# is restarted here on the new code; also restarted after any crash.
+# is restarted here on the new code — the ExecStartPre steps run again;
+# also restarted after any crash.
 Restart=always
 RestartSec=5
+# Only one worker: systemd runs a single instance of this unit, and the
+# worker itself holds a lock (writable/export-worker/worker.lock) against a
+# copy started by hand or by cron.
 # SIGTERM: the current job finishes first (needs php-pcntl), then exit.
 # A full CSV takes ~1 min, a full XLSX up to ~30 min.
 KillSignal=SIGTERM
@@ -33,7 +67,7 @@ TimeoutStopSec=1800
 #   journalctl -u extractor-export-worker -f
 StandardOutput=journal
 StandardError=journal
-UMask=0002
+SyslogIdentifier=extractor-export-worker
 
 [Install]
 WantedBy=multi-user.target

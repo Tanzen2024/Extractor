@@ -13,14 +13,29 @@ use Throwable;
  * user (e.g. `sudo -u www-data php spark export:doctor`), since most
  * local / server differences are about who may read or write what.
  *
+ * Directories are judged on behaviour (create + delete a file and a
+ * sub-folder as this user, see WritableDirectory), not on their owner.
+ * Without $fix nothing is created: a diagnostic run as root must not leave
+ * root-owned folders behind (it used to, which is how writable/tmp/openspout
+ * ended up root:root 0755 on the server).
+ *
+ * Levels: ERROR (current problem, exit 1), WARNING, OK, INFO (history, e.g.
+ * the last failed job — never blocking). Each check belongs to a category
+ * (see category()) so configuration, filesystem, worker and job history are
+ * told apart in the summary.
+ *
  * Never prints a secret: database password, encryption key and .env values
  * are not read back; only hostnames, names, paths, owners and versions.
  */
 final class ExportDoctor
 {
     public const OK      = 'OK';
+    public const INFO    = 'INFO';
     public const WARNING = 'WARNING';
     public const ERROR   = 'ERROR';
+
+    /** Shown when only root can repair a directory. */
+    public const SYSTEM_FIX = 'sudo /usr/local/sbin/extractor-prepare-writable (ou sudo systemctl restart extractor-export-worker) — docs/deploy/export-worker.md';
 
     /** Needed by CodeIgniter, MySQLi and OpenSpout (XLSX) — see composer.lock. */
     private const REQUIRED_EXTENSIONS = ['mysqli', 'intl', 'mbstring', 'json', 'ctype', 'dom', 'fileinfo', 'filter', 'libxml', 'xmlreader', 'zip', 'zlib'];
@@ -36,7 +51,72 @@ final class ExportDoctor
         private readonly ?ExportWorkerState $worker = null,
         private readonly ?SnapshotConfig $snapshot = null,
         private readonly string $writePath = WRITEPATH,
+        private readonly ?string $openSpoutTempPath = null,
+        private readonly bool $fix = false,
     ) {
+    }
+
+    /**
+     * `export:doctor --preflight` (systemd ExecStartPre, as the worker's
+     * user): only what the worker needs on disk before its first poll —
+     * missing directories are created (as this user, never as root), every
+     * one must pass the write/delete test. No database: MySQL may still be
+     * starting at boot, and the worker waits for it on its own.
+     *
+     * @return list<array{level: string, check: string, detail: string}>
+     */
+    public function preflight(): array
+    {
+        $this->results = [];
+        $this->checkProcessUser();
+
+        foreach ($this->workerDirectories() as $label => $dir) {
+            $this->checkDirectory($label, $dir, true);
+        }
+
+        return $this->results;
+    }
+
+    /**
+     * Every directory the worker writes to, label => path (no trailing separator).
+     *
+     * @return array<string, string>
+     */
+    public function workerDirectories(): array
+    {
+        $base = rtrim($this->writePath, '/\\') . DIRECTORY_SEPARATOR;
+
+        return [
+            'logs'          => $base . 'logs',
+            'exports'       => $base . 'uploads' . DIRECTORY_SEPARATOR . 'exports',
+            'openspout_tmp' => $this->openSpoutTempPath(),
+            'cache'         => $base . 'cache',
+            'worker_state'  => rtrim(($this->worker ?? new ExportWorkerState())->dir(), '/\\'),
+        ];
+    }
+
+    public function openSpoutTempPath(): string
+    {
+        if ($this->openSpoutTempPath !== null) {
+            return rtrim($this->openSpoutTempPath, '/\\');
+        }
+
+        // A test pointing the doctor at another writable/ gets its own tmp.
+        return rtrim($this->writePath, '/\\') === rtrim(WRITEPATH, '/\\')
+            ? config('Export')->openSpoutTempPath()
+            : rtrim($this->writePath, '/\\') . DIRECTORY_SEPARATOR . 'tmp' . DIRECTORY_SEPARATOR . 'openspout_tmp';
+    }
+
+    /** configuration | filesystem | data | worker | history */
+    public static function category(string $check): string
+    {
+        return match (true) {
+            str_starts_with($check, 'dir.'), str_starts_with($check, 'disk.') => 'filesystem',
+            str_starts_with($check, 'worker.') => 'worker',
+            str_starts_with($check, 'jobs.')   => 'history',
+            str_starts_with($check, 'snapshot') => 'data',
+            default => 'configuration',
+        };
     }
 
     /** @return list<array{level: string, check: string, detail: string}> */
@@ -97,6 +177,17 @@ final class ExportDoctor
         $tz  = (string) ini_get('date.timezone');
         $app = config('App')->appTimezone;
         $this->add(self::OK, 'php.timezone', "application : {$app} (forcée par CodeIgniter), php.ini : " . ($tz !== '' ? $tz : 'non défini') . ', courant : ' . date_default_timezone_get());
+
+        $this->checkProcessUser();
+    }
+
+    private function checkProcessUser(): void
+    {
+        if (ExportWorkerState::isRoot()) {
+            $this->add(self::WARNING, 'process.user', ExportWorkerState::processUser() . ' — exécuté en root : les tests d\'écriture ne disent rien du worker et rien n\'est créé ; relancer avec `sudo -u www-data php spark export:doctor`');
+
+            return;
+        }
 
         $this->add(self::OK, 'process.user', ExportWorkerState::processUser() . ' — doit être le même utilisateur que le worker (et, idéalement, le serveur web)');
     }
@@ -196,7 +287,8 @@ final class ExportDoctor
             $last = $db->table(ExportJobSchema::TABLE)->select('id, error_reference, finished_at')->where('status', 'error')
                 ->orderBy('id', 'DESC')->limit(1)->get()->getRowArray();
             if ($last !== null) {
-                $this->add(self::OK, 'jobs.last_error', "#{$last['id']} {$last['error_reference']} à {$last['finished_at']} — détail : grep {$last['error_reference']} writable/logs/*.log ou journalctl");
+                // History, not a configuration problem: never blocking.
+                $this->add(self::INFO, 'jobs.last_error', "#{$last['id']} {$last['error_reference']} à {$last['finished_at']} (historique, non bloquant) — détail : grep {$last['error_reference']} writable/logs/*.log ou journalctl");
             }
 
             $stuck = $db->table(ExportJobSchema::TABLE)->where('status', 'running')
@@ -212,16 +304,9 @@ final class ExportDoctor
     private function checkDirectories(): void
     {
         $base = rtrim($this->writePath, '/\\') . DIRECTORY_SEPARATOR;
-        $dirs = [
-            'logs'           => $base . 'logs',
-            'exports'        => $base . 'uploads/exports',
-            'openspout tmp'  => $base . 'tmp/openspout',
-            'cache'          => $base . 'cache',
-            'worker state'   => ($this->worker ?? new ExportWorkerState())->dir(),
-        ];
 
-        foreach ($dirs as $label => $dir) {
-            $this->add(...$this->probeDirectory($label, rtrim($dir, '/\\')));
+        foreach ($this->workerDirectories() as $label => $dir) {
+            $this->checkDirectory($label, $dir, $this->fix);
         }
 
         // The file CodeIgniter appends to today: it may exist but belong to
@@ -245,25 +330,37 @@ final class ExportDoctor
         }
     }
 
-    /** @return array{0: string, 1: string, 2: string} */
-    private function probeDirectory(string $label, string $dir): array
+    /**
+     * Real write / delete / sub-folder test as this user (WritableDirectory).
+     * A missing directory this user could create itself is only a WARNING
+     * outside $create: the worker creates it on demand.
+     */
+    private function checkDirectory(string $label, string $dir, bool $create): void
     {
-        $check = 'dir.' . str_replace(' ', '_', $label);
+        $check  = 'dir.' . $label;
+        $result = WritableDirectory::probe($dir, $create);
+        $state  = WritableDirectory::describe($result);
 
-        if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
-            return [self::ERROR, $check, "{$dir} absent et impossible à créer"];
+        if (WritableDirectory::usable($result)) {
+            $this->add(self::OK, $check, "{$dir}\n{$state}");
+
+            return;
         }
 
-        // A real write, not is_writable(): ACLs, read-only mounts, SELinux.
-        $probe = $dir . DIRECTORY_SEPARATOR . '.doctor_' . getmypid() . '_' . bin2hex(random_bytes(3));
-        $ok    = @file_put_contents($probe, 'ok') === 2;
-        @unlink($probe);
+        if ($result['error'] === 'absent' && WritableDirectory::creatable($dir)) {
+            $this->add(self::WARNING, $check, "{$dir}\n{$state}\nabsent, créable par {$result['user']} : sera créé à la demande (ou maintenant : php spark export:doctor --fix)");
 
-        $owner = ExportWorkerState::ownerOf($dir);
+            return;
+        }
 
-        return $ok
-            ? [self::OK, $check, "{$dir} accessible en écriture" . ($owner !== '' ? " (propriétaire : {$owner})" : '')]
-            : [self::ERROR, $check, "{$dir} NON accessible en écriture pour " . ExportWorkerState::processUser() . ($owner !== '' ? " (propriétaire : {$owner})" : '')];
+        $fix = match (true) {
+            WritableDirectory::linkTarget($dir) !== null => 'remplacer le lien par un vrai répertoire (prepare-writable.sh le refuse aussi)',
+            file_exists($dir) && ! is_dir($dir)          => 'supprimer ou renommer ce fichier (le dossier sera recréé au démarrage)',
+            PHP_OS_FAMILY === 'Windows'                  => 'vérifier les droits NTFS du dossier pour ' . $result['user'],
+            default                                      => 'correction système requise (PHP ne peut pas changer les droits d\'un dossier qui ne lui appartient pas) : ' . self::SYSTEM_FIX,
+        };
+
+        $this->add(self::ERROR, $check, "{$dir}\n{$state}\n{$result['error']} — {$fix}");
     }
 
     private function checkSnapshot(): void

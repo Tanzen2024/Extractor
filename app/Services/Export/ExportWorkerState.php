@@ -157,6 +157,17 @@ final class ExportWorkerState
         return (string) (getenv('USERNAME') ?: getenv('USER') ?: get_current_user());
     }
 
+    /**
+     * Effective root (POSIX only, never on Windows). Whatever root creates
+     * under writable/ belongs to root, and the www-data worker can then no
+     * longer write there — the cause of "dir.openspout_tmp ... propriétaire
+     * root" after a `sudo php spark ...` without `-u www-data`.
+     */
+    public static function isRoot(): bool
+    {
+        return function_exists('posix_geteuid') && posix_geteuid() === 0;
+    }
+
     /** Owner name of a path, '' when unknown (Windows, no posix). */
     public static function ownerOf(string $path): string
     {

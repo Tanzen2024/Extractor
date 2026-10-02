@@ -61,10 +61,7 @@ final class ExportJobRobustnessTest extends CIUnitTestCase
     {
         $this->forge()->dropTable('export_jobs', true);
 
-        foreach (glob($this->exportDir . DIRECTORY_SEPARATOR . '*') ?: [] as $file) {
-            @unlink($file);
-        }
-        @rmdir($this->exportDir);
+        App\Services\Snapshot\SnapshotStore::deleteTree($this->exportDir);
 
         parent::tearDown();
     }
@@ -460,15 +457,40 @@ final class ExportJobRobustnessTest extends CIUnitTestCase
         $this->assertSame('ERROR', $byCheck['db.export_jobs']['level']);
         $this->assertStringContainsString('rows_total', $byCheck['db.export_jobs']['detail']);
         $this->assertSame('ERROR', App\Services\Export\ExportDoctor::worstLevel($results));
-        $this->assertSame('OK', $byCheck['dir.exports']['level']);
+        // Missing but creatable by this user: a warning, and the doctor
+        // (without --fix) creates nothing.
+        $this->assertSame('WARNING', $byCheck['dir.exports']['level']);
+        $this->assertDirectoryDoesNotExist($this->exportDir . DIRECTORY_SEPARATOR . 'uploads');
 
         // Never a secret in the output.
         $this->assertStringNotContainsString((string) config('Database')->default['password'] ?: "\0", json_encode($results));
+    }
 
-        foreach (['uploads/exports', 'tmp/openspout', 'logs', 'cache', 'uploads', 'tmp'] as $sub) {
-            @rmdir($this->exportDir . DIRECTORY_SEPARATOR . $sub);
+    public function testDoctorReportsAnOldFailedJobAsNonBlockingHistory(): void
+    {
+        $this->migrateExportJobs();
+        $id = $this->job(['status' => 'error', 'error_reference' => 'EXPJOB-20261001-24093', 'finished_at' => '2026-10-01 10:00:00']);
+        $workerDir = $this->exportDir . DIRECTORY_SEPARATOR . 'w';
+
+        $results = (new App\Services\Export\ExportDoctor($this->db, new App\Services\Export\ExportWorkerState($workerDir), null, $this->exportDir, null, true))->run();
+        $byCheck = array_column($results, null, 'check');
+
+        $this->assertSame('INFO', $byCheck['jobs.last_error']['level']);
+        $this->assertStringContainsString("#{$id} EXPJOB-20261001-24093", $byCheck['jobs.last_error']['detail']);
+        $this->assertSame('history', App\Services\Export\ExportDoctor::category('jobs.last_error'));
+        $this->assertSame('OK', $byCheck['db.export_jobs']['level']);
+
+        // --fix created the missing worker directories (as this user) and
+        // they pass the real write test.
+        foreach (['dir.exports', 'dir.openspout_tmp', 'dir.worker_state', 'dir.logs', 'dir.cache'] as $check) {
+            $this->assertSame('OK', $byCheck[$check]['level'], $check . ': ' . $byCheck[$check]['detail']);
+            $this->assertStringContainsString('write_test=yes delete_test=yes subdir_test=yes', $byCheck[$check]['detail']);
         }
-        @rmdir($workerDir);
+
+        // The old error is no reason for exit 1: nothing in history or
+        // filesystem is an ERROR.
+        $relevant = array_filter($results, static fn (array $r): bool => in_array(App\Services\Export\ExportDoctor::category($r['check']), ['history', 'filesystem'], true));
+        $this->assertNotContains('ERROR', array_column($relevant, 'level'));
     }
 
     public function testFailureSanitizerMasksCredentials(): void

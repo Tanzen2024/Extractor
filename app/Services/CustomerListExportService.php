@@ -6,6 +6,7 @@ use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\QueryBuilder;
 use App\Services\Export\CsvRowWriter;
 use App\Services\Export\ExportCancelledException;
+use App\Services\Export\ExportWorkerState;
 use App\Services\Export\ReportsProgress;
 use App\Services\Export\ReportsStreamStats;
 use App\Services\Export\OracleRowSource;
@@ -175,9 +176,9 @@ class CustomerListExportService
                 : new SnapshotRowSource(store: new SnapshotStore($snapshotConfig))
         );
         $this->exportDir        = rtrim($exportDir ?? WRITEPATH . 'uploads/exports', '/\\') . DIRECTORY_SEPARATOR;
-        $this->openSpoutTempDir = rtrim($openSpoutTempDir ?? WRITEPATH . 'tmp/openspout', '/\\') . DIRECTORY_SEPARATOR;
+        $this->openSpoutTempDir = rtrim($openSpoutTempDir ?? config('Export')->openSpoutTempPath(), '/\\') . DIRECTORY_SEPARATOR;
 
-        if (! is_dir($this->exportDir) && ! mkdir($this->exportDir, 0755, true) && ! is_dir($this->exportDir)) {
+        if (! is_dir($this->exportDir) && ! mkdir($this->exportDir, 0775, true) && ! is_dir($this->exportDir)) {
             throw new RuntimeException("Impossible de créer le répertoire d'export {$this->exportDir}.");
         }
 
@@ -565,15 +566,17 @@ class CustomerListExportService
     private function createOpenSpoutScratchDir(): string
     {
         // @: a concurrent export may create the parent at the same moment.
-        if (! is_dir($this->openSpoutTempDir) && ! @mkdir($this->openSpoutTempDir, 0755, true) && ! is_dir($this->openSpoutTempDir)) {
-            throw new RuntimeException("Impossible de créer le répertoire temporaire OpenSpout {$this->openSpoutTempDir}.");
+        // Normally prepared by the deployment (docs/deploy/prepare-writable.sh);
+        // recreated here if it was deleted and its parent is writable.
+        if (! is_dir($this->openSpoutTempDir) && ! @mkdir($this->openSpoutTempDir, 0775, true) && ! is_dir($this->openSpoutTempDir)) {
+            throw new RuntimeException("Impossible de créer le répertoire temporaire OpenSpout {$this->openSpoutTempDir} (utilisateur " . ExportWorkerState::processUser() . ') — php spark export:doctor');
         }
         if (! is_writable($this->openSpoutTempDir)) {
-            throw new RuntimeException("Le répertoire temporaire OpenSpout {$this->openSpoutTempDir} n'est pas accessible en écriture.");
+            throw new RuntimeException("Le répertoire temporaire OpenSpout {$this->openSpoutTempDir} n'est pas accessible en écriture pour " . ExportWorkerState::processUser() . ' — php spark export:doctor');
         }
 
         $dir = $this->openSpoutTempDir . 'export_' . date('Ymd_His') . '_' . bin2hex(random_bytes(6));
-        if (! @mkdir($dir, 0755)) {
+        if (! @mkdir($dir, 0775)) {
             throw new RuntimeException("Impossible de créer le dossier temporaire d'export {$dir}.");
         }
 
