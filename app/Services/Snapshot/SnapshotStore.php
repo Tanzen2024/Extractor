@@ -215,19 +215,28 @@ final class SnapshotStore
 
     /**
      * Deletes installed versions beyond keepVersions (newest kept), never the
-     * active one. Best effort: a version still open by an export stays and is
-     * retried next time.
+     * active one and never a version in $pinned — the versions queued or
+     * running exports were launched on (export_jobs.snapshot_version), which
+     * must still be readable when the worker gets to them. $pinned = null:
+     * unknown (database unreachable) — then no version is deleted at all.
+     * Best effort: a version still open by an export stays and is retried
+     * next time.
+     *
+     * @param list<string>|null $pinned
      *
      * @return list<string> Removed version ids.
      */
-    public function prune(): array
+    public function prune(?array $pinned = []): array
     {
         $active  = $this->activeId();
         $others  = array_values(array_filter($this->versions(), static fn (string $id): bool => $id !== $active));
         $slots   = max(0, $this->config->keepVersions - ($active === null ? 0 : 1));
         $removed = [];
 
-        foreach (array_slice($others, $slots) as $id) {
+        foreach ($pinned === null ? [] : array_slice($others, $slots) as $id) {
+            if (in_array($id, $pinned, true)) {
+                continue; // an export still needs it
+            }
             if (self::deleteTree($this->versionDir($id))) {
                 $removed[] = $id;
             }

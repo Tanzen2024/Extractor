@@ -1,25 +1,36 @@
 # Snapshot CUSTOMERS_LIST — mise en place et exploitation
 
-Les exports utilisateur d'Extractor (CSV/XLSX) lisent un **snapshot local** de
-`customers_list.csv`. Un export ne sollicite **jamais Oracle**. Deux producteurs
-alimentent le même mécanisme de versions :
+Toutes les fonctionnalités utilisateur d'Extractor sur la liste clients —
+filtres, KPI, graphiques, compteurs de segmentation, tableau (recherche, tri,
+pages), comptage, exports CSV/XLSX — lisent le **snapshot actif** de
+`customers_list.csv`, et une même requête ou un même export ne lit qu'**une
+seule version**. Aucune ne sollicite Oracle : le seul accès à
+`CMS_RFC.TB_CUSTOMERS_LIST` est le refresh. Sans snapshot valide (ou sans son
+index), réponse 503 « données de référence indisponibles », jamais de repli
+Oracle. Deux producteurs alimentent le même mécanisme de versions :
 
-- **Source quotidienne (depuis 2026-09-27) : `php spark customers:refresh`**,
-  exécuté sur le serveur Extractor lui-même à 05:30 — voir section 0.
+- **Source quotidienne : `php spark customers:refresh`**, exécuté sur le
+  serveur Extractor lui-même à **05:00** (+ rattrapage 06:00) — section 0.
 - Secours : le push SFTP depuis le serveur source (sections 1 à 3).
+
+Chaque version comprend son CSV (référence officielle) **et** l'index de
+requête DuckDB construit à partir de ce CSV avant l'activation — section 0 bis.
 
 ## 0. Refresh quotidien Oracle → CSV (`customers:refresh`)
 
 ```
 CMS_RFC.TB_CUSTOMERS_LIST (rechargée chaque nuit : génération 04:32, truncate 04:40, chargée à 04:42)
-      │ 05:30  SELECT explicite (25 colonnes, dates DD/MM/YYYY), lecture en flux
+      │ 05:00  SELECT explicite (25 colonnes, dates DD/MM/YYYY), lecture en flux
       ▼
 writable/data/customers_list.csv.tmp     (SHA-256, octets, lignes calculés à l'écriture)
       │ contrôles : fclose OK, taille disque = octets écrits, lignes = COUNT(*) Oracle,
       │             > 0, ≥ 90 % de la version active (sinon refus, --force pour passer)
       ▼
-snapshot:install interne : validation complète, versions/<id>/, bascule current.json,
-lien writable/data/customers_list.csv → version active (Linux)
+snapshot:install interne : validation complète, versions/<id>/, index DuckDB construit
+depuis ce CSV (échec = version rejetée), bascule current.json, purge (jamais une
+version attendue par un export en file), lien writable/data/customers_list.csv (Linux)
+      ▼
+dashboard:warm : pré-calcul du tableau de bord de la nouvelle version
 ```
 
 | Élément | Valeur |
@@ -27,18 +38,61 @@ lien writable/data/customers_list.csv → version active (Linux)
 | Source | Oracle `CMS_RFC.TB_CUSTOMERS_LIST` |
 | Projet (prod Linux) | `/var/www/extractor` |
 | Lancement manuel | `cd /var/www/extractor && php spark customers:refresh` (`--force` : accepter une forte baisse de volume) |
-| Fréquence / heure | quotidienne, **05:30** heure serveur (= Africa/Douala, UTC+1) |
-| Pourquoi 05:30 | mesuré le 2026-09-29 dans Oracle : `UPDATED_AT` 04:32:48, truncate (`LAST_DDL_TIME`) 04:40:46, 3 303 512 insertions enregistrées à 04:41:44 (`ALL_TAB_MODIFICATIONS`) → ~50 min de marge ; si le chargement n'était pas fini, les garde-fous refusent la publication |
-| Installation du cron (root, prod) | `sh docs/snapshot/extractor/install_customers_refresh_cron.sh --user <utilisateur web>` (vérifie `command -v php`, PHP ≥ 8.2 + oci8, droits sur `writable/`, fuseau +0100, puis écrit `/etc/cron.d/extractor-customers-refresh`) ; `--dry-run` pour voir la ligne sans l'écrire |
-| Ligne cron écrite | `30 5 * * * <utilisateur> cd /var/www/extractor && <php résolu> spark customers:refresh >> /var/www/extractor/writable/logs/customers_refresh.log 2>&1` |
+| Fréquence / heure | quotidienne, **05:00** heure serveur (= Africa/Douala, UTC+1), rattrapage **06:00** |
+| Pourquoi 05:00 | besoin métier ; mesuré le 2026-09-29 dans Oracle : `UPDATED_AT` 04:32:48, truncate (`LAST_DDL_TIME`) 04:40:46, 3 303 512 insertions enregistrées à 04:41:44 (`ALL_TAB_MODIFICATIONS`) → ~18 min de marge. Un chargement amont pas fini à 05:00 ne peut pas devenir le snapshot : lignes extraites ≠ `COUNT(*)` initial (`row_count_mismatch`) ou < 90 % de la version active (`volume_drop`) → refus, version active conservée. Le rattrapage de 06:00 (`--skip-if-fresh`) relance alors ; il ne fait rien si 05:00 a réussi (version du jour déjà active) |
+| Installation du cron (root, prod) | `sh docs/snapshot/extractor/install_customers_refresh_cron.sh --user <utilisateur web>` (vérifie `command -v php`, PHP ≥ 8.2 + oci8, `duckdb`, droits sur `writable/`, fuseau +0100, puis écrit `/etc/cron.d/extractor-customers-refresh`) ; `--dry-run` pour voir les lignes sans les écrire ; `--time HH:MM`, `--catch-up HH:MM\|none`, `--duckdb <chemin>` |
+| Lignes cron écrites | `0 5 * * * <utilisateur> cd /var/www/extractor && <php> spark customers:refresh >> …/customers_refresh.log 2>&1 && <php> spark dashboard:warm >> …` puis la même à `0 6` avec `customers:refresh --skip-if-fresh` |
 | Dev Windows | pas de planification : lancement manuel si besoin |
 | Log | `writable/logs/customers_refresh.log` (écrit par la commande, même en manuel ; le `>>` du cron n'ajoute que les erreurs fatales PHP) |
-| Codes retour | `0` nouvelle version active · `1` échec (version précédente conservée) · `3` déjà en cours |
+| Codes retour | `0` nouvelle version active (ou, avec `--skip-if-fresh`, version du jour déjà active) · `1` échec (version précédente conservée) · `3` déjà en cours |
 | Verrou | `writable/data/customers_refresh.lock` (`flock` noyau pris par la commande — cron **et** manuel ; libéré par l'OS si le process meurt ; 2e instance → code 3 `SKIPPED`, sans requête Oracle). Pas de `flock(1)` en plus dans le cron |
-| En cas d'échec | code 1, `FAILED raison=…` dans le log, fichier temporaire supprimé, **version active conservée** (dashboard et exports continuent sur l'ancien snapshot ; le bandeau du dashboard signale l'écart avec Oracle). Pas de nouvel essai automatique : relancer à la main après correction |
+| En cas d'échec | code 1, `FAILED raison=…` dans le log, fichier temporaire supprimé, **version active conservée** (dashboard, filtres et exports continuent sur l'ancien snapshot — jamais sur Oracle). Nouvel essai automatique au rattrapage de 06:00 ; sinon relancer à la main après correction |
 | Fichier de travail | version active = `writable/data/snapshots/customers/versions/<id>/customers_list.csv` (via `current.json`) ; lien pratique `writable/data/customers_list.csv` |
 | Arrêt (SIGTERM/SIGINT) | extraction stoppée, `.tmp` supprimé, version active conservée (pcntl) ; un `kill -9` laisse un `.tmp` supprimé au lancement suivant |
 | Retour arrière | `php spark snapshot:rollback` (version précédente conservée sur disque) |
+
+## 0 bis. Index de requête DuckDB (tableau de bord)
+
+Le tableau de bord filtre, agrège, trie et pagine 3,3 M lignes à chaque clic :
+un parcours du CSV en PHP prend 15 à 22 s par opération. Chaque version
+reçoit donc, à l'installation, un index **dérivé de son propre CSV** :
+`versions/<id>/customers_list.duckdb` (+ `.info.json`), base DuckDB
+interrogée par le binaire `duckdb` (aucune extension PHP ; SQL passé sur
+l'entrée standard via `proc_open`, jamais par un shell ; processus en lecture
+seule, concurrents possibles). Le CSV reste la référence : l'index est
+reconstruit à l'identique depuis lui (`php spark snapshot:index --rebuild`) et
+supprimé avec sa version.
+
+Les règles de filtrage sont exactement celles des exports (`RowMatcher`) : la
+construction normalise chaque ligne avec le même code (valeurs de filtre
+`trim`ées, dates lues par `SnapshotDate`) ; des tests de parité comparent
+DuckDB à un parcours PHP de référence et au comptage des exports.
+
+Choix mesuré le 2026-10-02 sur le vrai fichier (3 302 841 lignes, 811 Mo,
+poste de dev Windows, 8 Go RAM) :
+
+| Moteur | Construction | KPI filtrés | 4 répartitions | page 1 triée | recherche | page 401 |
+|---|---|---|---|---|---|---|
+| PHP (lecture du CSV à chaque requête) | — | 18–22 s (tout en une passe) | (même passe) | 15–17 s | 15–17 s | — |
+| MariaDB 10.4 (table + index) | chargement 89 s + index > 17 min (interrompu) | 3,4–5,8 s (sans index) | 13–21 s | 3,1–6,8 s | 6,8–15 s | 9–26 s |
+| **DuckDB (retenu)** | **109–230 s, 181 Mo** | **0,14–0,24 s** | **0,18–0,5 s** | **0,5–1,2 s** | **0,5–1,4 s** | 0,8–5 s |
+
+Mesures finales via le service réel (cache désactivé) : `count` 50–120 ms,
+`stats` 0,3–0,7 s, compteurs de segmentation 80–110 ms, page de tableau
+0,4–1,2 s ; toute réponse est ensuite servie depuis le cache (clé = version +
+filtres). Mémoire PHP : 8 Mo ; DuckDB : `snapshot.duckdbThreads` (4) et
+`snapshot.duckdbMemoryLimit` (1GB) par requête.
+
+Installation du binaire (prod Linux, une fois, root) :
+
+```
+cd /tmp && curl -fsSLO https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip
+unzip duckdb_cli-linux-amd64.zip && install -o root -g root -m 0755 duckdb /usr/local/bin/duckdb
+sudo -u www-data /usr/local/bin/duckdb -version
+```
+
+Le binaire qui construit un index est le même qui l'interroge (même serveur) ;
+après un changement de version de DuckDB : `php spark snapshot:index --rebuild`.
 
 Avant d'installer le cron, vérifier le fuseau du serveur (`timedatectl`) : le
 cron suit l'heure système, l'application est en `Africa/Douala` (UTC+1).
@@ -197,10 +251,16 @@ le compte d'installation :
 ### 3.2 Configuration Extractor (`.env`)
 
 ```
-snapshot.exportSource = snapshot                 # 'oracle' = retour immédiat à l'ancien export
 snapshot.incomingDir  = /srv/extractor_sftp/incoming   # si SFTP chrooté ; même volume que writable/
 # snapshot.baseDir    = (défaut : writable/data/snapshots/customers)
+# snapshot.duckdbBinary      = /usr/local/bin/duckdb   # défaut : duckdb (PATH)
+# snapshot.duckdbThreads     = 4
+# snapshot.duckdbMemoryLimit = 1GB
 ```
+
+`snapshot.exportSource = oracle` (ancien interrupteur de retour à Oracle) n'est
+plus appliqué : s'il reste dans un `.env`, `php spark export:doctor` le signale
+et toutes les fonctionnalités continuent de lire le snapshot.
 
 `svc_snapshot_install` doit pouvoir écrire dans `writable/data/snapshots/`,
 `writable/logs/` et lire/supprimer dans `incoming/` ; le compte du serveur web
@@ -213,7 +273,10 @@ doit pouvoir **lire** `writable/data/snapshots/`.
 | `php spark snapshot:status` | Snapshot actif, métadonnées, versions, rejets récents |
 | `php spark snapshot:install` | Valider/activer la livraison présente dans `incoming/` (codes : 0 activé, 1 refusé, 2 rien/incomplet, 3 déjà en cours) |
 | `php spark snapshot:rollback [<version>]` | Réactiver la version validée précédente (bascule du pointeur uniquement) |
-| `php spark export:benchmark` | Benchmark CSV puis XLSX depuis le snapshot (aucune requête Oracle) ; `--source oracle` pour la référence historique |
+| `php spark snapshot:index [--rebuild]` | Construire l'index DuckDB manquant de la version active (et des versions d'exports en file) — après un premier déploiement ou un changement de binaire |
+| `php spark dashboard:warm` | Pré-calculer le tableau de bord de la version active (lancé par le cron après un refresh réussi) |
+| `php spark export:doctor` | Vérifier snapshot actif, binaire DuckDB, index de la version active, schéma `export_jobs`, droits |
+| `php spark export:benchmark` | Benchmark CSV puis XLSX depuis le snapshot (aucune requête Oracle) ; `--source oracle` = outil de mesure CLI uniquement |
 
 Journaux Extractor : `writable/logs/log-*.log`, préfixe `[SNAPSHOT]`
 (installation démarrée, activation, échec de validation + raison, snapshot
@@ -230,12 +293,15 @@ Aucun mot de passe ni clé n'est jamais journalisé.
 | Validation échoue | livraison dans `rejected/<id>/reason.json` (CSV supprimé) ; snapshot inchangé ; rc=1 renvoyé à la source |
 | Validation réussit | nouvelle version active ; la précédente reste disponible pour rollback |
 | SQL*Loader échoue ensuite | aucun effet sur le snapshot (chaînes indépendantes) |
+| Index DuckDB impossible à construire | version rejetée ; snapshot actif inchangé |
 | Nouveau snapshot pendant un export | l'export termine sur **sa** version (fichier immuable, pointeur lu une fois) |
-| Aucun snapshot valide | l'export répond « données de référence indisponibles » (503, journalisé) — **aucune** extraction Oracle de secours |
+| Nouveau snapshot avant qu'un export en file soit traité | le job a enregistré sa version (`export_jobs.snapshot_version`) : le worker lit **cette** version, que la purge ne supprime pas tant que le job est en attente ou en cours |
+| Version d'un job supprimée à la main | job en erreur (référence journalisée), jamais une autre version ni Oracle |
+| Aucun snapshot valide, ou pas d'index | filtres, tableau de bord et exports répondent « données de référence indisponibles » (503, journalisé) — **aucune** extraction Oracle de secours |
 
 ## 6. Rollback
 
-1. Données : `php spark snapshot:rollback`.
-2. Code : `snapshot.exportSource = oracle` dans `.env` → exports de nouveau
-   depuis Oracle (le code Oracle n'a pas été supprimé).
+1. Données : `php spark snapshot:rollback` (version précédente, avec son index).
+2. Code : revenir au commit précédent (il n'y a plus d'interrupteur vers
+   Oracle : les fonctionnalités utilisateur lisent le snapshot par conception).
 3. Source : restaurer `load_tb_customers_list.sh.bak.AAAAMMJJ`.

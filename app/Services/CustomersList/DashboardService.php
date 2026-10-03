@@ -2,49 +2,91 @@
 
 namespace App\Services\CustomersList;
 
-use App\Services\OracleExtractionService;
+use App\Services\Snapshot\ActiveSnapshot;
+use App\Services\Snapshot\SnapshotIndex;
+use App\Services\Snapshot\SnapshotQueryEngine;
+use App\Services\Snapshot\SnapshotStore;
+use App\Services\Snapshot\SnapshotUnavailableException;
+use Closure;
 use CodeIgniter\Cache\CacheInterface;
 use Config\Oracle as OracleConfig;
 use Config\Services;
+use Config\Snapshot as SnapshotConfig;
 
 /**
- * Live analytics for the CUSTOMERS_LIST dashboard.
+ * Analytics of the CUSTOMERS_LIST dashboard — filters, KPIs, charts,
+ * segmentation counts, table and count — computed from the ACTIVE SNAPSHOT
+ * only, the very version the exports read (one SnapshotQueryEngine, i.e.
+ * one version, per instance). Never Oracle: Oracle is read by the snapshot
+ * refresh alone; no valid snapshot / index -> SnapshotUnavailableException
+ * (HTTP 503), never a fallback.
  *
- * Everything is computed straight from CMS_RFC.TB_CUSTOMERS_LIST via a small
- * number of aggregate full-table scans (the table has no indexes, but a bare
- * GROUP BY over its ~3.28M narrow rows runs in ~0.5s). Responses are cached
- * per filter set for a few minutes — the source table is refreshed in bulk
- * on a slow cadence, so that staleness is invisible while sparing Oracle a
- * scan on every repeat view.
+ * Results are cached per (version, filters): a version never changes, so a
+ * new version simply starts new keys.
  *
- * The KPI / "active" / "metered" business rules live in Config\Oracle and
- * were derived from the real distinct values in the column (see the data
- * profile in the dashboard plan), never guessed.
+ * The KPI / "active" / "metered" business rules are unchanged and still live
+ * in Config\Oracle (activeStatuses, meteredMeterValues).
  */
 class DashboardService
 {
     private const EMPTY_LABEL = 'Non renseigné';
-    private OracleExtractionService $oracle;
-    private QueryBuilder $queryBuilder;
+
     private OracleConfig $config;
     private CacheInterface $cache;
+    private int $cacheTtl;
 
+    /** @var Closure(): SnapshotQueryEngine */
+    private Closure $engineFactory;
+
+    private ?SnapshotQueryEngine $engine = null;
+
+    /**
+     * @param SnapshotQueryEngine|(callable(): SnapshotQueryEngine)|null $engine
+     *        null = the active version's DuckDB engine, resolved on first use.
+     */
     public function __construct(
-        ?OracleExtractionService $oracle = null,
-        ?QueryBuilder $queryBuilder = null,
+        SnapshotQueryEngine|callable|null $engine = null,
         ?OracleConfig $config = null,
         ?CacheInterface $cache = null,
+        ?SnapshotConfig $snapshotConfig = null,
     ) {
-        $this->config       = $config ?? new OracleConfig();
-        $this->oracle       = $oracle ?? new OracleExtractionService($this->config);
-        $this->queryBuilder = $queryBuilder ?? new QueryBuilder($this->config);
-        $this->cache        = $cache ?? Services::cache();
+        $this->config   = $config ?? new OracleConfig();
+        $this->cache    = $cache ?? Services::cache();
+        $snapshotConfig ??= new SnapshotConfig();
+        $this->cacheTtl = $snapshotConfig->countCacheTtl;
+
+        if ($engine instanceof SnapshotQueryEngine) {
+            $this->engine        = $engine;
+            $this->engineFactory = static fn (): SnapshotQueryEngine => $engine;
+        } elseif ($engine !== null) {
+            $this->engineFactory = Closure::fromCallable($engine);
+        } else {
+            $this->engineFactory = static function () use ($snapshotConfig): SnapshotQueryEngine {
+                $store = new SnapshotStore($snapshotConfig);
+
+                return (new SnapshotIndex($snapshotConfig))->engine($store->active());
+            };
+        }
     }
 
     /**
-     * KPIs + the four chart datasets for a filter set. Two full scans (one for
-     * every KPI figure, one GROUPING SETS scan for the region / status /
-     * segmentation / meter-type distributions).
+     * The engine of this request — resolved once, so every figure of a
+     * request describes the same version.
+     *
+     * @throws SnapshotUnavailableException
+     */
+    public function engine(): SnapshotQueryEngine
+    {
+        return $this->engine ??= ($this->engineFactory)();
+    }
+
+    public function snapshot(): ActiveSnapshot
+    {
+        return $this->engine()->snapshot();
+    }
+
+    /**
+     * KPIs + the four chart datasets for a filter set.
      *
      * @return array{
      *   totalRows:int,
@@ -54,26 +96,15 @@ class DashboardService
      */
     public function stats(FilterCriteria $criteria, bool $fresh = false): array
     {
-        // v4: payload gained kpis.nuiCorrects (v2), kpis.inactifs (v3), then
-        // kpis.totalPct / kpis.reference (v4), every segmentation value
-        // unfolded (v5) — never serve an older entry.
-        return $this->remember('stats_v5_' . $criteria->cacheKey(), $this->config->dashboardCacheTtl, $fresh, function () use ($criteria, $fresh): array {
+        return $this->remember('stats_' . $criteria->cacheKey(), $fresh, function () use ($criteria, $fresh): array {
             // "% du total" of Total clients / Clients actifs / NUI corrects is
             // taken against the unfiltered reference, not the filtered total.
             // Contacts (and the non-displayed cards) keep the filtered total.
-            $ref      = $this->reference($fresh);
-            $where    = $this->queryBuilder->where($criteria);
-            $kpiStmt  = $this->queryBuilder->kpiStatement($where);
-            $distStmt = $this->queryBuilder->distributionsStatement($where);
-
-            $batch = $this->oracle->selectMany([
-                'kpi'  => ['sql' => $kpiStmt['sql'], 'binds' => $kpiStmt['binds']],
-                'dist' => ['sql' => $distStmt['sql'], 'binds' => $distStmt['binds']],
-            ], 500);
-
-            $kpiRow   = $batch['kpi'][0] ?? [];
-            $distRows = $batch['dist'];
-            $total    = (int) ($kpiRow['TOTAL'] ?? 0);
+            $ref     = $this->reference($fresh);
+            $summary = $this->engine()->summary($criteria, array_values($this->config->activeStatuses), array_values($this->config->meteredMeterValues));
+            $k       = $summary['kpis'];
+            $dist    = $summary['distributions'];
+            $total   = $k['total'];
 
             return [
                 'totalRows' => $total,
@@ -81,24 +112,22 @@ class DashboardService
                     'total'        => $total,
                     'totalPct'     => $this->pct($total, $ref['totalClients']),
                     'reference'    => $ref,
-                    'nuiCorrects'  => $this->ratio((int) ($kpiRow['NUI_CORRECT'] ?? 0), $ref['totalNui']),
-                    'actifs'       => $this->ratio((int) ($kpiRow['ACTIFS'] ?? 0), $ref['totalClients']),
-                    'inactifs'     => $this->ratio((int) ($kpiRow['INACTIFS'] ?? 0), $total),
-                    'avecCompteur' => $this->ratio((int) ($kpiRow['AVEC_COMPTEUR'] ?? 0), $total),
-                    'contacts'     => $this->ratio((int) ($kpiRow['CONTACT_OK'] ?? 0), $total),
+                    'nuiCorrects'  => $this->ratio($k['nuiCorrect'], $ref['totalNui']),
+                    'actifs'       => $this->ratio($k['actifs'], $ref['totalClients']),
+                    'inactifs'     => $this->ratio($k['inactifs'], $total),
+                    'avecCompteur' => $this->ratio($k['avecCompteur'], $total),
+                    'contacts'     => $this->ratio($k['contactOk'], $total),
                 ],
                 'charts'    => [
-                    'region'       => $this->distribution($distRows, 'region'),
-                    'status'       => $this->distribution($distRows, 'status'),
+                    'region'       => $this->distribution($dist['region']),
+                    'status'       => $this->distribution($dist['status']),
                     // Every segment, never folded into "Autres": the chart
                     // shows them in the business order (dashboard.js
                     // segmentationChartPairs()), not by volume.
-                    'segmentation' => $this->distribution($distRows, 'segmentation'),
-                    // Répartition des compteurs par type (colonne METER). Chaque
-                    // ligne de la population filtrée tombe dans exactement un
-                    // bucket (les valeurs vides -> "Non renseigné"), donc la
-                    // somme des counts == totalRows.
-                    'meterType'    => $this->distribution($distRows, 'meterType'),
+                    'segmentation' => $this->distribution($dist['segmentation']),
+                    // Every row falls in exactly one METER bucket (blank ->
+                    // "Non renseigné"), so the counts sum to totalRows.
+                    'meterType'    => $this->distribution($dist['meterType']),
                 ],
             ];
         });
@@ -108,8 +137,6 @@ class DashboardService
      * Numbers next to the options of the Segmentation filter: rows per
      * SEGMENTATION value under every active filter EXCEPT the segmentation
      * one (so ticking a segment gives exactly the number shown next to it).
-     * Same WHERE as the KPIs / table (QueryBuilder::where()), one GROUP BY,
-     * cached per filter set like stats().
      *
      * @return list<array{value:string,count:int}>
      */
@@ -117,17 +144,11 @@ class DashboardService
     {
         $scope = $criteria->withoutSegmentations();
 
-        return $this->remember('segcounts_v1_' . $scope->cacheKey(), $this->config->dashboardCacheTtl, $fresh, function () use ($scope): array {
-            $stmt = $this->queryBuilder->segmentationCountsStatement($this->queryBuilder->where($scope));
-            $rows = $this->oracle->select($stmt['sql'], $stmt['binds'], 500)['rows'];
-
-            return $this->distribution(array_map(static fn (array $r): array => $r + ['DIM' => 'segmentation'], $rows), 'segmentation');
-        });
+        return $this->remember('segcounts_' . $scope->cacheKey(), $fresh, fn (): array => $this->distribution($this->engine()->segmentationCounts($scope)));
     }
 
     /**
-     * One page of the data table. `total` is the cached filtered COUNT; the
-     * page itself is a bounded OFFSET/FETCH query (not cached).
+     * One page of the data table. `total` is the cached filtered count.
      *
      * @return array{data:list<array<string,mixed>>, columns:list<string>, page:int, perPage:int, total:int, sort:string, dir:string, search:string}
      */
@@ -154,14 +175,8 @@ class DashboardService
         $dir   = strtolower($dir) === 'desc' ? 'desc' : 'asc';
         $total = $this->count($criteria, $search, $fresh);
 
-        $where   = $this->queryBuilder->withSearch($this->queryBuilder->where($criteria), $search);
-        $orderBy = $this->queryBuilder->orderBy($sort, $dir);
-        $stmt    = $this->queryBuilder->pageStatement($where, $orderBy, $offset, $perPage);
-
-        $result = $this->oracle->select($stmt['sql'], $stmt['binds'], $perPage);
-
         return [
-            'data'    => $result['rows'],
+            'data'    => $this->engine()->page($criteria, $search, $sort, $dir, $offset, $perPage),
             'columns' => QueryBuilder::ALL_COLUMNS,
             'page'    => $page,
             'perPage' => $perPage,
@@ -172,21 +187,15 @@ class DashboardService
         ];
     }
 
+    /** Rows matching the filters (+ the table search) in this version. */
     public function count(FilterCriteria $criteria, string $search = '', bool $fresh = false): int
     {
-        $key = 'count_' . $criteria->cacheKey() . '_' . md5($search);
-
-        return (int) $this->remember($key, $this->config->dashboardCacheTtl, $fresh, function () use ($criteria, $search): int {
-            $where = $this->queryBuilder->withSearch($this->queryBuilder->where($criteria), $search);
-            $stmt  = $this->queryBuilder->countStatement($where);
-
-            return (int) ($this->oracle->select($stmt['sql'], $stmt['binds'], 1)['rows'][0]['N'] ?? 0);
-        });
+        return (int) $this->remember('count_' . $criteria->cacheKey() . '_' . md5($search), $fresh, fn (): int => $this->engine()->count($criteria, $search));
     }
 
     /**
      * How an export of $count rows must be handled — the ONLY input to the
-     * sync/async decision, and $count must be a backend COUNT (never a figure
+     * sync/async decision, and $count must be a backend count (never a figure
      * echoed by the browser).
      *
      * @return 'empty'|'sync'|'async'
@@ -201,149 +210,56 @@ class DashboardService
     }
 
     /**
-     * Everything the filter UI needs: the region -> division -> agence tree,
-     * every distinct value (with counts) for the flat dimensions, and the
-     * DATE_AB min/max. Heavily cached — this only changes when the source
-     * table is rebuilt.
+     * The filter UI's options (value lists with counts, region -> division ->
+     * agence tree, DATE_AB bounds) — computed from this version when it was
+     * installed (SnapshotFilterOptions), so instant.
      *
      * @return array<string, mixed>
      */
-    public function filterOptions(bool $fresh = false): array
+    public function filterOptions(): array
     {
-        return $this->remember('filter-options', $this->config->filterOptionsCacheTtl, $fresh, function (): array {
-            $t = QueryBuilder::TABLE;
-
-            // All three fan-out queries on one connection.
-            $batch = $this->oracle->selectMany([
-                'flat' => ['sql' => "SELECT
-                        CASE
-                            WHEN GROUPING(REGION) = 0 THEN 'regions'
-                            WHEN GROUPING(STATUS) = 0 THEN 'statuses'
-                            WHEN GROUPING(SEGMENTATION) = 0 THEN 'segmentations'
-                            WHEN GROUPING(SEGMENT_TRESOR) = 0 THEN 'segmentsTresor'
-                            WHEN GROUPING(METER) = 0 THEN 'meters'
-                            WHEN GROUPING(VOLTAGE) = 0 THEN 'voltages'
-                            ELSE 'niuQualities'
-                        END DIM,
-                        COALESCE(REGION, STATUS, SEGMENTATION, SEGMENT_TRESOR, METER, VOLTAGE, NUI_QC) VAL,
-                        COUNT(*) N
-                    FROM {$t}
-                    GROUP BY GROUPING SETS ((REGION), (STATUS), (SEGMENTATION), (SEGMENT_TRESOR), (METER), (VOLTAGE), (NUI_QC))"],
-                'geo'    => ['sql' => "SELECT REGION, DIVISION, AGENCE, COUNT(*) N FROM {$t} GROUP BY REGION, DIVISION, AGENCE"],
-                'bounds' => ['sql' => "SELECT TO_CHAR(MIN(DATE_AB), 'YYYY-MM-DD') MN, TO_CHAR(MAX(DATE_AB), 'YYYY-MM-DD') MX FROM {$t}"],
-            ], 3000);
-
-            $flat = $batch['flat'];
-
-            $lists = ['regions' => [], 'statuses' => [], 'segmentations' => [], 'segmentsTresor' => [], 'meters' => [], 'voltages' => [], 'niuQualities' => []];
-            foreach ($flat as $row) {
-                $value = trim((string) ($row['VAL'] ?? ''));
-                // A blank / NULL bucket is shown in the charts (via label())
-                // but is NOT offered as a filter value in v1 — see the plan's
-                // "points restants".
-                if ($value === '') {
-                    continue;
-                }
-                $lists[$row['DIM']][] = ['value' => $value, 'count' => (int) $row['N']];
-            }
-            foreach ($lists as &$list) {
-                usort($list, static fn ($a, $b) => $b['count'] <=> $a['count']);
-            }
-            unset($list);
-
-            $geo = $batch['geo'];
-
-            $tree      = [];
-            $divisions = [];
-            $agences   = [];
-            foreach ($geo as $row) {
-                $region   = $this->label($row['REGION']);
-                $division = $this->label($row['DIVISION']);
-                $agence   = $this->label($row['AGENCE']);
-
-                $tree[$region][$division][] = ['value' => $agence, 'count' => (int) $row['N']];
-                $divisions[$division]       = ($divisions[$division] ?? 0) + (int) $row['N'];
-                $agences[$agence]           = ($agences[$agence] ?? 0) + (int) $row['N'];
-            }
-
-            $bounds = $batch['bounds'][0] ?? ['MN' => null, 'MX' => null];
-
-            // The column holds a handful of obviously-bad dates (year 0980,
-            // etc.). Floor the date-picker minimum so the native control
-            // doesn't open a millennium ago; the filter itself still accepts
-            // any date the user types.
-            $min = $bounds['MN'] ?? null;
-            if ($min !== null && $min < '1990-01-01') {
-                $min = '1990-01-01';
-            }
-
-            // Type de compteur (POSTPAID/PREPAID) <-> Segmentation is a fixed
-            // business mapping, not derived from the data — see
-            // POSTPAID_SEGMENTATIONS / PREPAID_SEGMENTATIONS in dashboard.js.
-            // The PREPAID categories absent from the data are added by
-            // PrepaidSegmentations::completeOptions() (controller /
-            // AllowedValues), not cached here.
-
-            return [
-                'regions'        => $lists['regions'],
-                'divisions'      => $this->pairs($divisions),
-                'agences'        => $this->pairs($agences),
-                'statuses'       => $lists['statuses'],
-                'segmentations'  => $lists['segmentations'],
-                'segmentsTresor' => $lists['segmentsTresor'],
-                'meters'         => $lists['meters'],
-                'voltages'       => $lists['voltages'],
-                'niuQualities'   => $lists['niuQualities'],
-                'geoTree'        => $tree,
-                'dateBounds'     => ['min' => $min, 'max' => $bounds['MX'] ?? null],
-            ];
-        });
+        return $this->snapshot()->filterOptions();
     }
 
-    public function allowedValues(bool $fresh = false): AllowedValues
+    /** The values a filter may take: exactly those present in this version. */
+    public function allowedValues(): AllowedValues
     {
-        return AllowedValues::fromFilterOptions($this->filterOptions($fresh));
+        return AllowedValues::fromFilterOptions($this->filterOptions());
     }
 
     // ---- internals ----------------------------------------------------
 
     /**
-     * @param list<array<string,mixed>> $rows Rows from distributionsStatement().
+     * @param array<string,int> $counts raw value => rows
      *
      * @return list<array{value:string,count:int}>
      */
-    private function distribution(array $rows, string $dim): array
+    private function distribution(array $counts): array
     {
-        $out = [];
-        foreach ($rows as $row) {
-            if (($row['DIM'] ?? null) !== $dim) {
-                continue;
-            }
-            $out[] = ['value' => $this->label($row['VAL'] ?? null), 'count' => (int) ($row['N'] ?? 0)];
+        // Blank / missing values share one "Non renseigné" bucket.
+        $merged = [];
+        foreach ($counts as $value => $count) {
+            $label          = $this->label((string) $value);
+            $merged[$label] = ($merged[$label] ?? 0) + (int) $count;
         }
 
+        $out = [];
+        foreach ($merged as $label => $count) {
+            $out[] = ['value' => (string) $label, 'count' => $count];
+        }
         usort($out, static fn ($a, $b) => $b['count'] <=> $a['count']);
 
         return $out;
     }
 
     /**
-     * Unfiltered totals of the whole table (KPI "% du total" denominators),
-     * cached on their own so a filter change never rescans for them.
+     * Unfiltered totals of the version (KPI "% du total" denominators).
      *
      * @return array{totalClients:int, totalNui:int}
      */
     private function reference(bool $fresh): array
     {
-        return $this->remember('stats_reference_v1', $this->config->dashboardCacheTtl, $fresh, function (): array {
-            $stmt = $this->queryBuilder->referenceStatement();
-            $row  = $this->oracle->selectMany(['ref' => ['sql' => $stmt['sql'], 'binds' => $stmt['binds']]], 1)['ref'][0] ?? [];
-
-            return [
-                'totalClients' => (int) ($row['TOTAL'] ?? 0),
-                'totalNui'     => (int) ($row['NUI_TOTAL'] ?? 0),
-            ];
-        });
+        return $this->remember('reference', $fresh, fn (): array => $this->engine()->reference());
     }
 
     /**
@@ -359,42 +275,27 @@ class DashboardService
         return $total > 0 ? round($part / $total * 100, 1) : 0.0;
     }
 
-    /**
-     * @param array<string,int> $counts
-     *
-     * @return list<array{value:string,count:int}>
-     */
-    private function pairs(array $counts): array
+    private function label(string $value): string
     {
-        arsort($counts);
-
-        $out = [];
-        foreach ($counts as $value => $count) {
-            $out[] = ['value' => (string) $value, 'count' => $count];
-        }
-
-        return $out;
-    }
-
-    private function label(mixed $value): string
-    {
-        $value = trim((string) ($value ?? ''));
+        $value = trim($value);
 
         return $value !== '' ? $value : self::EMPTY_LABEL;
     }
 
     /**
+     * Cached per snapshot version: keys never outlive their version's data.
+     *
      * @template T
      *
      * @param callable():T $compute
      *
      * @return T
      */
-    private function remember(string $key, int $ttl, bool $fresh, callable $compute): mixed
+    private function remember(string $key, bool $fresh, callable $compute): mixed
     {
-        $cacheKey = 'cl_' . $key;
+        $cacheKey = 'cl_snap_' . $this->engine()->version() . '_' . $key;
 
-        if (! $fresh && $ttl > 0) {
+        if (! $fresh && $this->cacheTtl > 0) {
             $cached = $this->cache->get($cacheKey);
             if ($cached !== null) {
                 return $cached;
@@ -403,8 +304,8 @@ class DashboardService
 
         $value = $compute();
 
-        if ($ttl > 0) {
-            $this->cache->save($cacheKey, $value, $ttl);
+        if ($this->cacheTtl > 0) {
+            $this->cache->save($cacheKey, $value, $this->cacheTtl);
         }
 
         return $value;

@@ -191,7 +191,8 @@ final class ExportJobRobustnessTest extends CIUnitTestCase
         // migration's table, progress migration never really applied.
         (new CreateExportJobsTable($this->forge()))->up();
         $this->db->resetDataCache();
-        $this->assertSame(['rows_total', 'rows_processed', 'rows_exported'], ExportJobSchema::missingColumns($this->db));
+        // (+ snapshot_version, added later still: AddSnapshotVersionToExportJobs)
+        $this->assertSame(['snapshot_version', 'rows_total', 'rows_processed', 'rows_exported'], ExportJobSchema::missingColumns($this->db));
 
         (new EnsureExportJobsSchema($this->forge()))->up();
 

@@ -152,12 +152,13 @@ class CustomerListExportService
     /**
      * Row source resolution:
      *   1. $rowSource if given;
-     *   2. else an explicitly injected $oracle / $queryBuilder -> Oracle
-     *      (callers that deliberately target Oracle, e.g. export:bench);
-     *   3. else Config\Snapshot::$exportSource: 'snapshot' (default) -> the
-     *      active local snapshot, 'oracle' -> live Oracle.
-     * With 'snapshot' and no valid snapshot, this throws
-     * SnapshotUnavailableException — there is no silent Oracle fallback.
+     *   2. else an explicitly injected $oracle / $queryBuilder -> Oracle —
+     *      ONLY the CLI measuring tools (export:benchmark, export:perf) do
+     *      that; no user flow passes either;
+     *   3. else the active local snapshot. Always: Config\Snapshot's
+     *      $exportSource = 'oracle' is no longer honoured (user exports read
+     *      the snapshot, Oracle is for the refresh only). No valid snapshot
+     *      -> SnapshotUnavailableException, never an Oracle fallback.
      */
     public function __construct(
         ?OracleExtractionService $oracle = null,
@@ -171,7 +172,7 @@ class CustomerListExportService
         $this->config           = $config ?? new OracleConfig();
         $snapshotConfig       ??= new SnapshotConfig();
         $this->rowSource        = $rowSource ?? (
-            $oracle !== null || $queryBuilder !== null || ! $snapshotConfig->usesSnapshot()
+            $oracle !== null || $queryBuilder !== null
                 ? new OracleRowSource($oracle, $this->config, $queryBuilder)
                 : new SnapshotRowSource(store: new SnapshotStore($snapshotConfig))
         );

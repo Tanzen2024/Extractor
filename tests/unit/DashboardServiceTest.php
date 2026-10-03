@@ -4,104 +4,79 @@ use App\Services\CustomersList\AllowedValues;
 use App\Services\CustomersList\DashboardService;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\InvalidFilterException;
-use App\Services\OracleExtractionService;
+use App\Services\CustomersList\QueryBuilder;
+use App\Services\Snapshot\ActiveSnapshot;
+use App\Services\Snapshot\SnapshotQueryEngine;
 use CodeIgniter\Cache\Handlers\DummyHandler;
 use Config\Oracle as OracleConfig;
 use PHPUnit\Framework\TestCase;
 
 /**
- * DashboardService shapes raw Oracle aggregate rows into KPIs and chart
- * datasets. These tests feed it canned rows (no Oracle) and pin the maths:
- * the "active" rule, the metered rule, the contacts %, the "Autres" fold,
- * the meter-type distribution, and the pagination guard rails.
+ * DashboardService shapes what the snapshot engine counts into KPIs and
+ * chart datasets. These tests feed it canned engine answers (no file, no
+ * Oracle) and pin the maths: the "% du total" denominators, the "Non
+ * renseigné" bucket, no folding of segments, the segmentation-counts scope,
+ * the export decision and the table guard rails. The engine itself is
+ * tested against the real rules in SnapshotDashboardParityTest.
  *
  * @internal
  */
 final class DashboardServiceTest extends TestCase
 {
-    private function service(FakeOracle $oracle): DashboardService
+    private function service(FakeEngine $engine): DashboardService
     {
-        return new DashboardService($oracle, null, new OracleConfig(), new DummyHandler());
+        return new DashboardService($engine, new OracleConfig(), new DummyHandler());
     }
 
-    public function testStatsComputesEveryKpiFromOneAggregateRow(): void
+    private static function kpis(int $total, int $actifs = 0, int $inactifs = 0, int $avecCompteur = 0, int $nuiCorrect = 0, int $contactOk = 0): array
     {
-        $oracle = new FakeOracle([
-            'kpi' => [[
-                'TOTAL' => '1000', 'ACTIFS' => '660', 'AVEC_COMPTEUR' => '383',
-                'PHONE_OK' => '800', 'EMAIL_OK' => '21', 'REFGEO_OK' => '1000',
-                'METERNO_OK' => '984', 'NIU_OK' => '786', 'NAME_OK' => '1000', 'CONTACT_OK' => '804',
-            ]],
-            'ref'  => [['TOTAL' => '1000', 'NUI_TOTAL' => '1000']],
-            'dist' => [
-                ['DIM' => 'region', 'VAL' => 'DCUD', 'N' => '600'],
-                ['DIM' => 'region', 'VAL' => 'DCUY', 'N' => '400'],
-                ['DIM' => 'status', 'VAL' => 'ACTIVE', 'N' => '660'],
-                ['DIM' => 'status', 'VAL' => 'INACTIVE.', 'N' => '340'],
-                ['DIM' => 'segmentation', 'VAL' => null, 'N' => '10'],
-                ['DIM' => 'segmentation', 'VAL' => '8 Autre', 'N' => '990'],
-                ['DIM' => 'meterType', 'VAL' => 'PREPAID', 'N' => '620'],
-                ['DIM' => 'meterType', 'VAL' => 'POSTPAID', 'N' => '300'],
-                ['DIM' => 'meterType', 'VAL' => 'Compteurs Communicants', 'N' => '80'],
-            ],
-        ]);
+        return ['total' => $total, 'actifs' => $actifs, 'inactifs' => $inactifs, 'avecCompteur' => $avecCompteur, 'nuiCorrect' => $nuiCorrect, 'contactOk' => $contactOk];
+    }
 
-        $stats = $this->service($oracle)->stats(FilterCriteria::none());
+    public function testStatsComputesEveryKpiFromTheEngineFigures(): void
+    {
+        $engine = new FakeEngine(
+            kpis: self::kpis(1000, actifs: 660, inactifs: 340, avecCompteur: 383, contactOk: 804),
+            reference: ['totalClients' => 1000, 'totalNui' => 1000],
+            distributions: [
+                'region'       => ['DCUD' => 600, 'DCUY' => 400],
+                'status'       => ['ACTIVE' => 660, 'INACTIVE.' => 340],
+                'segmentation' => ['' => 10, '8 Autre' => 990],
+                'meterType'    => ['PREPAID' => 620, 'POSTPAID' => 300, 'Compteurs Communicants' => 80],
+            ],
+        );
+
+        $stats = $this->service($engine)->stats(FilterCriteria::none());
 
         $this->assertSame(1000, $stats['totalRows']);
-        $this->assertSame(660, $stats['kpis']['actifs']['value']);
-        $this->assertSame(66.0, $stats['kpis']['actifs']['pct']);
+        $this->assertSame(['value' => 660, 'pct' => 66.0], $stats['kpis']['actifs']);
+        $this->assertSame(['value' => 340, 'pct' => 34.0], $stats['kpis']['inactifs']);
         $this->assertSame(383, $stats['kpis']['avecCompteur']['value']);
-        $this->assertSame(804, $stats['kpis']['contacts']['value']);
-        $this->assertSame(80.4, $stats['kpis']['contacts']['pct']);
-
-        // "Type de compteurs" — sorted by count desc, values verbatim from METER.
+        $this->assertSame(['value' => 804, 'pct' => 80.4], $stats['kpis']['contacts']);
         $this->assertSame(
             [['value' => 'PREPAID', 'count' => 620], ['value' => 'POSTPAID', 'count' => 300], ['value' => 'Compteurs Communicants', 'count' => 80]],
             $stats['charts']['meterType'],
         );
-        $this->assertArrayNotHasKey('completeness', $stats['charts']);
+        // The business rules travel to the engine unchanged (Config\Oracle).
+        $this->assertSame(array_values((new OracleConfig())->activeStatuses), $engine->lastKpiArgs['active']);
+        $this->assertSame(array_values((new OracleConfig())->meteredMeterValues), $engine->lastKpiArgs['metered']);
     }
 
-    public function testStatsExposesInactifsAlongsideActifs(): void
+    public function testStatsUsesTheAppliedFilters(): void
     {
-        $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '1000', 'ACTIFS' => '660', 'INACTIFS' => '340', 'AVEC_COMPTEUR' => '0', 'NUI_CORRECT' => '0', 'CONTACT_OK' => '0']],
-            'ref'  => [['TOTAL' => '1000', 'NUI_TOTAL' => '1000']],
-            'dist' => [],
-        ]);
-
-        $stats = $this->service($oracle)->stats(FilterCriteria::none());
-
-        $this->assertSame(['value' => 660, 'pct' => 66.0], $stats['kpis']['actifs']);
-        $this->assertSame(['value' => 340, 'pct' => 34.0], $stats['kpis']['inactifs']);
-        $this->assertStringContainsString('INACTIFS', $oracle->lastQueries['kpi']['sql']);
-    }
-
-    public function testStatsExposesNuiCorrectsComputedUnderTheAppliedFilters(): void
-    {
-        $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '1000', 'ACTIFS' => '1000', 'AVEC_COMPTEUR' => '0', 'NUI_CORRECT' => '795', 'CONTACT_OK' => '0']],
-            'ref'  => [['TOTAL' => '1000', 'NUI_TOTAL' => '1000']],
-            'dist' => [],
-        ]);
+        $engine  = new FakeEngine(kpis: self::kpis(1000, actifs: 1000, nuiCorrect: 795), reference: ['totalClients' => 1000, 'totalNui' => 1000]);
         $allowed = new AllowedValues(
             regions: [], divisions: [], agences: [],
-            statuses: ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVE.'],
+            statuses: ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVE.'],
             segmentations: [], segmentsTresor: [], meters: [], voltages: [], niuQualities: [],
         );
-        $active   = ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)'];
-        $criteria = FilterCriteria::fromRequest(['status' => $active], $allowed);
+        $criteria = FilterCriteria::fromRequest(['status' => ['ACTIVE', 'ACTIVE (PENDING BILLING)']], $allowed);
 
-        $stats = $this->service($oracle)->stats($criteria);
+        $stats = $this->service($engine)->stats($criteria);
 
         $this->assertSame(['value' => 795, 'pct' => 79.5], $stats['kpis']['nuiCorrects']);
-        $kpi = $oracle->lastQueries['kpi'];
-        $this->assertStringContainsString('NUI_CORRECT', $kpi['sql']);
-        $this->assertMatchesRegularExpression('/ WHERE .*STATUS IN \(/s', $kpi['sql']);
-        foreach ($active as $status) {
-            $this->assertContains($status, $kpi['binds']);
-        }
+        $this->assertSame(['ACTIVE', 'ACTIVE (PENDING BILLING)'], $engine->lastKpiArgs['criteria']->statuses);
+        $this->assertSame(['ACTIVE', 'ACTIVE (PENDING BILLING)'], $engine->lastDistributionCriteria->statuses);
     }
 
     /**
@@ -111,18 +86,12 @@ final class DashboardServiceTest extends TestCase
      */
     public function testKpiPercentagesUseTheUnfilteredReferenceDenominators(): void
     {
-        $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '1000000', 'ACTIFS' => '980000', 'INACTIFS' => '20000', 'AVEC_COMPTEUR' => '0', 'NUI_CORRECT' => '900000', 'CONTACT_OK' => '500000']],
-            'ref'  => [['TOTAL' => '2480095', 'NUI_TOTAL' => '2473000']],
-            'dist' => [],
-        ]);
-        $allowed  = new AllowedValues(
-            regions: ['DCUD', 'DCUY'], divisions: [], agences: [], statuses: [],
-            segmentations: [], segmentsTresor: [], meters: [], voltages: [], niuQualities: [],
+        $engine = new FakeEngine(
+            kpis: self::kpis(1000000, actifs: 980000, inactifs: 20000, nuiCorrect: 900000, contactOk: 500000),
+            reference: ['totalClients' => 2480095, 'totalNui' => 2473000],
         );
-        $criteria = FilterCriteria::fromRequest(['region' => ['DCUD']], $allowed);
 
-        $k = $this->service($oracle)->stats($criteria)['kpis'];
+        $k = $this->service($engine)->stats(FilterCriteria::fromArray(['regions' => ['DCUD']]))['kpis'];
 
         $this->assertSame(1000000, $k['total']);
         $this->assertSame(40.3, $k['totalPct']);                                  // 1 000 000 / 2 480 095
@@ -134,145 +103,87 @@ final class DashboardServiceTest extends TestCase
 
     public function testUnfilteredTotalIsHundredPercentAndActifsIsOverTheGlobalTotal(): void
     {
-        $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '2480095', 'ACTIFS' => '2430857', 'AVEC_COMPTEUR' => '0', 'NUI_CORRECT' => '2272992', 'CONTACT_OK' => '0']],
-            'ref'  => [['TOTAL' => '2480095', 'NUI_TOTAL' => '2480095']],
-            'dist' => [],
-        ]);
+        $engine = new FakeEngine(kpis: self::kpis(2480095, actifs: 2430857, nuiCorrect: 2272992), reference: ['totalClients' => 2480095, 'totalNui' => 2480095]);
 
-        $k = $this->service($oracle)->stats(FilterCriteria::none())['kpis'];
+        $k = $this->service($engine)->stats(FilterCriteria::none())['kpis'];
 
         $this->assertSame(100.0, $k['totalPct']);
         $this->assertSame(98.0, $k['actifs']['pct']);
         $this->assertSame(91.6, $k['nuiCorrects']['pct']);
     }
 
-    public function testEmptyReferenceNeverDividesByZero(): void
+    public function testEmptyReferenceAndZeroTotalNeverDivideByZero(): void
     {
-        $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '5', 'ACTIFS' => '5', 'AVEC_COMPTEUR' => '0', 'NUI_CORRECT' => '5', 'CONTACT_OK' => '0']],
-            'ref'  => [['TOTAL' => '0', 'NUI_TOTAL' => '0']],
-            'dist' => [],
-        ]);
-
-        $k = $this->service($oracle)->stats(FilterCriteria::none())['kpis'];
-
+        $k = $this->service(new FakeEngine(kpis: self::kpis(5, actifs: 5, nuiCorrect: 5), reference: ['totalClients' => 0, 'totalNui' => 0]))->stats(FilterCriteria::none())['kpis'];
         $this->assertSame(0.0, $k['totalPct']);
         $this->assertSame(0.0, $k['actifs']['pct']);
         $this->assertSame(0.0, $k['nuiCorrects']['pct']);
+
+        $stats = $this->service(new FakeEngine(kpis: self::kpis(0)))->stats(FilterCriteria::none());
+        $this->assertSame(0, $stats['totalRows']);
+        $this->assertSame(0.0, $stats['kpis']['actifs']['pct']);
+        $this->assertSame(0.0, $stats['kpis']['contacts']['pct']);
     }
 
     public function testStatsShapesTheDistributionsAndNeverFoldsTheSegmentation(): void
     {
-        $dist = [
-            ['DIM' => 'region', 'VAL' => 'DCUD', 'N' => '10'],
-            ['DIM' => 'meterType', 'VAL' => 'PREPAID', 'N' => '7'],
-            ['DIM' => 'meterType', 'VAL' => 'POSTPAID', 'N' => '3'],
-        ];
+        $segments = [];
         for ($i = 0; $i < 12; $i++) {
-            $dist[] = ['DIM' => 'segmentation', 'VAL' => "S{$i}", 'N' => (string) (100 - $i)];
+            $segments["S{$i}"] = 100 - $i;
         }
-
-        $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '100', 'ACTIFS' => '0', 'AVEC_COMPTEUR' => '0', 'CONTACT_OK' => '0']],
-            'dist' => $dist,
+        $engine = new FakeEngine(kpis: self::kpis(100), distributions: [
+            'region' => ['DCUD' => 10], 'status' => [], 'segmentation' => $segments, 'meterType' => ['PREPAID' => 7, 'POSTPAID' => 3],
         ]);
 
-        $charts = $this->service($oracle)->stats(FilterCriteria::none())['charts'];
+        $charts = $this->service($engine)->stats(FilterCriteria::none())['charts'];
 
         $this->assertCount(1, $charts['region']);
         $this->assertSame([], $charts['status']);
-        // Every segment kept (the chart orders them by business rule — no
-        // "Autres" bucket merging real segments), total unchanged.
         $this->assertCount(12, $charts['segmentation']);
         $this->assertNotContains('Autres', array_column($charts['segmentation'], 'value'));
         $this->assertSame(array_sum(range(89, 100)), array_sum(array_column($charts['segmentation'], 'count')));
-        // meter-type distribution is NOT folded — every real type is shown.
         $this->assertCount(2, $charts['meterType']);
         $this->assertSame('PREPAID', $charts['meterType'][0]['value']);
     }
 
-    public function testNullDistributionValueBecomesTheEmptyLabel(): void
+    public function testBlankValuesShareOneNonRenseigneBucketAndCountsSumToTheTotal(): void
     {
-        $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '5', 'ACTIFS' => '0', 'AVEC_COMPTEUR' => '0', 'PHONE_OK' => '0', 'EMAIL_OK' => '0', 'REFGEO_OK' => '0', 'METERNO_OK' => '0', 'NIU_OK' => '0', 'NAME_OK' => '0', 'CONTACT_OK' => '0']],
-            'dist' => [['DIM' => 'status', 'VAL' => null, 'N' => '5']],
+        // The snapshot stores a blank as '' — a value of only spaces is blank too.
+        $engine = new FakeEngine(kpis: self::kpis(100000), distributions: [
+            'region' => [], 'status' => ['' => 5],
+            'segmentation' => [], 'meterType' => ['PREPAID' => 60000, 'POSTPAID' => 35000, '' => 4000, ' ' => 1000],
         ]);
 
-        $status = $this->service($oracle)->stats(FilterCriteria::none())['charts']['status'];
-
-        $this->assertSame('Non renseigné', $status[0]['value']);
-    }
-
-    public function testMeterTypeDistributionSumsToTheTotalAndLabelsTheBlankBucket(): void
-    {
-        // COHÉRENCE (mandat §17) : la somme des types == totalRows, valeurs
-        // NULL/vides -> bucket "Non renseigné" (jamais supprimées en silence).
-        $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '100000', 'ACTIFS' => '0', 'AVEC_COMPTEUR' => '0', 'CONTACT_OK' => '0']],
-            'dist' => [
-                ['DIM' => 'meterType', 'VAL' => 'PREPAID', 'N' => '60000'],
-                ['DIM' => 'meterType', 'VAL' => 'POSTPAID', 'N' => '35000'],
-                ['DIM' => 'meterType', 'VAL' => null, 'N' => '5000'],
-            ],
-        ]);
-
-        $stats     = $this->service($oracle)->stats(FilterCriteria::none());
+        $stats     = $this->service($engine)->stats(FilterCriteria::none());
         $meterType = $stats['charts']['meterType'];
 
-        $this->assertSame(100000, array_sum(array_column($meterType, 'count')));
+        $this->assertSame('Non renseigné', $stats['charts']['status'][0]['value']);
         $this->assertSame($stats['totalRows'], array_sum(array_column($meterType, 'count')));
-        $this->assertSame('Non renseigné', end($meterType)['value']);
-        $this->assertSame(5000, end($meterType)['count']);
-    }
-
-    public function testZeroTotalNeverDividesByZero(): void
-    {
-        $oracle = new FakeOracle([
-            'kpi'  => [['TOTAL' => '0', 'ACTIFS' => '0', 'AVEC_COMPTEUR' => '0', 'PHONE_OK' => '0', 'EMAIL_OK' => '0', 'REFGEO_OK' => '0', 'METERNO_OK' => '0', 'NIU_OK' => '0', 'NAME_OK' => '0', 'CONTACT_OK' => '0']],
-            'dist' => [],
-        ]);
-
-        $stats = $this->service($oracle)->stats(FilterCriteria::none());
-
-        $this->assertSame(0, $stats['totalRows']);
-        $this->assertSame(0.0, $stats['kpis']['actifs']['pct']);
+        $this->assertSame(['value' => 'Non renseigné', 'count' => 5000], end($meterType));
     }
 
     /**
      * Regression for "199 lignes classé comme export volumineux (0 lignes)":
-     * the count that drives the export decision is DashboardService::count(),
-     * which for a given criteria must equal the total the modal shows
-     * (stats()['totalRows']) for the same criteria — same QueryBuilder WHERE.
+     * the count driving the export decision equals the total the modal shows.
      */
     public function testCountMatchesTheStatsTotalForTheSameCriteria(): void
     {
-        $oracle = new FakeOracle([
-            'kpi'   => [['TOTAL' => '199', 'ACTIFS' => '150', 'AVEC_COMPTEUR' => '80', 'PHONE_OK' => '0', 'EMAIL_OK' => '0', 'REFGEO_OK' => '0', 'METERNO_OK' => '0', 'NIU_OK' => '0', 'NAME_OK' => '0', 'CONTACT_OK' => '0']],
-            'dist'  => [],
-            'count' => [['N' => '199']],
-        ]);
-        $svc = $this->service($oracle);
+        $svc = $this->service(new FakeEngine(kpis: self::kpis(199, actifs: 150), count: 199));
 
-        $criteria = FilterCriteria::none();
-        $this->assertSame(199, $svc->stats($criteria)['totalRows']);
-        $this->assertSame(199, $svc->count($criteria));
+        $this->assertSame(199, $svc->stats(FilterCriteria::none())['totalRows']);
+        $this->assertSame(199, $svc->count(FilterCriteria::none()));
     }
 
     /**
-     * Numbers next to the Segmentation options: every active filter (meter
-     * type, region, status, …) EXCEPT the segmentation one, one GROUP BY.
+     * Numbers next to the Segmentation options: every active filter EXCEPT
+     * the segmentation one.
      */
     public function testSegmentationCountsUseEveryFilterExceptTheSegmentationOne(): void
     {
-        $oracle = new FakeOracle(['segs' => [
-            ['VAL' => '2 RELIABLE', 'N' => '7057'],
-            ['VAL' => '1 PERFECT', 'N' => '1248'],
-            ['VAL' => null, 'N' => '3'],
-        ]]);
+        $engine = new FakeEngine(segmentationCounts: ['2 RELIABLE' => 7057, '1 PERFECT' => 1248, '' => 3]);
 
-        $counts = $this->service($oracle)->segmentationCounts(FilterCriteria::fromArray([
-            'meters' => ['COMPTEURS COMMUNICANTS'], 'regions' => ['DCUD'], 'statuses' => ['ACTIVE'], 'segmentations' => ['1 PERFECT'],
+        $counts = $this->service($engine)->segmentationCounts(FilterCriteria::fromArray([
+            'meters' => ['Compteurs Communicants'], 'regions' => ['DCUD'], 'statuses' => ['ACTIVE'], 'segmentations' => ['1 PERFECT'],
         ]));
 
         $this->assertSame([
@@ -280,41 +191,35 @@ final class DashboardServiceTest extends TestCase
             ['value' => '1 PERFECT', 'count' => 1248],
             ['value' => 'Non renseigné', 'count' => 3],
         ], $counts);
-
-        $sql = $oracle->lastSelect['sql'];
-        $this->assertStringContainsString('METER IN', $sql);
-        $this->assertStringContainsString('REGION IN', $sql);
-        $this->assertStringContainsString('STATUS IN', $sql);
-        $this->assertStringNotContainsString('SEGMENTATION IN', $sql);
-        $this->assertStringContainsString('GROUP BY SEGMENTATION', $sql);
-        $this->assertEqualsCanonicalizing(['COMPTEURS COMMUNICANTS', 'DCUD', 'ACTIVE'], array_values($oracle->lastSelect['binds']));
+        $scope = $engine->lastSegmentationCriteria;
+        $this->assertSame(['Compteurs Communicants'], $scope->meters);
+        $this->assertSame(['DCUD'], $scope->regions);
+        $this->assertSame(['ACTIVE'], $scope->statuses);
+        $this->assertSame([], $scope->segmentations);
     }
 
     public function testExportDecisionUsesOnlyTheBackendCount(): void
     {
-        $svc = $this->service(new FakeOracle([]));
+        $svc = $this->service(new FakeEngine());
         $max = (new OracleConfig())->exportSyncMaxRows; // 150 000
 
         $this->assertSame('empty', $svc->exportDecision(0));
         $this->assertSame('empty', $svc->exportDecision(-3));
         $this->assertSame('sync', $svc->exportDecision(1));
-        $this->assertSame('sync', $svc->exportDecision(199));           // the bug's number
-        $this->assertSame('sync', $svc->exportDecision($max));          // exactly at the threshold
+        $this->assertSame('sync', $svc->exportDecision(199));
+        $this->assertSame('sync', $svc->exportDecision($max));
         $this->assertSame('async', $svc->exportDecision($max + 1));
         $this->assertSame('async', $svc->exportDecision(1_683_192));
     }
 
-    public function testRowsReturnsPageMetadataAndTheCachedTotal(): void
+    public function testRowsReturnsPageMetadataTheCountAndTheEnginePage(): void
     {
-        $oracle = new FakeOracle([
-            'count' => [['N' => '4230']],
-            'page'  => [
-                ['REGION' => 'DCUD', 'CONTRACT' => '1', 'CUST_NAME' => 'A'],
-                ['REGION' => 'DCUY', 'CONTRACT' => '2', 'CUST_NAME' => 'B'],
-            ],
+        $engine = new FakeEngine(count: 4230, page: [
+            ['REGION' => 'DCUD', 'CONTRACT' => '1', 'CUST_NAME' => 'A'],
+            ['REGION' => 'DCUY', 'CONTRACT' => '2', 'CUST_NAME' => 'B'],
         ]);
 
-        $result = $this->service($oracle)->rows(FilterCriteria::none(), 3, 20, 'CUST_NAME', 'desc', 'dupont');
+        $result = $this->service($engine)->rows(FilterCriteria::none(), 3, 20, 'CUST_NAME', 'desc', 'dupont');
 
         $this->assertSame(4230, $result['total']);
         $this->assertSame(3, $result['page']);
@@ -322,126 +227,141 @@ final class DashboardServiceTest extends TestCase
         $this->assertSame('CUST_NAME', $result['sort']);
         $this->assertSame('desc', $result['dir']);
         $this->assertCount(2, $result['data']);
-        $this->assertSame(\App\Services\CustomersList\QueryBuilder::ALL_COLUMNS, $result['columns']);
+        $this->assertSame(QueryBuilder::ALL_COLUMNS, $result['columns']);
+        $this->assertSame(['dupont', 'CUST_NAME', 'desc', 40, 20], $engine->lastPageArgs);
+        $this->assertSame('dupont', $engine->lastCountSearch, 'the total counts the searched rows');
     }
 
     public function testRowsNormalisesAnUnknownSortAndPerPage(): void
     {
-        $oracle = new FakeOracle(['count' => [['N' => '0']], 'page' => []]);
-
-        $result = $this->service($oracle)->rows(FilterCriteria::none(), 1, 999, 'HACK', 'x');
+        $engine = new FakeEngine();
+        $result = $this->service($engine)->rows(FilterCriteria::none(), 1, 999, 'HACK', 'x');
 
         $this->assertSame(50, $result['perPage']);
         $this->assertSame('CONTRACT', $result['sort']); // default
         $this->assertSame('asc', $result['dir']);
+        $this->assertNull($engine->lastPageArgs[1], 'an unknown sort never reaches the engine');
     }
 
     public function testRowsRefusesTooDeepAPage(): void
     {
-        $oracle = new FakeOracle(['count' => [['N' => '9999999']], 'page' => []]);
-
         $this->expectException(InvalidFilterException::class);
         // offset = (page-1) * perPage = 99999 * 200 -> well past tableMaxOffset
-        $this->service($oracle)->rows(FilterCriteria::none(), 100000, 200, null, 'asc');
+        $this->service(new FakeEngine())->rows(FilterCriteria::none(), 100000, 200, null, 'asc');
     }
 
-    public function testFilterOptionsBuildsTheGeoTreeAndValueLists(): void
+    public function testFilterOptionsAndAllowedValuesComeFromTheSnapshotVersion(): void
     {
-        $oracle = new FakeOracle([]);
-        $oracle->many = [
-            'flat' => [
-                ['DIM' => 'regions', 'VAL' => 'DCUD', 'N' => '600'],
-                ['DIM' => 'regions', 'VAL' => 'DCUY', 'N' => '400'],
-                ['DIM' => 'statuses', 'VAL' => 'ACTIVE', 'N' => '900'],
-                ['DIM' => 'statuses', 'VAL' => null, 'N' => '5'],   // blank bucket excluded from options
-                ['DIM' => 'meters', 'VAL' => 'PREPAID', 'N' => '1000'],
-            ],
-            'geo' => [
-                ['REGION' => 'DCUD', 'DIVISION' => 'DVC A', 'AGENCE' => 'CSC_1', 'N' => '300'],
-                ['REGION' => 'DCUD', 'DIVISION' => 'DVC A', 'AGENCE' => 'CSC_2', 'N' => '300'],
-                ['REGION' => 'DCUY', 'DIVISION' => 'DVC B', 'AGENCE' => 'CSC_3', 'N' => '400'],
-            ],
-            'bounds' => [['MN' => '0980-07-01', 'MX' => '2026-08-25']],
+        $options = [
+            'regions' => [['value' => 'DRE', 'count' => 1]], 'divisions' => [['value' => 'D', 'count' => 1]], 'agences' => [['value' => 'A', 'count' => 1]],
+            'statuses' => [['value' => 'ACTIVE', 'count' => 1]], 'segmentations' => [], 'segmentsTresor' => [], 'meters' => [], 'voltages' => [], 'niuQualities' => [],
+            'geoTree' => ['DRE' => ['D' => [['value' => 'A', 'count' => 1]]]], 'dateBounds' => ['min' => '2000-01-01', 'max' => '2020-01-01'],
         ];
+        $svc = $this->service(new FakeEngine(filterOptions: $options));
 
-        $options = $this->service($oracle)->filterOptions();
-
-        $this->assertSame(['DCUD', 'DCUY'], array_column($options['regions'], 'value'));
-        $this->assertSame(['ACTIVE'], array_column($options['statuses'], 'value')); // null bucket dropped
-        $this->assertArrayHasKey('DCUD', $options['geoTree']);
-        $this->assertArrayHasKey('DVC A', $options['geoTree']['DCUD']);
-        $this->assertCount(2, $options['geoTree']['DCUD']['DVC A']);
-        $this->assertSame('1990-01-01', $options['dateBounds']['min']); // clamped
-        $this->assertSame('2026-08-25', $options['dateBounds']['max']);
+        $this->assertSame($options, $svc->filterOptions());
+        $this->assertInstanceOf(AllowedValues::class, $svc->allowedValues());
+        $this->assertSame(['DRE'], $svc->allowedValues()->regions);
+        $this->assertSame(['ACTIVE'], $svc->allowedValues()->statuses);
     }
 
-    public function testAllowedValuesDerivesFromFilterOptions(): void
+    public function testCacheKeysBelongToTheSnapshotVersion(): void
     {
-        $oracle = new FakeOracle([]);
-        $oracle->many = [
-            'flat'   => [['DIM' => 'regions', 'VAL' => 'DRE', 'N' => '1']],
-            'geo'    => [['REGION' => 'DRE', 'DIVISION' => 'D', 'AGENCE' => 'A', 'N' => '1']],
-            'bounds' => [['MN' => '2000-01-01', 'MX' => '2020-01-01']],
-        ];
+        $cache = new class () extends DummyHandler {
+            public array $saved = [];
 
-        $allowed = $this->service($oracle)->allowedValues();
+            public function save(string $key, $value, int $ttl = 60): bool
+            {
+                $this->saved[] = $key;
 
-        $this->assertInstanceOf(AllowedValues::class, $allowed);
-        $this->assertSame(['DRE'], $allowed->regions);
+                return true;
+            }
+        };
+        $svc = new DashboardService(new FakeEngine(kpis: self::kpis(1), count: 1), new OracleConfig(), $cache);
+        $svc->stats(FilterCriteria::none());
+        $svc->count(FilterCriteria::none());
+
+        $this->assertNotEmpty($cache->saved);
+        foreach ($cache->saved as $key) {
+            $this->assertStringStartsWith('cl_snap_20261002T050000_aaaaaaaa_', $key, 'a new version never reads an older version\'s figures');
+        }
     }
 }
 
 /**
- * Test double for OracleExtractionService — returns canned rows keyed by the
- * "shape" of the query (kpi / dist / count / page for select(); the map for
- * selectMany()).
+ * Canned SnapshotQueryEngine — records the criteria / arguments it receives.
  */
-final class FakeOracle extends OracleExtractionService
+final class FakeEngine implements SnapshotQueryEngine
 {
-    /** @var array<string, list<array<string,mixed>>> */
-    public array $many = [];
+    public array $lastKpiArgs = [];
+    public ?FilterCriteria $lastDistributionCriteria = null;
+    public ?FilterCriteria $lastSegmentationCriteria = null;
+    public array $lastPageArgs = [];
+    public ?string $lastCountSearch = null;
 
-    /** @param array<string, list<array<string,mixed>>> $canned */
-    public function __construct(private array $canned)
-    {
-        // no parent ctor — we never connect
+    public function __construct(
+        private readonly array $kpis = ['total' => 0, 'actifs' => 0, 'inactifs' => 0, 'avecCompteur' => 0, 'nuiCorrect' => 0, 'contactOk' => 0],
+        private readonly array $reference = ['totalClients' => 0, 'totalNui' => 0],
+        private readonly array $distributions = ['region' => [], 'status' => [], 'segmentation' => [], 'meterType' => []],
+        private readonly array $segmentationCounts = [],
+        private readonly int $count = 0,
+        private readonly array $page = [],
+        private readonly array $filterOptions = [],
+    ) {
     }
 
-    /** @var array{sql:string, binds:array<string,mixed>}|null last select() */
-    public ?array $lastSelect = null;
-
-    public function select(string $sql, array $binds = [], int $maxRows = 5000): array
+    public function version(): string
     {
-        $this->lastSelect = ['sql' => $sql, 'binds' => $binds];
-        $key = $this->classify($sql);
-        $rows = $this->canned[$key] ?? [];
-
-        return ['columns' => $rows === [] ? [] : array_keys($rows[0]), 'rows' => $rows];
+        return '20261002T050000_aaaaaaaa';
     }
 
-    /** @var array<string, array{sql:string, binds:array<string,mixed>}> last selectMany() batch */
-    public array $lastQueries = [];
-
-    public function selectMany(array $queries, int $maxRows = 5000): array
+    public function snapshot(): ActiveSnapshot
     {
-        $this->lastQueries = $queries;
-        $out = [];
-        foreach ($queries as $k => $spec) {
-            $out[$k] = $this->many[$k] ?? ($this->canned[$this->classify($spec['sql'])] ?? []);
-        }
-
-        return $out;
+        return new ActiveSnapshot($this->version(), '/dev/null', ['rows' => 0, 'delimiter' => '#', 'filter_options' => $this->filterOptions]);
     }
 
-    private function classify(string $sql): string
+    public function count(FilterCriteria $criteria, string $search = ''): int
     {
-        if (str_contains($sql, 'NUI_TOTAL'))           { return 'ref'; }
-        if (str_contains($sql, 'CONTACT_OK'))          { return 'kpi'; }
-        if (str_contains($sql, 'GROUPING SETS'))       { return 'dist'; }
-        if (str_contains($sql, 'GROUP BY SEGMENTATION')) { return 'segs'; }
-        if (str_contains($sql, 'COUNT(*) N'))          { return 'count'; }
-        if (str_contains($sql, 'FETCH NEXT'))          { return 'page'; }
+        $this->lastCountSearch = $search;
 
-        return 'other';
+        return $this->count;
+    }
+
+    public function kpis(FilterCriteria $criteria, array $activeStatuses, array $meteredMeters): array
+    {
+        $this->lastKpiArgs = ['criteria' => $criteria, 'active' => $activeStatuses, 'metered' => $meteredMeters];
+
+        return $this->kpis;
+    }
+
+    public function summary(FilterCriteria $criteria, array $activeStatuses, array $meteredMeters): array
+    {
+        return ['kpis' => $this->kpis($criteria, $activeStatuses, $meteredMeters), 'distributions' => $this->distributions($criteria)];
+    }
+
+    public function reference(): array
+    {
+        return $this->reference;
+    }
+
+    public function distributions(FilterCriteria $criteria): array
+    {
+        $this->lastDistributionCriteria = $criteria;
+
+        return $this->distributions;
+    }
+
+    public function segmentationCounts(FilterCriteria $criteria): array
+    {
+        $this->lastSegmentationCriteria = $criteria;
+
+        return $this->segmentationCounts;
+    }
+
+    public function page(FilterCriteria $criteria, string $search, ?string $sort, string $dir, int $offset, int $limit): array
+    {
+        $this->lastPageArgs = [$search, $sort, $dir, $offset, $limit];
+
+        return $this->page;
     }
 }

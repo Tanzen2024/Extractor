@@ -12,56 +12,50 @@ use App\Services\CustomersList\QueryBuilder;
 use App\Services\Snapshot\SnapshotRowSource;
 use App\Services\Snapshot\SnapshotUnavailableException;
 use Config\Oracle as OracleConfig;
-use Config\Snapshot as SnapshotConfig;
 use Throwable;
 
 /**
- * The CUSTOMERS_LIST analytics dashboard.
+ * The CUSTOMERS_LIST analytics dashboard — every figure from the ACTIVE
+ * SNAPSHOT, the very version the exports read:
  *
- * Sources (Config\Snapshot::$exportSource = 'snapshot', the default):
- *   - the ACTIVE SNAPSHOT — the very file the exports read — for the filter
- *     options (and the validation of every filter), the row count shown as
- *     "Total" / "Résultats" (GET /dashboard/count, the export's own
- *     SnapshotRowSource::count(), same RowMatcher, same cache) and the
- *     exports themselves: what the user counts is what they export;
- *   - live CMS_RFC.TB_CUSTOMERS_LIST for the analytics that need SQL
- *     aggregation or paging (KPI ratios, charts, table page) — the page
- *     flags when that live base holds a different number of rows.
- * With exportSource = 'oracle' (rollback) everything is live Oracle again.
+ *   filter options + filter validation, KPIs, charts, segmentation counts,
+ *   table (search / sort / pages), count, CSV / XLSX exports.
  *
- *   GET  /dashboard                  the page shell (+ filter options island)
+ * Each request resolves ONE version (DashboardService::engine(), its DuckDB
+ * index) and uses it for everything it answers; an export job records that
+ * version (export_jobs.snapshot_version) and is generated from it, even
+ * after a newer version is activated. Oracle is never read here: no valid
+ * snapshot (or its index) -> a controlled 503, never a fallback.
+ *
+ *   GET  /dashboard                  the page shell (no data access)
  *   GET  /dashboard/stats            KPIs + chart datasets for a filter set
- *   GET  /dashboard/count            rows matching the filters in the snapshot (+ its metadata)
+ *   GET  /dashboard/count            rows matching the filters (+ snapshot metadata)
  *   GET  /dashboard/rows             one server-side page of the data table
+ *   GET  /dashboard/segmentation-counts  rows per segmentation for the other filters
  *   GET  /dashboard/filter-options   region→division→agence tree + value lists
  *   POST /dashboard/export           run (small) or queue (large) a filtered export
  *   GET  /dashboard/export/download  one-shot signed download of a sync export
  *
- * Every AJAX endpoint validates the incoming filters against the real
- * column values of the source the filter options came from (the snapshot's,
- * see criteria()) before touching any data; an unknown value is a 422, a
- * data failure a sanitised 503.
+ * Every AJAX endpoint validates the incoming filters against the values of
+ * the version it reads; an unknown value is a 422, a data failure a
+ * sanitised 503.
  */
 class DashboardController extends BaseController
 {
     private DashboardService $dashboard;
     private OracleConfig $oracleConfig;
 
-    /** Memo of snapshotSource(): false = not resolved yet. */
-    private SnapshotRowSource|false|null $snapshotSource = false;
-
     public function __construct()
     {
+        // Engine resolved lazily, once per request (one version per request).
         $this->dashboard    = new DashboardService();
         $this->oracleConfig = new OracleConfig();
     }
 
     public function index()
     {
-        // The page shell never touches Oracle — it renders instantly and the
-        // browser then fetches filter-options / stats / rows in parallel
-        // (each behind a skeleton). Keeps first paint fast even when a cold
-        // aggregate scan takes a few seconds.
+        // The page shell reads no data — it renders instantly and the browser
+        // then fetches filter-options / stats / rows in parallel.
         session()->close();
 
         return view('dashboard/index', [
@@ -87,59 +81,37 @@ class DashboardController extends BaseController
 
     public function stats()
     {
-        return $this->guarded(function () {
-            $criteria = $this->criteria();
-            $fresh    = $this->request->getGet('fresh') === '1';
+        session()->close();
 
-            return $this->response->setJSON($this->dashboard->stats($criteria, $fresh));
+        return $this->guarded(function () {
+            $fresh = $this->request->getGet('fresh') === '1';
+
+            return $this->response->setJSON($this->dashboard->stats($this->criteria(), $fresh));
         });
     }
 
     /**
-     * Rows matching the filters in the active snapshot — the export's own
-     * count (SnapshotRowSource::count(): same RowMatcher, same per-version
-     * cache as POST /dashboard/export, so launching the export afterwards
-     * reuses it). No filter = the row count validated at install (instant);
-     * filters = one streaming pass, cached per (version, filters).
-     *
-     * Releases the session lock first: a new filter set can take seconds
-     * and must not hold up /stats and /rows, requested alongside it.
+     * Rows matching the filters in the active snapshot — the count the
+     * export decision uses too (POST /dashboard/export), same engine, same
+     * cache. Session lock released first: it runs alongside /stats and /rows.
      */
     public function count()
     {
         session()->close();
 
         return $this->guarded(function () {
-            if (! (new SnapshotConfig())->usesSnapshot()) {
-                return $this->response->setJSON([
-                    'count'    => $this->dashboard->count($this->criteria()),
-                    'source'   => 'oracle',
-                    'snapshot' => null,
-                ]);
-            }
-
-            try {
-                $source = $this->snapshotSource();
-            } catch (SnapshotUnavailableException $e) {
-                return $this->snapshotUnavailable($e);
-            }
-
-            $criteria = FilterCriteria::fromRequest($this->request->getGet(), $source->allowedValues());
-
             return $this->response->setJSON([
-                'count'    => $source->count($criteria),
+                'count'    => $this->dashboard->count($this->criteria()),
                 'source'   => 'snapshot',
-                'snapshot' => $this->snapshotInfo($source),
+                'snapshot' => $this->snapshotInfo(),
             ]);
         });
     }
 
     /**
      * GET /dashboard/segmentation-counts — the numbers next to each option of
-     * the Segmentation filter, for the filters currently in the form (sent
-     * like /stats; the segmentation filter itself is ignored). Live Oracle,
-     * same WHERE as the KPIs and the table. Session lock released first:
-     * it runs alongside /stats and /rows.
+     * the Segmentation filter, for the filters currently in the form (the
+     * segmentation filter itself is ignored).
      */
     public function segmentationCounts()
     {
@@ -154,11 +126,13 @@ class DashboardController extends BaseController
 
     public function rows()
     {
+        session()->close();
+
         return $this->guarded(function () {
             $criteria = $this->criteria();
             $get      = $this->request->getGet();
 
-            $result = $this->dashboard->rows(
+            return $this->response->setJSON($this->dashboard->rows(
                 $criteria,
                 (int) ($get['page'] ?? 1),
                 (int) ($get['per_page'] ?? 50),
@@ -166,39 +140,28 @@ class DashboardController extends BaseController
                 (string) ($get['dir'] ?? 'asc'),
                 trim((string) ($get['search'] ?? '')),
                 ($get['fresh'] ?? null) === '1',
-            );
-
-            return $this->response->setJSON($result);
+            ));
         });
     }
 
     public function filterOptions()
     {
-        return $this->guarded(function () {
-            // Snapshot mode: the values (with counts) computed when the active
-            // snapshot was installed — same shape as the Oracle query, instant,
-            // and exactly the values an export accepts.
-            // Either way, the 8 PREPAID categories are always offered (the
-            // absent ones at 0) — same completion as AllowedValues.
-            $source = $this->snapshotSourceOrNull();
-            if ($source !== null) {
-                return $this->response->setJSON(PrepaidSegmentations::completeOptions($source->snapshot()->filterOptions()));
-            }
+        session()->close();
 
-            $fresh = $this->request->getGet('fresh') === '1';
-
-            return $this->response->setJSON(PrepaidSegmentations::completeOptions($this->dashboard->filterOptions($fresh)));
-        });
+        // The values (with counts) computed when the active version was
+        // installed — instant, and exactly the values a filter may take. The
+        // 8 PREPAID categories are always offered (absent ones at 0).
+        return $this->guarded(fn () => $this->response->setJSON(PrepaidSegmentations::completeOptions($this->dashboard->filterOptions())));
     }
 
     /**
-     * Decide sync vs async and either generate the file now or queue a job.
-     *
-     * The row count that drives that decision is ALWAYS recomputed here by
-     * DashboardService::count() from the posted filters — the browser's
-     * displayed figure is never trusted. Small exports are streamed straight
-     * back via a short-lived signed URL and create NO export_jobs row; only a
-     * genuinely large export becomes a queued job.
+     * Decide sync vs async and either generate the file now or queue a job —
+     * all on the version this request resolved: the filters are validated
+     * against its values, counted on it, the sync file is read from it and a
+     * queued job records it (snapshot_version) so the worker reads it too.
+     * The count is ALWAYS recomputed here — the browser's figure is never
+     * trusted. Small exports are streamed back via a short-lived signed URL
+     * and create NO export_jobs row.
      */
     public function export()
     {
@@ -208,27 +171,9 @@ class DashboardController extends BaseController
                 return $this->response->setStatusCode(422)->setJSON(['error' => 'format', 'message' => 'Format invalide.']);
             }
 
-            // Export source (Config\Snapshot::$exportSource). With the
-            // snapshot, validation, count and rows all come from ONE pinned
-            // local version — this endpoint then never touches Oracle, and
-            // never falls back to it when no snapshot is available.
-            $source = null;
-            if ((new SnapshotConfig())->usesSnapshot()) {
-                try {
-                    $source = new SnapshotRowSource();
-                } catch (SnapshotUnavailableException $e) {
-                    return $this->snapshotUnavailable($e);
-                }
-            }
-
-            $criteria = FilterCriteria::fromRequest(
-                (array) $this->request->getPost(),
-                $source?->allowedValues() ?? $this->dashboard->allowedValues(),
-            );
-
-            // Source of truth: the backend's own count over the export
-            // filters — the browser's displayed figure is never trusted.
-            $count    = $source?->count($criteria) ?? $this->dashboard->count($criteria);
+            $criteria = FilterCriteria::fromRequest((array) $this->request->getPost(), $this->dashboard->allowedValues());
+            $snapshot = $this->dashboard->snapshot();
+            $count    = $this->dashboard->count($criteria);
             $decision = $this->dashboard->exportDecision($count);
 
             if ($decision === 'empty') {
@@ -236,13 +181,13 @@ class DashboardController extends BaseController
             }
 
             if ($decision === 'sync') {
-                $service = new CustomerListExportService(rowSource: $source);
+                $service = new CustomerListExportService(rowSource: new SnapshotRowSource(snapshot: $snapshot));
 
                 try {
                     $meta = $format === 'xlsx' ? $service->exportXlsx($criteria) : $service->exportCsv($criteria);
                 } catch (Throwable $e) {
                     $ref = bscd_error_reference('EXP');
-                    log_message('error', 'Echec export synchrone [{ref}] format={format}: {message}', ['ref' => $ref, 'format' => $format, 'message' => $e->getMessage()]);
+                    log_message('error', 'Echec export synchrone [{ref}] format={format} snapshot={version}: {message}', ['ref' => $ref, 'format' => $format, 'version' => $snapshot->id, 'message' => $e->getMessage()]);
 
                     return $this->response->setStatusCode(500)->setJSON(['error' => 'export', 'reference' => $ref]);
                 }
@@ -261,15 +206,16 @@ class DashboardController extends BaseController
                 ]);
             }
 
-            // Large export -> queued job.
+            // Large export -> queued job, pinned to this version.
             $jobs  = new ExportJobModel();
             $jobId = $jobs->insert([
-                'requested_by'  => (string) (session('username') ?? 'inconnu'),
-                'format'        => $format,
-                'filters'       => json_encode($criteria->toArray()),
-                'filters_label' => $this->labelFor($criteria),
-                'status'        => 'pending',
-                'row_count'     => $count,
+                'requested_by'     => (string) (session('username') ?? 'inconnu'),
+                'format'           => $format,
+                'filters'          => json_encode($criteria->toArray()),
+                'filters_label'    => $this->labelFor($criteria),
+                'snapshot_version' => $snapshot->id,
+                'status'           => 'pending',
+                'row_count'        => $count,
             ], true);
 
             return $this->response->setJSON([
@@ -319,17 +265,20 @@ class DashboardController extends BaseController
     }
 
     /**
-     * No valid snapshot: a controlled, logged 503 — deliberately no Oracle
-     * extraction instead. The message is shown as-is by dashboard.js.
+     * No valid snapshot (or no index for it): a controlled, logged 503 —
+     * deliberately no Oracle access instead. The message is shown as-is.
      */
     private function snapshotUnavailable(SnapshotUnavailableException $e)
     {
         $ref = bscd_error_reference('SNAP');
-        log_message('error', '[SNAPSHOT] export refusé [{ref}] : aucun snapshot valide ({message})', ['ref' => $ref, 'message' => $e->getMessage()]);
+        log_message('error', '[SNAPSHOT] requête refusée [{ref}] {uri} : aucun snapshot exploitable ({message})', [
+            'ref' => $ref, 'uri' => (string) $this->request->getUri(), 'message' => $e->getMessage(),
+        ]);
 
         return $this->response->setStatusCode(503)->setJSON([
-            'error'   => 'snapshot_unavailable',
-            'message' => "Les données de référence ne sont pas disponibles actuellement (réf. {$ref}). Réessayez plus tard ou contactez l'administrateur",
+            'error'     => 'snapshot_unavailable',
+            'reference' => $ref,
+            'message'   => "Les données de référence ne sont pas disponibles actuellement (réf. {$ref}). Réessayez plus tard ou contactez l'administrateur",
         ]);
     }
 
@@ -342,54 +291,10 @@ class DashboardController extends BaseController
 
     // ---- helpers -----------------------------------------------------
 
-    /**
-     * The request's filters, validated against the values of the source the
-     * filter options came from (the active snapshot in snapshot mode).
-     */
+    /** The request's filters, validated against the values of this request's version. */
     private function criteria(): FilterCriteria
     {
-        $source = $this->snapshotSourceOrNull();
-
-        return FilterCriteria::fromRequest(
-            $this->request->getGet(),
-            $source?->allowedValues() ?? $this->dashboard->allowedValues(),
-        );
-    }
-
-    /**
-     * The active snapshot's row source in snapshot mode, null in Oracle mode.
-     * Resolved once per request, so every figure of a request describes the
-     * same version.
-     *
-     * @throws SnapshotUnavailableException in snapshot mode with no valid snapshot.
-     */
-    private function snapshotSource(): ?SnapshotRowSource
-    {
-        if ($this->snapshotSource === false) {
-            $this->snapshotSource = null;
-            if ((new SnapshotConfig())->usesSnapshot()) {
-                $this->snapshotSource = new SnapshotRowSource();
-            }
-        }
-
-        return $this->snapshotSource;
-    }
-
-    /**
-     * snapshotSource(), or null when no valid snapshot is available: the
-     * read-only screens (options, stats, table) then fall back to live
-     * Oracle, while /count and exports refuse (503) — no count or export
-     * silently switches base.
-     */
-    private function snapshotSourceOrNull(): ?SnapshotRowSource
-    {
-        try {
-            return $this->snapshotSource();
-        } catch (SnapshotUnavailableException $e) {
-            log_message('warning', '[SNAPSHOT] aucun snapshot valide, filtres du dashboard lus sur Oracle ({message})', ['message' => $e->getMessage()]);
-
-            return null;
-        }
+        return FilterCriteria::fromRequest($this->request->getGet(), $this->dashboard->allowedValues());
     }
 
     /**
@@ -398,9 +303,9 @@ class DashboardController extends BaseController
      *
      * @return array{id: string, rows: int, generatedAt: string|null, sourceUpdatedAt: string|null}
      */
-    private function snapshotInfo(SnapshotRowSource $source): array
+    private function snapshotInfo(): array
     {
-        $snapshot = $source->snapshot();
+        $snapshot = $this->dashboard->snapshot();
         $meta     = $snapshot->meta;
         $text     = static fn ($v): ?string => is_string($v) && trim($v) !== '' ? trim($v) : null;
 
@@ -416,7 +321,8 @@ class DashboardController extends BaseController
 
     /**
      * Wraps an endpoint body with the shared error handling: filter problems
-     * become 422, Oracle/anything-else a sanitised 503, nothing leaks.
+     * become 422, no snapshot a 503 "données indisponibles", anything else a
+     * sanitised 503 — nothing leaks.
      */
     private function guarded(callable $body)
     {
@@ -424,6 +330,8 @@ class DashboardController extends BaseController
             return $body();
         } catch (InvalidFilterException $e) {
             return $this->response->setStatusCode(422)->setJSON(['error' => 'filter', 'message' => $e->getMessage()]);
+        } catch (SnapshotUnavailableException $e) {
+            return $this->snapshotUnavailable($e);
         } catch (Throwable $e) {
             $reference = bscd_error_reference('DASH');
             log_message('error', 'Dashboard endpoint KO [{ref}] {uri}: {message}', [
@@ -432,7 +340,7 @@ class DashboardController extends BaseController
                 'message' => $e->getMessage(),
             ]);
 
-            return $this->response->setStatusCode(503)->setJSON(['error' => 'oracle', 'reference' => $reference]);
+            return $this->response->setStatusCode(503)->setJSON(['error' => 'unavailable', 'reference' => $reference]);
         }
     }
 

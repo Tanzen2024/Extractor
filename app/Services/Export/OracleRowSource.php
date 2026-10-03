@@ -10,8 +10,10 @@ use Config\Oracle as OracleConfig;
 /**
  * The historical export source: a live streaming SELECT on
  * CMS_RFC.TB_CUSTOMERS_LIST built by QueryBuilder (same WHERE as the
- * dashboard), with the export prefetch tuning. Kept as the rollback path
- * (Config\Snapshot::$exportSource = 'oracle') and for the Oracle benchmark.
+ * dashboard), with the export prefetch tuning. Kept ONLY for the CLI
+ * measuring tools that inject Oracle on purpose (export:benchmark --source
+ * oracle, export:perf): no user flow can reach it any more — user exports
+ * read the snapshot (CustomerListExportService), Oracle is for the refresh.
  */
 final class OracleRowSource implements RowSource
 {

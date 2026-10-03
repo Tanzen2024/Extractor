@@ -5,6 +5,8 @@ namespace App\Services\Export;
 use App\Models\ExportJobModel;
 use App\Services\CustomerListExportService;
 use App\Services\CustomersList\FilterCriteria;
+use App\Services\Snapshot\SnapshotRowSource;
+use App\Services\Snapshot\SnapshotStore;
 use Closure;
 use Throwable;
 
@@ -40,7 +42,8 @@ final class ExportJobRunner
     public array $last = [];
 
     /**
-     * @param (callable(): CustomerListExportService)|null $serviceFactory tests only
+     * @param (callable(array<string, mixed>): CustomerListExportService)|null $serviceFactory
+     *        tests only; receives the claimed job. Default: snapshotService().
      */
     public function __construct(
         private readonly ExportJobModel $jobs,
@@ -49,7 +52,30 @@ final class ExportJobRunner
     ) {
         $this->serviceFactory = $serviceFactory !== null
             ? Closure::fromCallable($serviceFactory)
-            : static fn (): CustomerListExportService => new CustomerListExportService();
+            : static fn (array $job): CustomerListExportService => self::snapshotService($job);
+    }
+
+    /**
+     * The export service of one job, reading EXACTLY the snapshot version the
+     * job was counted and launched on (export_jobs.snapshot_version) — never
+     * the version active when the worker claims it: a job queued at 04:59 on
+     * V10 is generated from V10 even after the 05:00 refresh activated V11.
+     * That version gone (pruned despite being pinned, deleted by hand): the
+     * job fails with SnapshotUnavailableException — never another version,
+     * never Oracle. NULL version = job queued before the column existed:
+     * the active version, as before.
+     *
+     * @param array<string, mixed> $job
+     */
+    public static function snapshotService(array $job, ?SnapshotStore $store = null, ?string $exportDir = null, ?string $openSpoutTempDir = null): CustomerListExportService
+    {
+        $store   = $store ?? new SnapshotStore();
+        $version = (string) ($job['snapshot_version'] ?? '');
+
+        return new CustomerListExportService(exportDir: $exportDir, openSpoutTempDir: $openSpoutTempDir, rowSource: new SnapshotRowSource(
+            snapshot: $version !== '' ? $store->load($version) : $store->active(),
+            store: $store,
+        ));
     }
 
     /**
@@ -65,7 +91,7 @@ final class ExportJobRunner
 
         try {
             $criteria = FilterCriteria::fromArray(json_decode($job['filters'] ?? '[]', true) ?: []);
-            $service  = ($this->serviceFactory)();
+            $service  = ($this->serviceFactory)($job);
 
             // Progress is persisted in batches, at most once per
             // interval (ThrottledProgress), never per row — and each write

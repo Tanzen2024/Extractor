@@ -19,12 +19,13 @@ use CodeIgniter\Config\BaseConfig;
 class Snapshot extends BaseConfig
 {
     /**
-     * Where user exports read their rows from:
-     *   'snapshot' — the local validated snapshot, never Oracle (target).
-     *   'oracle'   — the historical live extraction (rollback switch).
-     * With 'snapshot' and no valid snapshot installed, exports fail with a
-     * controlled "données de référence indisponibles" error — they never
-     * fall back to Oracle on their own.
+     * Kept for compatibility with existing .env files, no longer honoured:
+     * every user feature (filters, KPIs, charts, table, count, CSV / XLSX
+     * exports) reads the active snapshot, whatever this says — Oracle is
+     * read by the snapshot refresh only. 'oracle' (the former rollback
+     * switch) is reported by `php spark export:doctor` and ignored. No valid
+     * snapshot -> a controlled 503 "données de référence indisponibles",
+     * never an Oracle fallback.
      */
     public string $exportSource = 'snapshot';
 
@@ -79,7 +80,7 @@ class Snapshot extends BaseConfig
     ];
 
     /**
-     * `php spark customers:refresh` (daily Oracle -> CSV pull, cron 05:30 —
+     * `php spark customers:refresh` (daily Oracle -> CSV pull, cron 05:00 + 06:00 catch-up —
      * see docs/snapshot/README.md §0).
      *
      * The extraction is written to refreshTmpFile, never read by anything,
@@ -105,6 +106,26 @@ class Snapshot extends BaseConfig
     /** Progress line every N extracted rows. */
     public int $refreshProgressEvery = 250_000;
 
+    /**
+     * Query index of each version (dashboard: filters, KPIs, charts,
+     * segmentation counts, table, count): versions/<id>/customers_list.duckdb,
+     * a DuckDB database built FROM that version's CSV when it is installed
+     * (SnapshotIndex) — derived from the snapshot, never a source of its own.
+     * Chosen on 2026-10-02 benchmarks over the real 3.3 M-row file (see
+     * docs/snapshot/README.md): 0.1–0.5 s per query vs 15–22 s for a PHP
+     * pass and 5–26 s for a MariaDB table (index build > 17 min).
+     *
+     *   duckdbBinary       DuckDB CLI (no PHP extension needed); 'duckdb' =
+     *                      found on PATH. Queries go through proc_open with the
+     *                      SQL on stdin — never through a shell.
+     *   duckdbThreads      per query process
+     *   duckdbMemoryLimit  per query process (DuckDB spills to disk beyond)
+     */
+    public string $duckdbBinary      = 'duckdb';
+    public int $duckdbThreads        = 4;
+    public string $duckdbMemoryLimit = '1GB';
+    public string $indexFileName     = 'customers_list.duckdb';
+
     public function __construct()
     {
         parent::__construct();
@@ -122,10 +143,24 @@ class Snapshot extends BaseConfig
         $this->keepVersions  = max(1, (int) env('snapshot.keepVersions', $this->keepVersions));
         $this->keepRejected  = max(0, (int) env('snapshot.keepRejected', $this->keepRejected));
         $this->countCacheTtl = max(60, (int) env('snapshot.countCacheTtl', $this->countCacheTtl));
+
+        $this->duckdbBinary      = (string) env('snapshot.duckdbBinary', $this->duckdbBinary);
+        $this->duckdbThreads     = max(1, (int) env('snapshot.duckdbThreads', $this->duckdbThreads));
+        $this->duckdbMemoryLimit = (string) env('snapshot.duckdbMemoryLimit', $this->duckdbMemoryLimit);
     }
 
+    /**
+     * Always true: user features read the snapshot only (see $exportSource).
+     * Kept so existing callers keep compiling.
+     */
     public function usesSnapshot(): bool
     {
-        return $this->exportSource !== 'oracle';
+        return true;
+    }
+
+    /** A .env still asks for the former Oracle mode (ignored — doctor warns). */
+    public function legacyOracleSourceRequested(): bool
+    {
+        return $this->exportSource === 'oracle';
     }
 }

@@ -10,7 +10,7 @@ class ExportJobModel extends Model
     protected $primaryKey    = 'id';
     protected $returnType    = 'array';
     protected $allowedFields  = [
-        'uuid', 'requested_by', 'format', 'filters', 'filters_label', 'status',
+        'uuid', 'requested_by', 'format', 'filters', 'filters_label', 'snapshot_version', 'status',
         'row_count', 'rows_total', 'rows_processed', 'rows_exported',
         'file_path', 'file_name', 'file_size', 'error_reference',
         'started_at', 'finished_at',
@@ -37,6 +37,24 @@ class ExportJobModel extends Model
      *
      * @return array<string, mixed>|null
      */
+    /**
+     * Snapshot versions still needed by a queued or running export — the
+     * versions SnapshotStore::prune() must never delete.
+     *
+     * @return list<string>
+     */
+    public function pinnedSnapshotVersions(): array
+    {
+        $rows = $this->db->table($this->table)
+            ->distinct()
+            ->select('snapshot_version')
+            ->whereIn('status', ['pending', 'running'])
+            ->where('snapshot_version IS NOT NULL')
+            ->get()->getResultArray();
+
+        return array_values(array_map(static fn (array $r): string => (string) $r['snapshot_version'], $rows));
+    }
+
     public function claimNext(): ?array
     {
         $db = $this->db;

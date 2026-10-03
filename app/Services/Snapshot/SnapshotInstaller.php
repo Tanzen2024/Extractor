@@ -2,6 +2,8 @@
 
 namespace App\Services\Snapshot;
 
+use App\Models\ExportJobModel;
+use Closure;
 use Throwable;
 
 /**
@@ -16,7 +18,10 @@ use Throwable;
  *   incoming/ (final names only; *.part = transfer not finished -> refused)
  *     -> staging/<id>/            moved out at once: a new push can't interfere
  *     -> SnapshotValidator        size, SHA-256, header, columns, UTF-8, lines
- *     OK -> versions/<id>/ + meta.json -> current.json switched -> prune
+ *     OK -> versions/<id>/ + meta.json -> DuckDB query index built from
+ *           that CSV (SnapshotIndex; failure = rejected) -> current.json
+ *           switched -> prune
+ *           (never a version a queued / running export was launched on)
  *     KO -> rejected/<id>/ (manifest + reason.json; CSV deleted) — the
  *           previous snapshot stays active and exports keep working
  *
@@ -31,9 +36,49 @@ final class SnapshotInstaller
 
     private SnapshotStore $store;
 
-    public function __construct(?SnapshotStore $store = null)
+    /** @var Closure(): list<string> versions referenced by queued / running exports */
+    private Closure $pinnedVersions;
+
+    /** @var Closure(ActiveSnapshot): (array{rows:int, seconds:float, size:int}|null) */
+    private Closure $buildIndex;
+
+    /**
+     * @param (callable(): list<string>)|null $pinnedVersions tests only; default: export_jobs
+     * @param (callable(ActiveSnapshot): (array|null))|null $buildIndex tests only; default: SnapshotIndex::build()
+     */
+    public function __construct(?SnapshotStore $store = null, ?callable $pinnedVersions = null, ?callable $buildIndex = null)
     {
-        $this->store = $store ?? new SnapshotStore();
+        $this->store          = $store ?? new SnapshotStore();
+        $config               = $this->store->config();
+        $this->buildIndex     = $buildIndex !== null
+            ? Closure::fromCallable($buildIndex)
+            : static fn (ActiveSnapshot $snapshot): array => (new SnapshotIndex($config))->build($snapshot);
+        $this->pinnedVersions = $pinnedVersions !== null
+            ? Closure::fromCallable($pinnedVersions)
+            : static function (): array {
+                $db = db_connect();
+
+                // No export_jobs table (fresh install): nothing can be pinned.
+                return $db->tableExists('export_jobs') ? (new ExportJobModel($db))->pinnedSnapshotVersions() : [];
+            };
+    }
+
+    /**
+     * Versions prune() must keep for queued / running exports; null when they
+     * cannot be read (database down, migration not run) — prune then deletes
+     * no version at all rather than one an export may still need.
+     *
+     * @return list<string>|null
+     */
+    private function pinnedVersions(): ?array
+    {
+        try {
+            return ($this->pinnedVersions)();
+        } catch (Throwable $e) {
+            log_message('warning', '[SNAPSHOT] versions utilisées par les exports illisibles ({message}) : aucune version purgée', ['message' => $e->getMessage()]);
+
+            return null;
+        }
     }
 
     /**
@@ -160,6 +205,16 @@ final class SnapshotInstaller
                 throw new SnapshotException('publish_failed', 'Impossible de publier la version dans versions/.');
             }
 
+            // The dashboard's query index, built from THIS version's CSV
+            // before it becomes active: an active version always has one, and
+            // a failure here rejects the version (the previous one stays).
+            $index = ($this->buildIndex)($this->store->load($id));
+            if ($index !== null) {
+                log_message('info', '[SNAPSHOT] index construit version={id} lignes={rows} secondes={s} taille={size}', [
+                    'id' => $id, 'rows' => $index['rows'], 's' => $index['seconds'], 'size' => $index['size'],
+                ]);
+            }
+
             $this->store->activate($id);
         } catch (Throwable $e) {
             SnapshotStore::deleteTree($this->store->versionDir($id));
@@ -167,7 +222,7 @@ final class SnapshotInstaller
             return $this->reject($id, $staging, $e, $previous);
         }
 
-        $removed = $this->store->prune();
+        $removed = $this->store->prune($this->pinnedVersions());
 
         log_message('info', '[SNAPSHOT] nouveau snapshot activé version={id} lignes={rows} colonnes={cols} taille={size} sha256={sha} genere_le={gen} validation_s={secs} precedent={prev} purges={removed}', [
             'id'      => $id,
@@ -218,7 +273,7 @@ final class SnapshotInstaller
             'prev'    => $previous ?? 'aucun',
         ]);
 
-        $this->store->prune();
+        $this->store->prune($this->pinnedVersions());
 
         return $this->result(self::RESULT_REJECTED, $reason, $e->getMessage(), $id, $previous);
     }

@@ -33,6 +33,8 @@ final class ExportJobSchema
         'format'          => ['type' => 'VARCHAR', 'constraint' => 8],
         'filters'         => ['type' => 'LONGTEXT', 'null' => true],
         'filters_label'   => ['type' => 'VARCHAR', 'constraint' => 500, 'null' => true],
+        // Snapshot version counted and launched on — the worker reads exactly this one.
+        'snapshot_version' => ['type' => 'VARCHAR', 'constraint' => 32, 'null' => true],
         'status'          => ['type' => 'VARCHAR', 'constraint' => 12, 'default' => 'pending'], // pending|running|done|error|cancelled
         'row_count'       => ['type' => 'INT', 'unsigned' => true, 'null' => true],
         'rows_total'      => ['type' => 'INT', 'unsigned' => true, 'null' => true],

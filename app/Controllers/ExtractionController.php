@@ -15,6 +15,12 @@ use Throwable;
  * can be expensive (parallel hints, cross-database links), so nothing runs
  * on a bare page visit. A tool without a query yet falls back to the
  * "coming soon" placeholder.
+ *
+ * CUSTOMERS_LIST is never extracted here: its users read the active
+ * snapshot (dashboard, exports), and the only process allowed to query
+ * CMS_RFC.TB_CUSTOMERS_LIST is the snapshot refresh (customers:refresh).
+ * Any tool whose code or SQL targets that table is refused — show()
+ * redirects to the dashboard, execute() never runs it (isCustomersList()).
  */
 class ExtractionController extends BaseController
 {
@@ -29,6 +35,10 @@ class ExtractionController extends BaseController
         }
 
         $tool = $this->resolveTool($moduleCode, $toolCode);
+
+        if (self::isCustomersList($tool)) {
+            return redirect()->to(site_url('dashboard'));
+        }
 
         if (empty($tool['query_definition'])) {
             return view('extraction/placeholder', [
@@ -46,7 +56,16 @@ class ExtractionController extends BaseController
 
     public function execute(string $moduleCode, string $toolCode)
     {
+        // Checked before any lookup: a POST can never reach Oracle for it.
+        if (strtoupper($toolCode) === 'CUSTOMERS_LIST') {
+            return $this->customersListRefused($toolCode);
+        }
+
         $tool = $this->resolveTool($moduleCode, $toolCode);
+
+        if (self::isCustomersList($tool)) {
+            return $this->customersListRefused((string) $tool['code']);
+        }
 
         if (empty($tool['query_definition'])) {
             throw new PageNotFoundException();
@@ -96,6 +115,33 @@ class ExtractionController extends BaseController
         ]);
 
         return $html;
+    }
+
+    /**
+     * A tool that reads CMS_RFC.TB_CUSTOMERS_LIST (by code or in its SQL).
+     *
+     * @param array<string, mixed> $tool
+     */
+    public static function isCustomersList(array $tool): bool
+    {
+        return strtoupper((string) ($tool['code'] ?? '')) === 'CUSTOMERS_LIST'
+            || stripos((string) ($tool['query_definition'] ?? ''), 'TB_CUSTOMERS_LIST') !== false;
+    }
+
+    /**
+     * Explicit refusal (403 + log): the customers list is served from the
+     * active snapshot only, never extracted live from Oracle by a user.
+     */
+    private function customersListRefused(string $code)
+    {
+        log_message('warning', '[SNAPSHOT] extraction Oracle refusée pour {code} (utilisateur {user}) : la liste clients se lit sur le snapshot actif (tableau de bord)', [
+            'code' => $code,
+            'user' => (string) (session('username') ?? '?'),
+        ]);
+
+        return $this->response->setStatusCode(403)->setBody(
+            "L'extraction directe de la liste clients depuis Oracle est désactivée : utilisez le tableau de bord (" . site_url('dashboard') . '), qui lit le snapshot quotidien.'
+        );
     }
 
     private function resolveTool(string $moduleCode, string $toolCode): array

@@ -2,6 +2,9 @@
 
 namespace App\Services\Export;
 
+use App\Services\CustomersList\FilterCriteria;
+use App\Services\Snapshot\DuckDb;
+use App\Services\Snapshot\SnapshotIndex;
 use App\Services\Snapshot\SnapshotStore;
 use CodeIgniter\Database\BaseConnection;
 use Config\Snapshot as SnapshotConfig;
@@ -204,9 +207,13 @@ final class ExportDoctor
         $this->add($logsErrors ? self::OK : self::ERROR, 'config.logger', 'threshold=' . json_encode($threshold) . ($logsErrors ? ' (erreurs journalisées)' : ' — les erreurs ne sont PAS journalisées (mettre logger.threshold >= 4)'));
 
         $snapshot = $this->snapshot ?? new SnapshotConfig();
-        $this->add(self::OK, 'config.exportSource', $snapshot->exportSource . ($snapshot->usesSnapshot() ? ' (fichier snapshot local)' : ' (Oracle en direct)'));
-        if (! $snapshot->usesSnapshot() && ! extension_loaded('oci8')) {
-            $this->add(self::ERROR, 'php.ext.oci8', 'absente alors que exportSource=oracle');
+        // Filters, dashboard and exports read the active snapshot only; Oracle
+        // is read by the snapshot refresh (customers:refresh), which needs oci8.
+        $this->add($snapshot->legacyOracleSourceRequested() ? self::WARNING : self::OK, 'config.exportSource', $snapshot->legacyOracleSourceRequested()
+            ? 'snapshot.exportSource=oracle dans .env est IGNORÉ : filtres, tableau de bord et exports lisent toujours le snapshot actif (retirer la ligne)'
+            : 'snapshot (filtres, tableau de bord et exports lisent le snapshot actif ; Oracle = refresh uniquement)');
+        if (! extension_loaded('oci8')) {
+            $this->add(self::WARNING, 'php.ext.oci8', 'absente : php spark customers:refresh (seul accès Oracle) ne peut pas tourner avec ce PHP');
         }
     }
 
@@ -366,9 +373,6 @@ final class ExportDoctor
     private function checkSnapshot(): void
     {
         $config = $this->snapshot ?? new SnapshotConfig();
-        if (! $config->usesSnapshot()) {
-            return;
-        }
 
         try {
             $active = (new SnapshotStore($config))->active();
@@ -382,6 +386,30 @@ final class ExportDoctor
             $this->add(self::OK, 'snapshot', "version {$active->id}, " . number_format($active->rows(), 0, ',', ' ') . ' lignes, fichier lisible');
         } catch (Throwable $e) {
             $this->add(self::ERROR, 'snapshot', 'aucun snapshot exploitable : ' . ExportJobFailure::sanitize($e->getMessage()) . ' (php spark snapshot:status)');
+
+            return;
+        }
+
+        // The dashboard (filters, KPIs, table, count) reads the version's
+        // DuckDB index: without the binary or the index it answers 503.
+        $duckdb  = new DuckDb($config);
+        $version = $duckdb->version();
+        if ($version === null) {
+            $this->add(self::ERROR, 'snapshot.duckdb', "{$config->duckdbBinary} introuvable ou non exécutable pour " . ExportWorkerState::processUser() . ' (snapshot.duckdbBinary, docs/snapshot/README.md)');
+
+            return;
+        }
+        $index = new SnapshotIndex($config, $duckdb);
+        if (! $index->exists($active)) {
+            $this->add(self::ERROR, 'snapshot.index', "index absent pour la version {$active->id} : tableau de bord en 503 (php spark snapshot:index)");
+
+            return;
+        }
+        try {
+            $rows = $index->engine($active)->count(FilterCriteria::none());
+            $this->add($rows === $active->rows() ? self::OK : self::ERROR, 'snapshot.index', "DuckDB {$version} — index de {$active->id} : {$rows} lignes" . ($rows === $active->rows() ? '' : " ≠ {$active->rows()} (php spark snapshot:index --rebuild)"));
+        } catch (Throwable $e) {
+            $this->add(self::ERROR, 'snapshot.index', 'index illisible : ' . ExportJobFailure::sanitize($e->getMessage()));
         }
     }
 

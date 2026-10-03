@@ -22,7 +22,7 @@ class SnapshotStatus extends BaseCommand
     {
         $store = new SnapshotStore();
 
-        CLI::write('Source des exports : ' . $store->config()->exportSource);
+        CLI::write('Source utilisateur : snapshot actif (filtres, tableau de bord, exports)' . ($store->config()->legacyOracleSourceRequested() ? ' — snapshot.exportSource=oracle dans .env IGNORÉ' : ''));
         CLI::write('Répertoire         : ' . $store->baseDir());
         CLI::write('');
 

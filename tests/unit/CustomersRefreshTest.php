@@ -126,6 +126,14 @@ final class CustomersRefreshTest extends TestCase
         });
         $this->assertSame(CustomerListExportService::COLUMNS, array_keys($out[0]));
         $this->assertSame('', $out[0]['E_MAIL'], 'NULL becomes an empty field');
+
+        // The new version comes with its dashboard index, built from this CSV
+        // before activation: the dashboard answers like the export.
+        if ((new \App\Services\Snapshot\DuckDb($this->fx->config))->version() !== null) {
+            $engine = (new \App\Services\Snapshot\SnapshotIndex($this->fx->config))->engine($active);
+            $this->assertSame($r['version'], $engine->version());
+            $this->assertSame(5, $engine->count($crit));
+        }
     }
 
     public function testOracleConnectionFailureKeepsPreviousVersion(): void

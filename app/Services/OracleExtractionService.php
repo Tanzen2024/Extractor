@@ -206,10 +206,21 @@ class OracleExtractionService
     }
 
     /**
+     * Every attempt to open an Oracle connection in this process — the only
+     * oci_connect() of the application goes through connect(). Lets the
+     * "zero Oracle" tests prove that a whole user flow (filters, dashboard,
+     * exports, worker) never even tries to reach CMS_RFC.TB_CUSTOMERS_LIST:
+     * Oracle is for the snapshot refresh only.
+     */
+    public static int $connectionAttempts = 0;
+
+    /**
      * @return resource
      */
     private function connect()
     {
+        self::$connectionAttempts++;
+
         if (! $this->config->isConfigured()) {
             throw new RuntimeException('Oracle connection is not configured.');
         }
