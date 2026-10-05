@@ -124,7 +124,8 @@
      *                     (browser-managed download: indeterminate bar).
      *
      *   GENERATING → READY → DOWNLOADING → COMPLETED
-     *   GENERATING → CANCELLED | ERROR,  READY / DOWNLOADING → ERROR
+     *   GENERATING → CANCELLED | ERROR,  READY / DOWNLOADING → ERROR,
+ *   DOWNLOADING → CANCELLED (download aborted by the user)
      *
      * Any other move is refused (returns false): e.g. a late "running" poll
      * answer can never redraw the generation bar over the download phase,
@@ -137,7 +138,7 @@
     var TRANSITIONS = {
         generating: [PHASE.READY, PHASE.CANCELLED, PHASE.ERROR],
         ready: [PHASE.DOWNLOADING, PHASE.ERROR],
-        downloading: [PHASE.COMPLETED, PHASE.ERROR]
+        downloading: [PHASE.COMPLETED, PHASE.CANCELLED, PHASE.ERROR]
     };
 
     function createExportPhase() {
