@@ -1,0 +1,261 @@
+{
+    "meta": {
+        "numberLocale": "fr-FR",
+        "decimalSeparator": ",",
+        "percent": "{value} %"
+    },
+    "glossary": {
+        "payerProfile": "Profil Payeur",
+        "consumerProfile": "Profil Consommateur",
+        "segmentation": "Segmentation",
+        "region": "Région",
+        "division": "Division",
+        "agency": "Agence",
+        "status": "Statut",
+        "meter": "Compteur",
+        "meterType": "Type compteur",
+        "treasurySegment": "Trésorerie",
+        "voltage": "Tension",
+        "niuQuality": "Qualité NUI",
+        "contactFilled": "Contact renseigné",
+        "activeContracts": "Contrats actifs",
+        "smartMeters": "Compteurs communicants",
+        "notProvided": "Non renseigné"
+    },
+    "common": {
+        "loading": "Chargement…",
+        "unavailable": "Données indisponibles.",
+        "noData": "Aucune donnée disponible pour les filtres sélectionnés.",
+        "reference": "Référence : {ref}",
+        "unexpectedResponse": "Réponse inattendue du serveur (HTTP {status}).",
+        "close": "Fermer",
+        "retry": "Réessayer",
+        "remove": "Retirer",
+        "yes": "Oui",
+        "no": "Non"
+    },
+    "dashboard": {
+        "sections": {
+            "clients": {
+                "one": "{count} client",
+                "other": "{count} clients"
+            },
+            "unassigned": {
+                "one": "{count} client sans type de compteur n’apparaît dans aucune vue",
+                "other": "{count} clients sans type de compteur n’apparaissent dans aucune vue"
+            }
+        },
+        "columns": {
+            "REGION": "Région",
+            "DIVISION": "Division",
+            "AGENCE": "Agence",
+            "COD_CLI": "Code client",
+            "CONTRACT": "Contrat",
+            "STATUS": "Statut",
+            "METER_NO": "N° compteur",
+            "CUST_NAME": "Client",
+            "PHONE_NUMBERS": "Téléphone",
+            "E_MAIL": "E-mail",
+            "DATE_AB": "Date abo.",
+            "DATE_RESILIATION": "Date résil.",
+            "NIU_TO_RECLASS": "NIU à reclasser",
+            "SEGMENTATION": "Segmentation",
+            "UPDATED_AT": "Mis à jour le"
+        },
+        "multiselect": {
+            "all": "Toutes",
+            "filter": "Filtrer…",
+            "none": "Aucune valeur",
+            "selected": {
+                "one": "{count} sélectionnée",
+                "other": "{count} sélectionnées"
+            }
+        },
+        "groups": {
+            "postpaid": "Postpaid",
+            "prepaid": "Prepaid",
+            "others": "Autres",
+            "postpaidAndSmart": "Postpaid | Compteurs communicants"
+        },
+        "values": {
+            "niuCorrect": "NUI CORRECT",
+            "niuToReclass": "NUI à RECLASSER",
+            "smartMeters": "COMPTEURS COMMUNICANTS",
+            "unstable": "Instable",
+            "atRisk": "À risque",
+            "other": "Other"
+        },
+        "filters": {
+            "date_from": "Depuis",
+            "date_to": "Jusqu'au"
+        },
+        "kpi": {
+            "ofTotal": "{pct} du total",
+            "nuiCorrectsNote": "NUI corrects correspondant aux filtres"
+        },
+        "table": {
+            "results": {
+                "one": "{count} résultat",
+                "other": "{count} résultats"
+            },
+            "resultsFiltered": {
+                "one": "{count} résultat correspondant aux filtres",
+                "other": "{count} résultats correspondant aux filtres"
+            },
+            "page": "Page {page} / {pages}"
+        },
+        "cache": {
+            "justNow": "Actualisé à l'instant",
+            "minutesAgo": "Actualisé il y a {minutes} min"
+        },
+        "errors": {
+            "invalidFilter": "Filtre invalide."
+        },
+        "export": {
+            "formatCsv": "CSV",
+            "formatXlsx": "Excel (.xlsx)",
+            "searchNotApplied": "La recherche « {search} » n'est pas appliquée à l'export.",
+            "noFilter": "Aucun filtre — tout le référentiel.",
+            "launch": "Lancer l'export",
+            "busy": "Un export est déjà en cours (fenêtre en bas à droite). Attendez sa fin ou annulez-le avant d'en lancer un autre.",
+            "busyShort": "Un export est déjà en cours. Attendez sa fin ou annulez-le.",
+            "trackingUnavailable": "Suivi des exports indisponible. Rechargez la page.",
+            "emptyResponse": "Réponse vide du serveur. Rechargez la page puis réessayez.",
+            "launchFailedMessage": "L'export n'a pas pu être lancé : {message} Réessayez.",
+            "launchFailedReference": "L'export n'a pas pu être lancé. Réessayez.",
+            "launchFailedHttp": "L'export n'a pas pu être lancé (HTTP {status}). Réessayez.",
+            "unexpected": "Réponse inattendue du serveur. Rechargez la page puis réessayez.",
+            "network": "Erreur réseau. Réessayez."
+        }
+    },
+    "export": {
+        "title": "Export des données",
+        "running": "Export en cours",
+        "confirmDownload": "Voulez-vous vraiment annuler ce téléchargement ?",
+        "confirmExport": "Voulez-vous vraiment annuler cet export ?",
+        "close": "Fermer",
+        "closeWindow": "Fermer la fenêtre",
+        "cancel": "Annuler",
+        "keep": "Continuer",
+        "yesCancel": "Oui, annuler",
+        "format": "Format : {format}",
+        "size": "Taille : {size}",
+        "downloadDuration": "Durée de téléchargement : {time}",
+        "scanned": "{processed} / {total} lignes parcourues",
+        "exported": {
+            "one": "{count} ligne exportée",
+            "other": "{count} lignes exportées"
+        },
+        "preparingExport": "Préparation de l'export…",
+        "pending": "En attente du traitement…",
+        "finalizing": "Finalisation du fichier…",
+        "preparingFile": "Préparation du fichier…",
+        "fileGenerated": "✓ Fichier généré",
+        "bytesOf": "{loaded} / {total}",
+        "received": "{bytes} reçus",
+        "receivedBeforeCancel": "{received} avant l'annulation",
+        "downloadDone": "✓ Téléchargement terminé",
+        "downloadDoneText": "Le fichier a été entièrement téléchargé et enregistré par votre navigateur dans vos téléchargements.",
+        "downloadCancelled": "Téléchargement annulé",
+        "downloadCancelledText": "Aucun fichier n'a été enregistré. Relancez l'export pour le télécharger.",
+        "downloading": "↓ Téléchargement en cours",
+        "stayOnPage": "Restez sur cette page jusqu'à la fin du téléchargement.",
+        "browserLaunched": "Téléchargement lancé",
+        "browserText": "Géré par votre navigateur. Le téléchargement continue dans votre navigateur, même si vous fermez cette fenêtre.",
+        "cancelled": "Export annulé",
+        "nothing": "Rien à exporter",
+        "nothingText": "Aucune ligne ne correspond aux filtres.",
+        "failed": "Échec de l'export",
+        "failedText": "L'export a échoué. Relancez-le.",
+        "cancelling": "Annulation de l'export…",
+        "gone": "Cet export n'est plus disponible.",
+        "unreadable": "État de l'export momentanément illisible — nouvelle tentative…",
+        "unreadableHttp": "État de l'export momentanément illisible (HTTP {status}) — nouvelle tentative…",
+        "incomplete": "Téléchargement incomplet : {loaded} reçus sur {total}.",
+        "httpRefused": "Le serveur a refusé le téléchargement (HTTP {status}).",
+        "interrupted": "Le téléchargement a été interrompu (erreur réseau).",
+        "downloadFailed": "Échec du téléchargement",
+        "retryHint": "{message} Relancez l'export pour réessayer.",
+        "noLink": "Fichier prêt mais lien de téléchargement indisponible. Réessayez.",
+        "alreadyDone": "Cet export est déjà terminé.",
+        "cancelFailed": "L'annulation n'a pas abouti. Réessayez.",
+        "cancelFailedDetail": "L'annulation n'a pas abouti ({detail}). Réessayez.",
+        "cancelNetwork": "L'annulation n'a pas abouti (erreur réseau). Réessayez.",
+        "sessionExpired": "Session expirée : rechargez la page puis relancez l'export.",
+        "reference": "{message} (référence : {ref})"
+    },
+    "progress": {
+        "running": "Export en cours",
+        "pending": "En attente du traitement…",
+        "preparing": "Préparation du fichier…",
+        "cancelledHeading": "Export annulé",
+        "cancelledTitle": "Export annulé.",
+        "errorHeading": "Échec de l'export",
+        "errorTitle": "Échec de l'export.",
+        "doneHeading": "Fichier prêt",
+        "doneTitle": "Téléchargement lancé",
+        "units": [
+            "o",
+            "Ko",
+            "Mo",
+            "Go"
+        ],
+        "durationTotal": "Durée totale",
+        "durationElapsed": "Durée écoulée",
+        "durationGeneration": "Durée de génération",
+        "durationWait": "Durée d'attente",
+        "durationLine": "{label} : {time}"
+    },
+    "datepicker": {
+        "months": [
+            "janvier",
+            "février",
+            "mars",
+            "avril",
+            "mai",
+            "juin",
+            "juillet",
+            "août",
+            "septembre",
+            "octobre",
+            "novembre",
+            "décembre"
+        ],
+        "monthsShort": [
+            "janv.",
+            "févr.",
+            "mars",
+            "avr.",
+            "mai",
+            "juin",
+            "juil.",
+            "août",
+            "sept.",
+            "oct.",
+            "nov.",
+            "déc."
+        ],
+        "weekdays": [
+            "L",
+            "M",
+            "M",
+            "J",
+            "V",
+            "S",
+            "D"
+        ],
+        "errorFormat": "Date invalide (format attendu : jj/mm/aaaa).",
+        "errorRange": "Date hors de la période disponible.",
+        "previousMonth": "Mois précédent",
+        "nextMonth": "Mois suivant",
+        "chooseMonth": "Choisir le mois",
+        "chooseYear": "Choisir l'année",
+        "previousYear": "Année précédente",
+        "nextYear": "Année suivante",
+        "previousYears": "Années précédentes",
+        "nextYears": "Années suivantes",
+        "year": "Année",
+        "goToYear": "Aller à une année précise",
+        "go": "Aller"
+    }
+}

@@ -39,7 +39,11 @@ final class CsvExportFromSnapshotTest extends TestCase
         $this->fx->cleanup();
     }
 
-    /** 6 rows: 2 regions x statuses x dates, with CSV-hostile characters. */
+    /**
+     * 6 rows: 2 regions x statuses x dates, with CSV-hostile characters.
+     * Rows 2 ('INACTIVE') and 5 ('SUSPENDED', not a real active status) are
+     * out of the active-customers perimeter: never exported.
+     */
     private function installSample(): void
     {
         $rows = [
@@ -98,7 +102,7 @@ final class CsvExportFromSnapshotTest extends TestCase
         return array_values(array_diff(scandir($this->exportDir) ?: [], ['.', '..']));
     }
 
-    public function testExportWithoutFilterContainsEveryRowInTheExistingFormat(): void
+    public function testExportWithoutFilterContainsEveryActiveCustomerInTheExistingFormat(): void
     {
         $this->installSample();
 
@@ -107,9 +111,8 @@ final class CsvExportFromSnapshotTest extends TestCase
 
         $this->assertTrue($out['bom'], 'UTF-8 BOM kept for Excel');
         $this->assertSame(CustomerListExportService::COLUMNS, $out['header']);
-        $this->assertCount(6, $out['rows']);
-        $this->assertSame([6, 6, 6, 6], [$meta['rows'], $meta['rowsRead'], $meta['rowsMatched'], $meta['rowsExported']]);
-        $this->assertSame(0.0, $meta['filterDurationMs'], 'no filter evaluated when nothing is filtered');
+        $this->assertSame(['CLI1', 'CLI3', 'CLI4', 'CLI6'], array_column($out['rows'], 'COD_CLI'), 'INACTIVE / SUSPENDED rows are out of the perimeter');
+        $this->assertSame([4, 6, 4, 4], [$meta['rows'], $meta['rowsRead'], $meta['rowsMatched'], $meta['rowsExported']]);
         $this->assertSame(filesize($meta['path']), $meta['fileSize']);
     }
 
@@ -147,7 +150,7 @@ final class CsvExportFromSnapshotTest extends TestCase
     {
         $this->installSample();
 
-        $meta = $this->service()->exportCsv($this->criteria(['region' => ['DRE'], 'status' => ['ACTIVE']]));
+        $meta = $this->service()->exportCsv($this->criteria(['region' => ['DCUY'], 'status' => ['ACTIVE'], 'date_from' => '2030-01-01']));
         $out  = $this->readExport($meta['path']);
 
         $this->assertSame(0, $meta['rowsExported']);
@@ -164,10 +167,10 @@ final class CsvExportFromSnapshotTest extends TestCase
         $names = array_column($rows, 'CUST_NAME', 'COD_CLI');
 
         $this->assertSame('Dupont; "Le Grand"', $names['CLI1']);
-        $this->assertSame('Élève Ngo\'o', $names['CLI2']);
+        $this->assertArrayNotHasKey('CLI2', $names, 'INACTIVE: out of the perimeter');
         $this->assertSame('A;B;C', $names['CLI3']);
         $this->assertSame('"quoted"', $names['CLI4']);
-        $this->assertSame('Ouédraogo & Fils', $names['CLI5']);
+        $this->assertArrayNotHasKey('CLI5', $names, 'SUSPENDED is not SUSPENDED (DELINQUENT ACCOUNT)');
         $this->assertSame('=SUM(A1)', $names['CLI6']);
         $this->assertSame(' ', $rows[0]['E_MAIL'], 'values passed through as in the snapshot');
         $this->assertSame('', $rows[0]['DATE_RESILIATION'], 'empty value stays empty');
@@ -319,11 +322,11 @@ final class CsvExportFromSnapshotTest extends TestCase
     {
         $all = new AllowedValues(
             // Two values each: ticking one is a real restriction (all ticked = none).
-            regions: ['R', 'R2'], divisions: ['D', 'D2'], agences: ['A', 'A2'], statuses: ['S', 'S2'], segmentations: ['G', 'G2'],
+            regions: ['R', 'R2'], divisions: ['D', 'D2'], agences: ['A', 'A2'], statuses: ['ACTIVE', 'ACTIVE (PENDING BILLING)'], segmentations: ['G', 'G2'],
             segmentsTresor: ['T', 'T2'], meters: ['M', 'M2'], voltages: ['V', 'V2'], niuQualities: ['N', 'N2'],
         );
         $criteria = FilterCriteria::fromRequest([
-            'region' => ['R'], 'division' => ['D'], 'agence' => ['A'], 'status' => ['S'], 'segmentation' => ['G'],
+            'region' => ['R'], 'division' => ['D'], 'agence' => ['A'], 'status' => ['ACTIVE'], 'segmentation' => ['G'],
             'segment_tresor' => ['T'], 'meter' => ['M'], 'voltage' => ['V'], 'niu_qc' => ['N'],
             'date_from' => '2020-01-01', 'date_to' => '2020-12-31',
         ], $all);

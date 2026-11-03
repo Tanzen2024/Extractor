@@ -267,15 +267,19 @@ final class SnapshotInstallerTest extends TestCase
     {
         $rows = [
             SnapshotFixture::row(1, ['REGION' => 'DRC', 'STATUS' => 'ACTIVE', 'DATE_AB' => '1985-03-01']),
-            SnapshotFixture::row(2, ['REGION' => 'DRC', 'STATUS' => 'SUSPENDED']),
-            SnapshotFixture::row(3, ['REGION' => 'DRE', 'STATUS' => ' ', 'DIVISION' => ' ', 'DATE_AB' => '2024-12-31']),
+            SnapshotFixture::row(2, ['REGION' => 'DRC', 'STATUS' => 'SUSPENDED (DELINQUENT ACCOUNT)']),
+            SnapshotFixture::row(3, ['REGION' => 'DRE', 'STATUS' => 'ACTIVE', 'DIVISION' => ' ', 'DATE_AB' => '2024-12-31']),
+            // Out of the active-customers perimeter: counted nowhere, offered nowhere.
+            SnapshotFixture::row(4, ['REGION' => 'DRO', 'STATUS' => 'INACTIVE.', 'DATE_AB' => '2025-06-30']),
+            SnapshotFixture::row(5, ['REGION' => 'DRO', 'STATUS' => ' ']),
         ];
         $this->fx->install($rows);
 
         $options = $this->fx->store->active()->filterOptions();
 
-        $this->assertSame([['value' => 'DRC', 'count' => 2], ['value' => 'DRE', 'count' => 1]], $options['regions']);
-        $this->assertSame(['ACTIVE', 'SUSPENDED'], array_column($options['statuses'], 'value'), 'blank values are not offered');
+        $this->assertSame([['value' => 'DRC', 'count' => 2], ['value' => 'DRE', 'count' => 1]], $options['regions'], 'DRO only holds excluded customers');
+        $this->assertSame([['value' => 'ACTIVE', 'count' => 2], ['value' => 'SUSPENDED (DELINQUENT ACCOUNT)', 'count' => 1]], $options['statuses'], 'only active statuses; blank never offered');
+        $this->assertArrayNotHasKey('DRO', $options['geoTree']);
         $this->assertArrayHasKey('Non renseigné', $options['geoTree']['DRE'], 'blank geo level labelled like the dashboard');
         $this->assertSame(['min' => '1990-01-01', 'max' => '2024-12-31'], $options['dateBounds']);
         foreach (['regions', 'divisions', 'agences', 'statuses', 'segmentations', 'segmentsTresor', 'meters', 'voltages', 'niuQualities', 'geoTree', 'dateBounds'] as $key) {

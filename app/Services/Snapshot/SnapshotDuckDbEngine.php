@@ -2,6 +2,7 @@
 
 namespace App\Services\Snapshot;
 
+use App\Services\CustomersList\ActiveCustomers;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\QueryBuilder;
 
@@ -15,6 +16,10 @@ use App\Services\CustomersList\QueryBuilder;
  * DuckDb::literal(); dates come from FilterCriteria as DateTimeImmutable;
  * the free-text search is matched with contains() — no LIKE, no wildcard;
  * column names only ever come from this class's constants.
+ *
+ * The index holds every row of the file; where() always restricts STATUS to
+ * FilterCriteria::effectiveStatuses(), so every query — the unfiltered
+ * reference and the filter options included — covers ActiveCustomers only.
  */
 final class SnapshotDuckDbEngine implements SnapshotQueryEngine
 {
@@ -57,15 +62,15 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
         return (int) ($rows[0]['n'] ?? 0);
     }
 
-    public function kpis(FilterCriteria $criteria, array $activeStatuses, array $meteredMeters): array
+    public function kpis(FilterCriteria $criteria, array $meteredMeters): array
     {
-        return self::kpiRow($this->run($this->kpiSql($criteria, $activeStatuses, $meteredMeters))[0] ?? []);
+        return self::kpiRow($this->run($this->kpiSql($criteria, $meteredMeters))[0] ?? []);
     }
 
-    public function summary(FilterCriteria $criteria, array $activeStatuses, array $meteredMeters): array
+    public function summary(FilterCriteria $criteria, array $meteredMeters): array
     {
         // KPIs and the four charts in ONE DuckDB process, rows tagged by q.
-        $rows = $this->run("SELECT 'kpi' AS q, * FROM (" . $this->kpiSql($criteria, $activeStatuses, $meteredMeters) . ");\n"
+        $rows = $this->run("SELECT 'kpi' AS q, * FROM (" . $this->kpiSql($criteria, $meteredMeters) . ");\n"
             . "SELECT 'dist' AS q, * FROM (" . $this->distributionSql($criteria) . ')');
 
         $kpi  = [];
@@ -82,15 +87,14 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
     }
 
     /** One scan for every KPI (contracts counted distinctly — see $contractUniqueNumeric). */
-    private function kpiSql(FilterCriteria $criteria, array $activeStatuses, array $meteredMeters): string
+    private function kpiSql(FilterCriteria $criteria, array $meteredMeters): string
     {
-        $active  = $this->list($activeStatuses);
+        $active  = $this->list(ActiveCustomers::STATUSES);
         $metered = $this->list($meteredMeters);
 
         return 'SELECT
                 ' . $this->contracts('TRUE') . ' AS total,
                 ' . $this->contracts('STATUS IN (' . $active . ')') . ' AS actifs,
-                ' . $this->contracts('STATUS NOT IN (' . $active . ')') . ' AS inactifs,
                 ' . $this->contracts('METER IN (' . $metered . ')') . ' AS avec_compteur,
                 ' . $this->contracts('contains(upper(NUI_QC), \'CORRECT\')') . ' AS nui_correct,
                 COALESCE(SUM(CASE WHEN trim(PHONE_NUMBERS) <> \'\' OR trim(E_MAIL) <> \'\' THEN 1 ELSE 0 END), 0) AS contact_ok
@@ -111,7 +115,6 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
         return [
             'total'        => (int) ($row['total'] ?? 0),
             'actifs'       => (int) ($row['actifs'] ?? 0),
-            'inactifs'     => (int) ($row['inactifs'] ?? 0),
             'avecCompteur' => (int) ($row['avec_compteur'] ?? 0),
             'nuiCorrect'   => (int) ($row['nui_correct'] ?? 0),
             'contactOk'    => (int) ($row['contact_ok'] ?? 0),
@@ -122,7 +125,7 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
     {
         $row = $this->run('SELECT ' . $this->contracts('TRUE') . ' AS total,
                 ' . $this->contracts('trim(NUI_QC) <> \'\'') . ' AS nui
-            FROM ' . self::T)[0] ?? [];
+            FROM ' . self::T . $this->where(FilterCriteria::none()))[0] ?? [];
 
         return ['totalClients' => (int) ($row['total'] ?? 0), 'totalNui' => (int) ($row['nui'] ?? 0)];
     }
@@ -165,6 +168,39 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
         }
 
         return $out;
+    }
+
+    public function filterOptions(): array
+    {
+        $scope = $this->where(FilterCriteria::none());
+        $flat  = [];
+        foreach (SnapshotFilterOptions::FLAT as $key => $column) {
+            $flat[] = "SELECT 'flat' AS q, " . DuckDb::literal($key) . " AS k, \"{$column}\" AS val, COUNT(*) AS n FROM " . self::T
+                . $scope . " AND \"{$column}\" <> '' GROUP BY \"{$column}\"";
+        }
+
+        $rows = $this->run(implode("\nUNION ALL\n", $flat) . ";\n"
+            . "SELECT 'geo' AS q, REGION AS r, DIVISION AS d, AGENCE AS a, COUNT(*) AS n FROM " . self::T . $scope . " GROUP BY REGION, DIVISION, AGENCE;\n"
+            . "SELECT 'dates' AS q, strftime(MIN(DATE_AB), '%Y-%m-%d') AS mn, strftime(MAX(DATE_AB), '%Y-%m-%d') AS mx FROM " . self::T . $scope);
+
+        $values = [];
+        $geo    = [];
+        $min    = null;
+        $max    = null;
+        foreach ($rows as $row) {
+            if ($row['q'] === 'flat') {
+                $values[$row['k']][(string) $row['val']] = (int) $row['n'];
+            } elseif ($row['q'] === 'geo') {
+                // Several raw blanks may share one "Non renseigné" label.
+                $key       = SnapshotFilterOptions::label((string) $row['r']) . "\0" . SnapshotFilterOptions::label((string) $row['d']) . "\0" . SnapshotFilterOptions::label((string) $row['a']);
+                $geo[$key] = ($geo[$key] ?? 0) + (int) $row['n'];
+            } else {
+                $min = $row['mn'] ?? null;
+                $max = $row['mx'] ?? null;
+            }
+        }
+
+        return SnapshotFilterOptions::build($values, $geo, $min, $max);
     }
 
     public function page(FilterCriteria $criteria, string $search, ?string $sort, string $dir, int $offset, int $limit): array
@@ -216,14 +252,18 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
         return implode(', ', $exprs);
     }
 
-    /** WHERE of RowMatcher (+ SnapshotSort's search), '' when nothing applies. */
+    /** WHERE of RowMatcher (+ SnapshotSort's search) — never empty: STATUS is always restricted. */
     private function where(FilterCriteria $c, string $search = ''): string
     {
         $conds = [];
         foreach (RowMatcher::LIST_FILTERS as $column => $property) {
-            if ($c->{$property} !== []) {
-                $conds[] = "\"{$column}\" IN (" . $this->list($c->{$property}) . ')';
+            $values = $property === 'statuses' ? $c->effectiveStatuses() : $c->{$property};
+            if ($values !== []) {
+                $conds[] = "\"{$column}\" IN (" . $this->list($values) . ')';
             }
+        }
+        if ($c->hasContact !== null) {
+            $conds[] = QueryBuilder::contactCondition($c->hasContact);
         }
         if ($c->dateFrom !== null) {
             $conds[] = 'DATE_AB >= DATE ' . DuckDb::literal($c->dateFrom->format('Y-m-d'));
@@ -245,7 +285,7 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
             $conds[] = '(' . implode(' OR ', $any) . ')';
         }
 
-        return $conds === [] ? '' : ' WHERE ' . implode(' AND ', $conds);
+        return ' WHERE ' . implode(' AND ', $conds);
     }
 
     /** @param list<string> $values */

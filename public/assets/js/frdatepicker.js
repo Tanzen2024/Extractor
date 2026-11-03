@@ -1,5 +1,7 @@
 /**
- * frdatepicker — locale-independent French date field.
+ * frdatepicker — locale-independent dd/mm/yyyy date field. Its texts (month
+ * names, messages, labels) follow the interface language (window.bscdI18n,
+ * catalog "datepicker"); the format stays dd/mm/yyyy in French and English.
  *
  * Replaces <input type="date"> (whose visible format follows the OS/browser
  * locale — en-US shows MM/DD/YYYY on a US Windows). Here the presentation is
@@ -37,17 +39,18 @@
 (function (window, document) {
     'use strict';
 
-    var MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin',
-        'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-    var MONTHS_SHORT = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin',
-        'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
-    var DOW = ['L', 'M', 'M', 'J', 'V', 'S', 'D']; // Monday first
+    var t = window.bscdI18n.t; // public/assets/js/i18n.js
+    var MONTHS = t('datepicker.months');
+    var MONTHS_SHORT = t('datepicker.monthsShort');
+    var DOW = t('datepicker.weekdays'); // Monday first
+
+    function attr(key) { return t(key).replace(/"/g, '&quot;'); }
 
     // 12-year block aligned so the block always contains `y` (…, 2016-2027, 2028-2039, …).
     function yearBlockStart(y) { return y - (((y % 12) + 12) % 12); }
 
-    var ERR_FORMAT = 'Date invalide (format attendu : jj/mm/aaaa).';
-    var ERR_RANGE  = 'Date hors de la période disponible.';
+    var ERR_FORMAT = t('datepicker.errorFormat');
+    var ERR_RANGE  = t('datepicker.errorRange');
 
     function pad(n) { return (n < 10 ? '0' : '') + n; }
 
@@ -248,12 +251,12 @@
 
         var head =
             '<div class="frdate__cal-head">' +
-            '  <button type="button" class="frdate__nav" data-nav="-1" aria-label="Mois précédent">&lsaquo;</button>' +
+            '  <button type="button" class="frdate__nav" data-nav="-1" aria-label="' + attr('datepicker.previousMonth') + '">&lsaquo;</button>' +
             '  <span class="frdate__cal-switch">' +
-            '    <button type="button" class="frdate__pick" data-view="months" aria-label="Choisir le mois">' + capitalise(MONTHS[mo - 1]) + '</button>' +
-            '    <button type="button" class="frdate__pick" data-view="years" aria-label="Choisir l\'année">' + y + '</button>' +
+            '    <button type="button" class="frdate__pick" data-view="months" aria-label="' + attr('datepicker.chooseMonth') + '">' + capitalise(MONTHS[mo - 1]) + '</button>' +
+            '    <button type="button" class="frdate__pick" data-view="years" aria-label="' + attr('datepicker.chooseYear') + '">' + y + '</button>' +
             '  </span>' +
-            '  <button type="button" class="frdate__nav" data-nav="1" aria-label="Mois suivant">&rsaquo;</button>' +
+            '  <button type="button" class="frdate__nav" data-nav="1" aria-label="' + attr('datepicker.nextMonth') + '">&rsaquo;</button>' +
             '</div>';
 
         var dow = '<div class="frdate__cal-dow">' + DOW.map(function (d) { return '<span>' + d + '</span>'; }).join('') + '</div>';
@@ -302,9 +305,9 @@
 
         var head =
             '<div class="frdate__cal-head">' +
-            '  <button type="button" class="frdate__nav" data-nav="-1" aria-label="Année précédente">&lsaquo;</button>' +
-            '  <button type="button" class="frdate__pick" data-view="years" aria-label="Choisir l\'année">' + y + '</button>' +
-            '  <button type="button" class="frdate__nav" data-nav="1" aria-label="Année suivante">&rsaquo;</button>' +
+            '  <button type="button" class="frdate__nav" data-nav="-1" aria-label="' + attr('datepicker.previousYear') + '">&lsaquo;</button>' +
+            '  <button type="button" class="frdate__pick" data-view="years" aria-label="' + attr('datepicker.chooseYear') + '">' + y + '</button>' +
+            '  <button type="button" class="frdate__nav" data-nav="1" aria-label="' + attr('datepicker.nextYear') + '">&rsaquo;</button>' +
             '</div>';
 
         var grid = '';
@@ -350,9 +353,9 @@
 
         var head =
             '<div class="frdate__cal-head">' +
-            '  <button type="button" class="frdate__nav" data-nav="-12" aria-label="Années précédentes">&lsaquo;</button>' +
+            '  <button type="button" class="frdate__nav" data-nav="-12" aria-label="' + attr('datepicker.previousYears') + '">&lsaquo;</button>' +
             '  <span class="frdate__cal-title">' + start + ' – ' + (start + 11) + '</span>' +
-            '  <button type="button" class="frdate__nav" data-nav="12" aria-label="Années suivantes">&rsaquo;</button>' +
+            '  <button type="button" class="frdate__nav" data-nav="12" aria-label="' + attr('datepicker.nextYears') + '">&rsaquo;</button>' +
             '</div>';
 
         var grid = '';
@@ -368,8 +371,8 @@
 
         var jump =
             '<form class="frdate__year-jump">' +
-            '  <input type="number" class="frdate__year-input" inputmode="numeric" min="1900" max="2999" placeholder="Année" aria-label="Aller à une année précise">' +
-            '  <button type="submit" class="frdate__year-go">Aller</button>' +
+            '  <input type="number" class="frdate__year-input" inputmode="numeric" min="1900" max="2999" placeholder="' + attr('datepicker.year') + '" aria-label="' + attr('datepicker.goToYear') + '">' +
+            '  <button type="submit" class="frdate__year-go">' + t('datepicker.go') + '</button>' +
             '</form>';
 
         this.cal.innerHTML = head + '<div class="frdate__cal-years">' + grid + '</div>' + jump;

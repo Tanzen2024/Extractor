@@ -19,8 +19,6 @@ use App\Services\AuthorizationService;
  */
 class AuthController extends BaseController
 {
-    private const GENERIC_ERROR = 'Identifiant ou mot de passe incorrect.';
-
     public function showLogin()
     {
         if (session()->get('isLoggedIn')) {
@@ -40,7 +38,7 @@ class AuthController extends BaseController
         if (! $this->validate($rules)) {
             return redirect()->to(site_url('login'))
                 ->withInput()
-                ->with('error', 'Veuillez renseigner un identifiant et un mot de passe.');
+                ->with('error', lang('Auth.missingFields'));
         }
 
         $username = trim((string) $this->request->getPost('username'));
@@ -125,13 +123,13 @@ class AuthController extends BaseController
 
         session()->destroy();
 
-        return redirect()->to(site_url('login'))->with('success', 'Vous avez été déconnecté.');
+        return redirect()->to(site_url('login'))->with('success', lang('Auth.loggedOut'));
     }
 
     private function reject(): \CodeIgniter\HTTP\RedirectResponse
     {
         return redirect()->to(site_url('login'))
             ->withInput()
-            ->with('error', self::GENERIC_ERROR);
+            ->with('error', lang('Auth.invalid'));
     }
 }

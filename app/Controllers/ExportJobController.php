@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Models\ExportJobModel;
+use App\Services\CustomersList\ActiveCustomers;
 
 /**
  * Status + download for asynchronous CUSTOMERS_LIST export jobs.
@@ -50,8 +51,7 @@ class ExportJobController extends BaseController
             $payload['reference'] = $job['error_reference'];
             $payload['failure']   = [
                 'reference' => $job['error_reference'],
-                'message'   => "L'export a échoué côté serveur. Relancez-le ; si l'échec se répète, "
-                    . "transmettez la référence {$job['error_reference']} à l'administrateur.",
+                'message'   => lang('Dashboard.messages.jobFailed', ['ref' => $job['error_reference']]),
             ];
         }
 
@@ -83,7 +83,7 @@ class ExportJobController extends BaseController
                 'success' => false,
                 'error'   => 'already_finished',
                 'status'  => $status,
-                'message' => $status === 'cancelled' ? 'Cet export est déjà annulé.' : 'Cet export est déjà terminé.',
+                'message' => lang($status === 'cancelled' ? 'Dashboard.messages.jobAlreadyCancelled' : 'Dashboard.messages.jobAlreadyDone'),
             ]);
         }
 
@@ -97,9 +97,7 @@ class ExportJobController extends BaseController
             'previousStatus' => $from,
             // Honest about the file: a running job's partial file is removed
             // by the worker when it stops, not by this request.
-            'message'        => $from === 'running'
-                ? "Export annulé. Le traitement s'arrête au prochain lot ; son fichier partiel sera supprimé."
-                : 'Export annulé avant son démarrage. Aucun fichier généré.',
+            'message'        => lang($from === 'running' ? 'Dashboard.messages.jobCancelledRunning' : 'Dashboard.messages.jobCancelledPending'),
             'timing'         => ExportJobModel::timing($model->find((int) $job['id']) ?? $job),
         ]);
     }
@@ -116,10 +114,12 @@ class ExportJobController extends BaseController
             return $this->response->setStatusCode(409)->setJSON(['error' => 'not_ready', 'status' => $job['status']]);
         }
 
-        if (empty($job['file_path']) || ! is_file($job['file_path'])) {
+        // A file generated before the active-customers perimeter holds every
+        // status: never served, the user relaunches the export.
+        if (empty($job['file_path']) || ! is_file($job['file_path']) || ! ActiveCustomers::jobInScope($job['filters'] ?? null)) {
             return $this->response->setStatusCode(410)->setJSON([
                 'error'   => 'expired',
-                'message' => "Le fichier de cet export n'est plus disponible. Relancez l'export.",
+                'message' => lang('Dashboard.messages.jobFileGone'),
             ]);
         }
 

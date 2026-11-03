@@ -11,7 +11,7 @@
 
 <?= $this->section('breadcrumb') ?>
 <ol class="breadcrumb float-sm-right">
-    <li class="breadcrumb-item"><a href="<?= site_url('dashboard') ?>">Accueil</a></li>
+    <li class="breadcrumb-item"><a href="<?= site_url('dashboard') ?>"><?= esc(lang('App.nav.home')) ?></a></li>
     <li class="breadcrumb-item"><a href="<?= site_url('extractor') ?>">EXTRACTOR</a></li>
     <li class="breadcrumb-item"><?= esc($tool['module_name']) ?></li>
     <li class="breadcrumb-item active"><?= esc($tool['name']) ?></li>
@@ -22,7 +22,7 @@
 
 <div class="mb-3 d-flex flex-wrap justify-content-between align-items-center">
     <a href="<?= site_url('extractor') ?>" class="btn btn-outline-secondary btn-sm mb-2 mb-sm-0">
-        <i class="fas fa-arrow-left mr-1"></i> Retour à EXTRACTOR
+        <i class="fas fa-arrow-left mr-1"></i> <?= esc(lang('Extraction.backTo')) ?>
     </a>
 </div>
 
@@ -32,12 +32,12 @@
         <div class="card-body text-center py-5">
             <i class="fas fa-database fa-2x text-muted mb-3"></i>
             <h5><?= esc($tool['name']) ?></h5>
-            <p class="text-muted">Lance l'extraction pour interroger la base Oracle CMS.</p>
+            <p class="text-muted"><?= esc(lang('Extraction.intro')) ?></p>
 
             <form action="<?= site_url(uri_string()) ?>" method="post" id="extractForm">
                 <?= csrf_field() ?>
                 <button type="submit" class="btn btn-primary" id="btnExtract">
-                    <i class="fas fa-play mr-1"></i> Lancer l'extraction
+                    <i class="fas fa-play mr-1"></i> <?= esc(lang('Extraction.run')) ?>
                 </button>
             </form>
         </div>
@@ -50,7 +50,7 @@
     <?php else: ?>
         <div class="alert alert-success">
             <i class="fas fa-check-circle mr-1"></i>
-            Extraction réussie — <?= count($rows) ?> ligne(s) retournée(s).
+            <?= esc(lang('Extraction.success', ['count' => count($rows)])) ?>
         </div>
     <?php endif; ?>
 
@@ -60,13 +60,13 @@
             <form action="<?= site_url(uri_string()) ?>" method="post" id="extractForm" class="mb-0">
                 <?= csrf_field() ?>
                 <button type="submit" class="btn btn-sm btn-outline-primary" id="btnExtract">
-                    <i class="fas fa-rotate mr-1"></i> Relancer
+                    <i class="fas fa-rotate mr-1"></i> <?= esc(lang('Extraction.rerun')) ?>
                 </button>
             </form>
         </div>
         <div class="card-body <?= empty($rows) ? '' : 'p-0' ?>">
             <?php if (empty($errorMessage) && empty($rows)): ?>
-                <p class="text-muted text-center mb-0 py-4">Aucune donnée trouvée.</p>
+                <p class="text-muted text-center mb-0 py-4"><?= esc(lang('Extraction.noData')) ?></p>
             <?php elseif (! empty($rows)): ?>
                 <div class="table-responsive">
                     <table class="table table-sm table-striped table-hover mb-0">
@@ -101,7 +101,7 @@
 document.getElementById('extractForm')?.addEventListener('submit', function () {
     var btn = document.getElementById('btnExtract');
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Extraction en cours...';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> ' + <?= json_encode(esc(lang('Extraction.running')), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
 });
 </script>
 <?= $this->endSection() ?>

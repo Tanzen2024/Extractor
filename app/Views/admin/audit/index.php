@@ -3,28 +3,28 @@
 <?= $this->section('content') ?>
 
 <div class="card">
-    <div class="card-header"><h3 class="card-title mb-0">Journal d'audit</h3></div>
+    <div class="card-header"><h3 class="card-title mb-0"><?= esc(lang('Admin.audit.journal')) ?></h3></div>
     <div class="card-body">
         <form method="get" class="form-row align-items-end mb-3">
             <div class="col-md-3 mb-2">
-                <label class="mb-0 small">Utilisateur</label>
+                <label class="mb-0 small"><?= esc(lang('Admin.audit.user')) ?></label>
                 <input type="text" name="username" class="form-control form-control-sm" value="<?= esc($filters['username']) ?>">
             </div>
             <div class="col-md-3 mb-2">
-                <label class="mb-0 small">Action</label>
+                <label class="mb-0 small"><?= esc(lang('Admin.audit.action')) ?></label>
                 <select name="action" class="form-control form-control-sm">
-                    <option value="">— toutes —</option>
+                    <option value=""><?= esc(lang('Admin.audit.allActions')) ?></option>
                     <?php foreach ($actions as $a): ?>
                         <option value="<?= esc($a) ?>" <?= $filters['action'] === $a ? 'selected' : '' ?>><?= esc($a) ?></option>
                     <?php endforeach; ?>
                 </select>
             </div>
             <div class="col-md-2 mb-2">
-                <label class="mb-0 small" for="auditDateFrom_d">Du</label>
+                <label class="mb-0 small" for="auditDateFrom_d"><?= esc(lang('Admin.audit.from')) ?></label>
                 <span class="frdate" data-frdate>
                     <input type="text" class="frdate__input form-control form-control-sm" id="auditDateFrom_d"
-                           placeholder="jj/mm/aaaa" inputmode="numeric" maxlength="10" autocomplete="off">
-                    <button type="button" class="frdate__toggle" tabindex="-1" aria-label="Ouvrir le calendrier">
+                           placeholder="<?= esc(lang('App.datepicker.placeholder'), 'attr') ?>" inputmode="numeric" maxlength="10" autocomplete="off">
+                    <button type="button" class="frdate__toggle" tabindex="-1" aria-label="<?= esc(lang('App.datepicker.openCalendar'), 'attr') ?>">
                         <i class="fas fa-calendar-day" aria-hidden="true"></i>
                     </button>
                     <input type="hidden" name="date_from" value="<?= esc($filters['date_from']) ?>">
@@ -32,11 +32,11 @@
                 </span>
             </div>
             <div class="col-md-2 mb-2">
-                <label class="mb-0 small" for="auditDateTo_d">Au</label>
+                <label class="mb-0 small" for="auditDateTo_d"><?= esc(lang('Admin.audit.to')) ?></label>
                 <span class="frdate" data-frdate>
                     <input type="text" class="frdate__input form-control form-control-sm" id="auditDateTo_d"
-                           placeholder="jj/mm/aaaa" inputmode="numeric" maxlength="10" autocomplete="off">
-                    <button type="button" class="frdate__toggle" tabindex="-1" aria-label="Ouvrir le calendrier">
+                           placeholder="<?= esc(lang('App.datepicker.placeholder'), 'attr') ?>" inputmode="numeric" maxlength="10" autocomplete="off">
+                    <button type="button" class="frdate__toggle" tabindex="-1" aria-label="<?= esc(lang('App.datepicker.openCalendar'), 'attr') ?>">
                         <i class="fas fa-calendar-day" aria-hidden="true"></i>
                     </button>
                     <input type="hidden" name="date_to" value="<?= esc($filters['date_to']) ?>">
@@ -44,7 +44,7 @@
                 </span>
             </div>
             <div class="col-md-2 mb-2">
-                <button class="btn btn-sm btn-primary btn-block">Filtrer</button>
+                <button class="btn btn-sm btn-primary btn-block"><?= esc(lang('App.actions.filter')) ?></button>
             </div>
         </form>
 
@@ -52,13 +52,13 @@
             <table class="table table-sm table-striped text-nowrap">
                 <thead>
                     <tr>
-                        <th>Date</th><th>Utilisateur</th><th>Action</th><th>Module</th>
-                        <th>Cible</th><th>Description</th><th>IP</th>
+                        <th><?= esc(lang('Admin.audit.date')) ?></th><th><?= esc(lang('Admin.audit.user')) ?></th><th><?= esc(lang('Admin.audit.action')) ?></th><th><?= esc(lang('Admin.audit.module')) ?></th>
+                        <th><?= esc(lang('Admin.audit.target')) ?></th><th><?= esc(lang('Admin.audit.description')) ?></th><th><?= esc(lang('Admin.audit.ip')) ?></th>
                     </tr>
                 </thead>
                 <tbody>
                 <?php if ($rows === []): ?>
-                    <tr><td colspan="7" class="text-center text-muted py-4">Aucune entrée.</td></tr>
+                    <tr><td colspan="7" class="text-center text-muted py-4"><?= esc(lang('Admin.audit.none')) ?></td></tr>
                 <?php endif; ?>
                 <?php foreach ($rows as $row): ?>
                     <tr>

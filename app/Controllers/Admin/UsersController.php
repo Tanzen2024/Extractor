@@ -34,7 +34,7 @@ class UsersController extends BaseController
     public function index()
     {
         return view('admin/users/index', [
-            'title' => 'Utilisateurs',
+            'title' => lang('Admin.users.title'),
             'users' => $this->users->listWithRoles(),
         ]);
     }
@@ -42,7 +42,7 @@ class UsersController extends BaseController
     public function create()
     {
         return view('admin/users/form', [
-            'title'     => 'Nouvel utilisateur',
+            'title'     => lang('Admin.users.new'),
             'mode'      => 'create',
             'user'      => ['id' => null, 'username' => '', 'display_name' => '', 'is_active' => 1],
             'allRoles'  => $this->roles->orderBy('code', 'ASC')->findAll(),
@@ -58,7 +58,7 @@ class UsersController extends BaseController
             'roles'        => 'permit_empty',
         ];
 
-        if (! $this->validate($rules)) {
+        if (! $this->validate($this->withLabels($rules, ['username' => 'Admin.users.adUsername', 'display_name' => 'Admin.users.displayName']))) {
             return redirect()->back()->withInput()->with('errors', $this->validator->getErrors());
         }
 
@@ -79,14 +79,14 @@ class UsersController extends BaseController
             'description' => 'Utilisateur ' . $username . ' cree',
         ]);
 
-        return redirect()->to(site_url('admin/users'))->with('success', 'Utilisateur créé.');
+        return redirect()->to(site_url('admin/users'))->with('success', lang('Admin.users.created'));
     }
 
     public function show(int $id)
     {
         $user = $this->users->find($id);
         if ($user === null) {
-            return redirect()->to(site_url('admin/users'))->with('error', 'Utilisateur introuvable.');
+            return redirect()->to(site_url('admin/users'))->with('error', lang('Admin.users.notFound'));
         }
 
         $authz = AuthorizationService::forUser($id);
@@ -103,11 +103,11 @@ class UsersController extends BaseController
     {
         $user = $this->users->find($id);
         if ($user === null) {
-            return redirect()->to(site_url('admin/users'))->with('error', 'Utilisateur introuvable.');
+            return redirect()->to(site_url('admin/users'))->with('error', lang('Admin.users.notFound'));
         }
 
         return view('admin/users/form', [
-            'title'     => 'Modifier ' . ($user['display_name'] ?: $user['username']),
+            'title'     => lang('Admin.users.editTitle', ['name' => $user['display_name'] ?: $user['username']]),
             'mode'      => 'edit',
             'user'      => $user,
             'allRoles'  => $this->roles->orderBy('code', 'ASC')->findAll(),
@@ -119,7 +119,7 @@ class UsersController extends BaseController
     {
         $user = $this->users->find($id);
         if ($user === null) {
-            return redirect()->to(site_url('admin/users'))->with('error', 'Utilisateur introuvable.');
+            return redirect()->to(site_url('admin/users'))->with('error', lang('Admin.users.notFound'));
         }
 
         $rules = [
@@ -127,7 +127,7 @@ class UsersController extends BaseController
             'display_name' => 'permit_empty|max_length[190]',
         ];
 
-        if (! $this->validate($rules)) {
+        if (! $this->validate($this->withLabels($rules, ['username' => 'Admin.users.adUsername', 'display_name' => 'Admin.users.displayName']))) {
             return redirect()->back()->withInput()->with('errors', $this->validator->getErrors());
         }
 
@@ -146,7 +146,7 @@ class UsersController extends BaseController
             'description' => 'Roles: ' . (implode(',', AuthorizationService::forUser($id)->roles()) ?: 'aucun'),
         ]);
 
-        return redirect()->to(site_url('admin/users'))->with('success', 'Utilisateur mis à jour.');
+        return redirect()->to(site_url('admin/users'))->with('success', lang('Admin.users.updated'));
     }
 
     public function disable(int $id)
@@ -163,7 +163,7 @@ class UsersController extends BaseController
     {
         $user = $this->users->find($id);
         if ($user === null) {
-            return redirect()->to(site_url('admin/users'))->with('error', 'Utilisateur introuvable.');
+            return redirect()->to(site_url('admin/users'))->with('error', lang('Admin.users.notFound'));
         }
 
         $this->users->update($id, ['is_active' => $active ? 1 : 0]);
@@ -176,6 +176,6 @@ class UsersController extends BaseController
         ]);
 
         return redirect()->to(site_url('admin/users'))
-            ->with('success', $active ? 'Utilisateur réactivé.' : 'Utilisateur désactivé.');
+            ->with('success', lang($active ? 'Admin.users.reactivated' : 'Admin.users.deactivated'));
     }
 }

@@ -40,31 +40,32 @@
  * or a duplicated tab never downloads the same file again.
  */
 (function (root, factory) {
-    var api = factory(root.bscdExportProgress || (typeof require === 'function' ? require('./export-progress.js') : null));
+    var api = factory(
+        root.bscdExportProgress || (typeof require === 'function' ? require('./export-progress.js') : null),
+        root.bscdI18n || (typeof require === 'function' ? require('./i18n.js') : null)
+    );
     if (typeof module === 'object' && module.exports) {
         module.exports = api;
     } else {
         root.bscdExportWidget = api.mount(root);
     }
-}(typeof self !== 'undefined' ? self : this, function (EP) {
+}(typeof self !== 'undefined' ? self : this, function (EP, I18N) {
     'use strict';
+
+    var t = I18N.t; // public/assets/js/i18n.js — catalog "export"
 
     var ACTIVE_KEY = 'bscd_export_active';         // sessionStorage: the job this tab follows
     var DOWNLOADED_KEY = 'bscd_export_downloaded'; // localStorage: job ids already downloaded
     var MAX_DOWNLOADED = 30;
 
-    var FORMATS = { csv: 'CSV', xlsx: 'Excel (.xlsx)' };
+    var FORMATS = { csv: t('dashboard.export.formatCsv'), xlsx: t('dashboard.export.formatXlsx') };
     // Terminal for the SERVER job (polling over). 'downloading' is one of them
     // on purpose: the file is generated; what remains is the download,
     // followed by its own measure (s.dl), never by polling — and while that
     // measure runs the window is NOT closable (see downloadRunning()).
     var TERMINAL = { downloading: true, cancelled: true, error: true, empty: true };
 
-    function fmt(n) {
-        try { return new Intl.NumberFormat('fr-FR').format(n); } catch (e) { return String(n); }
-    }
-
-    function plural(n, word) { return fmt(n) + ' ' + word + (n > 1 ? 's' : ''); }
+    function fmt(n) { return I18N.number(n); }
 
     /**
      * @param {object} deps
@@ -148,7 +149,7 @@
         }
 
         // ── model handed to the renderer ─────────────────────────────
-        function exportedText(n) { return plural(n, 'ligne') + ' exportée' + (n > 1 ? 's' : ''); }
+        function exportedText(n) { return I18N.tn('export.exported', n); }
 
         /**
          * Sections, top to bottom: state → generation bar → line stats →
@@ -160,27 +161,27 @@
             var v = s.view;
             var m = {
                 jobId: s.jobId, phase: s.phase,
-                title: 'Export des données', state: 'Export en cours', status: '',
+                title: t('export.title'), state: t('export.running'), status: '',
                 percent: null, indeterminate: false,
                 counts: '', exported: '',
-                format: s.format ? 'Format : ' + (FORMATS[s.format] || String(s.format).toUpperCase()) : '',
+                format: s.format ? t('export.format', { format: FORMATS[s.format] || String(s.format).toUpperCase() }) : '',
                 size: '', duration: '', downloadDuration: '', download: null,
                 warning: s.warning, reference: '', message: '',
                 confirming: s.confirming, cancelling: s.cancelling,
-                confirmText: downloadRunning() ? 'Voulez-vous vraiment annuler ce téléchargement ?' : 'Voulez-vous vraiment annuler cet export ?',
-                canCancel: false, canClose: false, closeLabel: 'Fermer'
+                confirmText: t(downloadRunning() ? 'export.confirmDownload' : 'export.confirmExport'),
+                canCancel: false, canClose: false, closeLabel: t('export.close')
             };
             var shown = s.clock.display(deps.now());
             m.duration = shown ? shown.text : '';
             // Second, separate clock: the download only (fetch → end of the stream).
             if (s.dl && typeof s.dl.startedAt === 'number') {
                 var end = typeof s.dl.endedAt === 'number' ? s.dl.endedAt : deps.now();
-                m.downloadDuration = 'Durée de téléchargement : ' + EP.formatDuration(Math.max(0, end - s.dl.startedAt) / 1000);
+                m.downloadDuration = t('export.downloadDuration', { time: EP.formatDuration(Math.max(0, end - s.dl.startedAt) / 1000) });
             }
 
             // Line stats: the API's figures, kept once the file is generated.
             if (v && v.processed !== null && v.total !== null) {
-                m.counts = fmt(v.processed) + ' / ' + fmt(v.total) + ' lignes parcourues';
+                m.counts = t('export.scanned', { processed: fmt(v.processed), total: fmt(v.total) });
             }
             var exported = s.phase === 'downloading' ? s.exported : (v && v.total !== null ? v.exported : null);
             if (exported !== null && exported !== undefined) m.exported = exportedText(exported);
@@ -189,52 +190,52 @@
             switch (s.phase) {
                 case 'preparing':
                     // POST /dashboard/export in flight: no figure exists yet.
-                    m.status = "Préparation de l'export…";
+                    m.status = t('export.preparingExport');
                     m.indeterminate = true;
                     break;
                 case 'pending':
-                    m.status = 'En attente du traitement…';
+                    m.status = t('export.pending');
                     m.percent = 0;
                     break;
                 case 'running':
                 case 'finalizing':
-                    m.status = s.phase === 'finalizing' ? 'Finalisation du fichier…' : 'Préparation du fichier…';
+                    m.status = t(s.phase === 'finalizing' ? 'export.finalizing' : 'export.preparingFile');
                     m.percent = v ? v.percent : null;
                     m.indeterminate = m.percent === null;
                     break;
                 case 'downloading':
                     // Generation figures stay; the bar now measures the download.
-                    m.state = '✓ Fichier généré';
-                    m.size = s.fileSize ? 'Taille : ' + EP.formatSize(s.fileSize) : '';
-                    m.closeLabel = 'Fermer la fenêtre';
+                    m.state = t('export.fileGenerated');
+                    m.size = s.fileSize ? t('export.size', { size: EP.formatSize(s.fileSize) }) : '';
+                    m.closeLabel = t('export.closeWindow');
                     var dl = s.dl || { mode: 'browser' };
                     if (dl.mode === 'measured') {
                         // Bytes really received by the page: bar = loaded / Content-Length,
                         // 99 % at most until the stream has ended with every byte.
-                        var bytes = (dl.total ? EP.formatSize(dl.loaded) + ' / ' + EP.formatSize(dl.total) : EP.formatSize(dl.loaded)) + ' reçus';
+                        var bytes = t('export.received', { bytes: dl.total ? t('export.bytesOf', { loaded: EP.formatSize(dl.loaded), total: EP.formatSize(dl.total) }) : EP.formatSize(dl.loaded) });
                         if (dl.state === 'done') {
                             // Every byte received and the stream ended: the only way here.
-                            m.state = '✓ Téléchargement terminé';
+                            m.state = t('export.downloadDone');
                             m.percent = s.machine.downloadProgress(); // 100, set by completed() only
                             m.download = {
                                 title: bytes,
-                                text: 'Le fichier a été entièrement téléchargé et enregistré par votre navigateur dans vos téléchargements.'
+                                text: t('export.downloadDoneText')
                             };
                         } else if (dl.state === 'cancelled') {
                             // Aborted by the user: never 100 %, never "terminé", nothing saved.
-                            m.state = 'Téléchargement annulé';
+                            m.state = t('export.downloadCancelled');
                             m.download = {
-                                title: bytes + " avant l'annulation",
-                                text: "Aucun fichier n'a été enregistré. Relancez l'export pour le télécharger."
+                                title: t('export.receivedBeforeCancel', { received: bytes }),
+                                text: t('export.downloadCancelledText')
                             };
                         } else {
-                            m.state = '↓ Téléchargement en cours';
-                            m.status = '✓ Fichier généré';
+                            m.state = t('export.downloading');
+                            m.status = t('export.fileGenerated');
                             m.percent = dl.total ? s.machine.downloadProgress() : null;
                             m.indeterminate = !dl.total; // no Content-Length: no percentage
                             m.download = {
                                 title: bytes,
-                                text: "Restez sur cette page jusqu'à la fin du téléchargement."
+                                text: t('export.stayOnPage')
                             };
                         }
                         break;
@@ -242,28 +243,28 @@
                     // Browser-managed (window.location): the page sees neither the
                     // bytes nor the end — no bar, no percentage, no "terminé".
                     m.download = {
-                        title: 'Téléchargement lancé',
-                        text: 'Géré par votre navigateur. Le téléchargement continue dans votre navigateur, même si vous fermez cette fenêtre.'
+                        title: t('export.browserLaunched'),
+                        text: t('export.browserText')
                     };
                     break;
                 case 'cancelled':
-                    m.state = 'Export annulé';
+                    m.state = t('export.cancelled');
                     m.status = s.warning || '';
                     m.warning = '';
                     break;
                 case 'empty':
-                    m.state = 'Rien à exporter';
-                    m.status = 'Aucune ligne ne correspond aux filtres.';
+                    m.state = t('export.nothing');
+                    m.status = t('export.nothingText');
                     break;
                 case 'error':
-                    m.state = (s.failure && s.failure.title) || "Échec de l'export";
-                    m.message = (s.failure && s.failure.message) || "L'export a échoué. Relancez-le.";
+                    m.state = (s.failure && s.failure.title) || t('export.failed');
+                    m.message = (s.failure && s.failure.message) || t('export.failedText');
                     m.reference = (s.failure && s.failure.reference) || '';
                     m.warning = '';
                     break;
             }
 
-            if (s.cancelling) m.status = "Annulation de l'export…";
+            if (s.cancelling) m.status = t('export.cancelling');
             // Download state, not the job's: a job 'done' whose file is still
             // arriving keeps "Annuler" and no "Fermer la fenêtre".
             m.canCancel = (!!s.jobId && !isTerminal() && !s.cancelling) || downloadRunning();
@@ -313,12 +314,11 @@
             if (step.kind === 'unreachable') {
                 if (job && job.status === 404) {
                     // Gone (purged, another account, session switched): say so, never poll forever.
-                    finish('error', { failure: { message: "Cet export n'est plus disponible.", reference: '' } });
+                    finish('error', { failure: { message: t('export.gone'), reference: '' } });
                     return;
                 }
                 failures++;
-                s.warning = "État de l'export momentanément illisible" + (job && job.status ? ' (HTTP ' + job.status + ')' : '') +
-                    ' — nouvelle tentative…';
+                s.warning = job && job.status ? t('export.unreadableHttp', { status: job.status }) : t('export.unreadable');
                 render();
                 schedule(Math.min(maxPollMs, pollMs * Math.pow(2, failures)));
                 return;
@@ -430,11 +430,11 @@
                     if (owner !== s) return;
                     var e = err || {};
                     var message = e.kind === 'incomplete'
-                        ? 'Téléchargement incomplet : ' + EP.formatSize(e.loaded) + ' reçus sur ' + EP.formatSize(e.total) + '.'
+                        ? t('export.incomplete', { loaded: EP.formatSize(e.loaded), total: EP.formatSize(e.total) })
                         : e.kind === 'http'
-                            ? (e.message || 'Le serveur a refusé le téléchargement (HTTP ' + e.status + ').')
-                            : 'Le téléchargement a été interrompu (erreur réseau).';
-                    finish('error', { failure: { title: 'Échec du téléchargement', message: message + ' Relancez l\'export pour réessayer.', reference: '' } });
+                            ? (e.message || t('export.httpRefused', { status: e.status }))
+                            : t('export.interrupted');
+                    finish('error', { failure: { title: t('export.downloadFailed'), message: t('export.retryHint', { message: message }), reference: '' } });
                 }
             });
         }
@@ -525,7 +525,7 @@
             s.machine.ready();
             if (!info || !info.downloadUrl) {
                 s.machine.failed();
-                finish('error', { failure: { message: 'Fichier prêt mais lien de téléchargement indisponible. Réessayez.', reference: '' } });
+                finish('error', { failure: { message: t('export.noLink'), reference: '' } });
                 return;
             }
             startDownload(info.downloadUrl, null);
@@ -586,14 +586,14 @@
                 }
                 // Already done / failed: the next poll shows (and downloads) the real end.
                 s.warning = res && res.error === 'already_finished'
-                    ? (res.message || 'Cet export est déjà terminé.')
-                    : "L'annulation n'a pas abouti" + (res && (res.message || res.status) ? ' (' + (res.message || 'HTTP ' + res.status) + ')' : '') + '. Réessayez.';
+                    ? (res.message || t('export.alreadyDone'))
+                    : (res && (res.message || res.status) ? t('export.cancelFailedDetail', { detail: res.message || 'HTTP ' + res.status }) : t('export.cancelFailed'));
                 render();
                 schedule(0);
             }, function () {
                 if (mine !== generation || !s || isTerminal()) return;
                 s.cancelling = false;
-                s.warning = "L'annulation n'a pas abouti (erreur réseau). Réessayez.";
+                s.warning = t('export.cancelNetwork');
                 render();
             });
         }
@@ -625,6 +625,8 @@
         };
     }
 
+    function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+
     var TEMPLATE =
         '<div class="bscd-xw__head">' +
             '<span class="bscd-xw__icon" data-xw-icon aria-hidden="true"></span>' +
@@ -655,15 +657,15 @@
         '<div class="bscd-xw__message" data-xw-message></div>' +
         '<div class="bscd-xw__warning" data-xw-warning></div>' +
         '<div class="bscd-xw__confirm" data-xw-confirm>' +
-            '<span data-xw-confirm-text>Voulez-vous vraiment annuler cet export ?</span>' +
+            '<span data-xw-confirm-text>' + esc(t('export.confirmExport')) + '</span>' +
             '<div class="bscd-xw__actions">' +
-                '<button type="button" class="btn btn-sm btn-link text-muted" data-xw-keep>Continuer</button>' +
-                '<button type="button" class="btn btn-sm btn-outline-danger" data-xw-confirm-yes>Oui, annuler</button>' +
+                '<button type="button" class="btn btn-sm btn-link text-muted" data-xw-keep>' + esc(t('export.keep')) + '</button>' +
+                '<button type="button" class="btn btn-sm btn-outline-danger" data-xw-confirm-yes>' + esc(t('export.yesCancel')) + '</button>' +
             '</div>' +
         '</div>' +
         '<div class="bscd-xw__actions" data-xw-footer>' +
-            '<button type="button" class="btn btn-sm btn-outline-secondary" data-xw-cancel>Annuler</button>' +
-            '<button type="button" class="btn btn-sm btn-primary" data-xw-close>Fermer</button>' +
+            '<button type="button" class="btn btn-sm btn-outline-secondary" data-xw-cancel>' + esc(t('export.cancel')) + '</button>' +
+            '<button type="button" class="btn btn-sm btn-primary" data-xw-close>' + esc(t('export.close')) + '</button>' +
         '</div>';
 
     /** File name of a Content-Disposition header (RFC 5987 filename* first), or null. */
@@ -733,7 +735,7 @@
                 finished();
                 var e = aborted ? { kind: 'aborted' } : (err && err.kind ? err : { kind: 'network' });
                 if (e.kind === 'session') {
-                    e = { kind: 'http', status: 401, message: 'Session expirée : rechargez la page puis relancez l\'export.' };
+                    e = { kind: 'http', status: 401, message: t('export.sessionExpired') };
                 }
                 on.error(e);
             });
@@ -828,7 +830,7 @@
             q('[data-xw-download-title]').textContent = m.download ? m.download.title : '';
             q('[data-xw-download-text]').textContent = m.download ? m.download.text : '';
             var message = q('[data-xw-message]');
-            message.textContent = m.message + (m.reference ? ' (référence : ' + m.reference + ')' : '');
+            message.textContent = m.reference ? t('export.reference', { message: m.message, ref: m.reference }) : m.message;
             show(message, !!m.message);
             q('[data-xw-warning]').textContent = m.warning;
             show(q('[data-xw-warning]'), !!m.warning);

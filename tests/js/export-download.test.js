@@ -10,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readDownload, createExportPhase } = require('../../public/assets/js/export-progress.js');
-const { createExportController, createStreamDownloader, dispositionFileName, ACTIVE_KEY, DOWNLOADED_KEY } = require('../../public/assets/js/export-widget.js');
+const { createExportController, createStreamDownloader, dispositionFileName, saveBlob, ACTIVE_KEY, DOWNLOADED_KEY } = require('../../public/assets/js/export-widget.js');
 
 const MB = 1048576;
 const FILE = 631988813; // the real 603 Mo CSV of the manual test (Content-Length)
@@ -168,6 +168,94 @@ test('downloader: network error during the download → error, nothing saved', a
     assert.equal(h2.events.at(-1)[1].kind, 'network');
 });
 
+test('TEST 6 (stream level): abort() cancels the fetch through its AbortController — reading stops, nothing saved', async () => {
+    let pulls = 0;
+    let signal = null;
+    const h = { saved: [], events: [], active: 0 };
+    const download = createStreamDownloader({
+        fetch: (url, init) => {
+            signal = init.signal;
+            const body = new ReadableStream({
+                start(c) { init.signal.addEventListener('abort', () => c.error(new DOMException('Aborted', 'AbortError'))); },
+                pull(c) { pulls++; return new Promise((r) => setTimeout(r, 5)).then(() => { try { c.enqueue(new Uint8Array(MB)); } catch { /* errored */ } }); },
+            });
+            return Promise.resolve(new Response(body, { headers: { 'Content-Length': String(100 * MB) } }));
+        },
+        save: (blob, name) => h.saved.push(name),
+        frame: (fn) => fn(),
+        active: (d) => { h.active += d; },
+        AbortController,
+    });
+    const ended = new Promise((resolve) => {
+        const handle = download('/exports/64/download', 'x.csv', {
+            progress: (l) => { h.events.push(l); if (l >= 3 * MB) handle.abort(); },
+            done: () => { h.events.push('done'); resolve(); },
+            error: (e) => { h.events.push(e.kind); resolve(); },
+        });
+    });
+    await ended;
+    assert.ok(signal instanceof AbortSignal && signal.aborted, 'fetch got the signal and it was aborted');
+    assert.equal(h.events.at(-1), 'aborted');
+    assert.ok(!h.events.includes('done'));
+    assert.deepEqual(h.saved, []);
+    const pullsAtEnd = pulls;
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(pulls, pullsAtEnd, 'stream no longer read');
+    assert.ok(pulls < 10, 'stopped long before the 100 Mo');
+    assert.equal(h.active, 0, 'leave-page guard released');
+});
+
+test('abort() after the last byte but before the save → still nothing saved', async () => {
+    let handle;
+    const saved = [];
+    const events = [];
+    handle = createStreamDownloader({
+        fetch: () => Promise.resolve(streamResponse([10, 10], { contentLength: 20 })),
+        save: (b, n) => saved.push(n),
+        frame: (fn) => fn(),
+        active() {},
+    })('/exports/1/download', 'x.csv', {
+        progress: (l) => { if (l === 20) handle.abort(); },
+        done: () => events.push('done'),
+        error: (e) => events.push(e.kind),
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(events, ['aborted']);
+    assert.deepEqual(saved, []);
+});
+
+test('TEST 7-8: Content-Length valid / absent / invalid → total or null, never a crash', async () => {
+    for (const [cl, total] of [[1000, 1000], [undefined, null], ['abc', null], ['0', null], ['-5', null]]) {
+        const seen = [];
+        const r = await readDownload(streamResponse([600, 400], { contentLength: cl }), (l, t) => seen.push(t));
+        assert.ok(seen.every((t) => t === total), 'Content-Length ' + cl);
+        assert.equal(r.loaded, 1000);
+    }
+});
+
+test('TEST 10: saveBlob → object URL of the Blob, <a download> clicked once, URL revoked later (not before the save)', () => {
+    const calls = [];
+    const timers = [];
+    const a = { style: {}, click() { calls.push(['click', a.href, a.download]); }, remove() { calls.push(['remove']); } };
+    const win = {
+        document: { createElement: (tag) => { calls.push(['create', tag]); return a; }, body: { appendChild: (n) => calls.push(['append', n === a]) } },
+        URL: {
+            createObjectURL: (b) => { calls.push(['url', b.size, b.type]); return 'blob:http://10.250.90.169:8083/uuid'; },
+            revokeObjectURL: (u) => calls.push(['revoke', u]),
+        },
+        setTimeout: (fn, ms) => timers.push({ fn, ms }),
+    };
+    saveBlob(win, new Blob(['a;b\n1;2\n'], { type: 'application/octet-stream' }), 'customer_list_64.csv');
+    assert.deepEqual(calls, [
+        ['url', 8, 'application/octet-stream'], ['create', 'a'], ['append', true],
+        ['click', 'blob:http://10.250.90.169:8083/uuid', 'customer_list_64.csv'], ['remove'],
+    ]);
+    assert.equal(timers.length, 1);
+    assert.ok(timers[0].ms >= 60000, 'revoked only after a delay');
+    timers[0].fn();
+    assert.deepEqual(calls.at(-1), ['revoke', 'blob:http://10.250.90.169:8083/uuid']);
+});
+
 test('dispositionFileName: RFC 5987 filename* first, then filename', () => {
     assert.equal(dispositionFileName('attachment; filename="a.csv"; filename*=UTF-8\'\'r%C3%A9sum%C3%A9.csv'), 'résumé.csv');
     assert.equal(dispositionFileName('attachment; filename="customer_list_1.csv"'), 'customer_list_1.csv');
@@ -220,7 +308,11 @@ function harness() {
         clearTimer(id) { timers.delete(id); },
         now: () => now,
         download(url) { h.fallback.push(url); },
-        downloader(url, fileName, on) { h.downloads.push({ url, fileName, on }); },
+        downloader(url, fileName, on) {
+            const d = { url, fileName, on, aborted: 0 };
+            h.downloads.push(d);
+            return { abort() { d.aborted++; } };
+        },
         render(m) { h.renders.push(m); },
         isHidden: () => false,
     });
@@ -257,10 +349,10 @@ test('file ready → the download starts at once (automatic), at 0 %, polling st
 
     const m = h.last();
     assert.equal(m.phase, 'downloading');
-    assert.equal(m.state, '✓ Fichier généré');
-    assert.equal(m.status, 'Téléchargement du fichier', 'the bar is labelled: download, not generation');
+    assert.equal(m.state, '↓ Téléchargement en cours', 'the bar is labelled: download, not generation');
+    assert.equal(m.status, '✓ Fichier généré');
     assert.equal(m.percent, 0);
-    assert.equal(m.download.title, 'Téléchargement en cours');
+    assert.equal(m.download.title, '0 o / 603 Mo reçus');
     assert.match(m.counts, /lignes parcourues$/);
     assert.equal(m.size, 'Taille : 603 Mo');
     assert.equal(m.duration, 'Durée de génération : 00:06:12');
@@ -268,7 +360,7 @@ test('file ready → the download starts at once (automatic), at 0 %, polling st
     const polls = h.requests.length;
     await h.advance(60000);
     assert.equal(h.requests.length, polls, 'no polling once the file is ready');
-    assert.equal(h.pendingTimers(), 0);
+    assert.equal(h.pendingTimers(), 1, 'only the download-duration ticker');
 });
 
 test('603 Mo download: 0 → 10 → 25 → 50 → 75 → 90 → 99 % with Mo received, 100 % + "terminé" only at the end of the stream', async () => {
@@ -281,8 +373,8 @@ test('603 Mo download: 0 → 10 → 25 → 50 → 75 → 90 → 99 % with Mo rec
         shown.push(h.last());
     }
     assert.deepEqual(shown.map((m) => m.percent), [0, 10, 25, 50, 75, 90, 99, 99], 'every byte in but stream not ended: still 99');
-    assert.match(shown[3].download.text, /^301 Mo \/ 603 Mo reçus\. /);
-    assert.ok(shown.every((m) => m.state === '✓ Fichier généré' && m.download.title === 'Téléchargement en cours'));
+    assert.equal(shown[3].download.title, '301 Mo / 603 Mo reçus');
+    assert.ok(shown.every((m) => m.state === '↓ Téléchargement en cours' && m.canCancel && !m.canClose));
     for (const m of h.renders) {
         assert.notEqual(m && m.percent, 100);
         assert.doesNotMatch(JSON.stringify(m), /terminé/i);
@@ -292,8 +384,9 @@ test('603 Mo download: 0 → 10 → 25 → 50 → 75 → 90 → 99 % with Mo rec
     const end = h.last();
     assert.equal(end.percent, 100);
     assert.equal(end.state, '✓ Téléchargement terminé');
-    assert.equal(end.download.title, 'Le fichier a été entièrement téléchargé.');
-    assert.match(end.download.text, /^603 Mo \/ 603 Mo reçus — /);
+    assert.equal(end.download.title, '603 Mo / 603 Mo reçus');
+    assert.match(end.download.text, /entièrement téléchargé/);
+    assert.equal(end.canCancel, false);
     // Generation information still there.
     assert.match(end.counts, /lignes parcourues$/);
     assert.match(end.exported, /lignes exportées$/);
@@ -310,7 +403,8 @@ test('no Content-Length → bytes received, indeterminate bar, no percentage, th
     h.dl().on.progress(5 * MB, null);
     assert.equal(h.last().percent, null);
     assert.equal(h.last().indeterminate, true);
-    assert.match(h.last().download.text, /^5,0 Mo reçus\. /);
+    assert.equal(h.last().download.title, '5,0 Mo reçus');
+    assert.equal(h.last().canCancel, true);
     h.dl().on.done({ loaded: 7 * MB, total: null });
     assert.equal(h.last().percent, 100);
     assert.equal(h.last().state, '✓ Téléchargement terminé');
@@ -354,16 +448,16 @@ test('one download per job: marked downloaded only once complete; a later "done"
     assert.deepEqual(h2.fallback, []);
 });
 
-test('"Fermer la fenêtre" during the download: window hidden, download goes on and completes without error', async () => {
+test('job done ≠ download done: no "Fermer la fenêtre" and close() refused while the stream is read', async () => {
     const h = harness();
     await toDownload(h);
     h.dl().on.progress(100 * MB, FILE);
-    h.controller.close();
-    assert.equal(h.last(), null);
-    const renders = h.renders.length;
-    assert.doesNotThrow(() => { h.dl().on.progress(500 * MB, FILE); h.dl().on.done({ loaded: FILE, total: FILE }); });
-    assert.equal(h.renders.length, renders, 'nothing redrawn once closed');
-    assert.deepEqual(h.local.get(DOWNLOADED_KEY), [63], 'still recorded as downloaded');
+    assert.equal(h.last().canClose, false);
+    assert.equal(h.controller.close(), false);
+    assert.equal(h.last().jobId, 63, 'window still shown');
+    h.dl().on.done({ loaded: FILE, total: FILE });
+    assert.equal(h.last().canClose, true);
+    assert.deepEqual(h.local.get(DOWNLOADED_KEY), [63]);
 });
 
 test('closing after "Téléchargement terminé" hides the window, no error', async () => {
@@ -382,10 +476,8 @@ test('never two downloads at once: no new export while a download receives bytes
     assert.equal(h.controller.isBusy(), true);
     assert.equal(h.controller.begin({ format: 'csv' }), false, 'second export refused during the download');
 
-    h.controller.close();
-    assert.equal(h.last(), null);
-    assert.equal(h.controller.begin({ format: 'csv' }), false, 'still refused once the window is closed…');
-    assert.equal(h.last().jobId, 63, '…and the running download is shown again');
+    assert.equal(h.controller.close(), false, 'the running download keeps its window');
+    assert.equal(h.last().jobId, 63);
     assert.equal(h.last().percent, 16);
     assert.equal(h.downloads.length, 1);
 });
@@ -401,19 +493,146 @@ test('two exports in a row: the second starts once the first download has ended,
     assert.equal(h.dl(1).url, '/exports/64/download');
     assert.equal(h.last().jobId, 64);
     assert.equal(h.last().percent, 0);
-    assert.equal(h.last().state, '✓ Fichier généré');
+    assert.equal(h.last().state, '↓ Téléchargement en cours');
     h.dl(1).on.error({ kind: 'network' });
     assert.equal(h.controller.isBusy(), false, 'a failed download frees the slot too');
     assert.deepEqual(h.local.get(DOWNLOADED_KEY), [63]);
 });
 
-test('cancellation exists only during the generation: no "Annuler" once the download has started', async () => {
+// ── download: "Annuler", its own clock, "Fermer" only at the end ────
+
+test('TEST 1-2: "Annuler" from the first byte to the last, never "Fermer la fenêtre" meanwhile', async () => {
     const h = harness();
     await toDownload(h);
-    assert.equal(h.last().canCancel, false);
+    assert.equal(h.last().canCancel, true, 'download started: Annuler');
+    assert.equal(h.last().canClose, false);
+    for (const loaded of [1, 90 * MB, FILE - 1, FILE]) {
+        h.dl().on.progress(loaded, FILE);
+        assert.equal(h.last().canCancel, true, loaded + ' bytes: still Annuler');
+        assert.equal(h.last().canClose, false);
+    }
+});
+
+test('TEST 3: "Durée de téléchargement" shown from the start and ticking every second, chunks or not', async () => {
+    const h = harness();
+    await toDownload(h); // job done at t=3000: the download clock starts here
+    assert.equal(h.last().downloadDuration, 'Durée de téléchargement : 00:00:00');
+    await h.advance(5000); // no chunk at all: the ticker still redraws
+    assert.equal(h.last().downloadDuration, 'Durée de téléchargement : 00:00:05');
+    h.dl().on.progress(90 * MB, FILE);
+    await h.advance(7000);
+    assert.equal(h.last().downloadDuration, 'Durée de téléchargement : 00:00:12');
+});
+
+test('TEST 4: done === true → 100 %, "terminé", Fermer visible, Annuler hidden, both clocks frozen', async () => {
+    const h = harness();
+    await toDownload(h);
+    await h.advance(18000);
+    h.dl().on.done({ loaded: FILE, total: FILE });
+    const end = h.last();
+    assert.equal(end.state, '✓ Téléchargement terminé');
+    assert.equal(end.percent, 100);
+    assert.equal(end.canClose, true);
+    assert.equal(end.canCancel, false);
+    assert.equal(end.downloadDuration, 'Durée de téléchargement : 00:00:18');
+    await h.advance(60000);
+    assert.equal(h.pendingTimers(), 0, 'ticker stopped');
+    assert.equal(h.controller.model().downloadDuration, 'Durée de téléchargement : 00:00:18');
+    assert.equal(h.controller.model().duration, 'Durée de génération : 00:06:12');
+});
+
+test('TEST 5: "Durée de génération" stays the server figure, independent of the download time', async () => {
+    const h = harness();
+    await toDownload(h);
+    await h.advance(42000);
+    const m = h.last();
+    assert.equal(m.duration, 'Durée de génération : 00:06:12', 'not a total, not moving');
+    assert.equal(m.downloadDuration, 'Durée de téléchargement : 00:00:42');
+});
+
+test('TEST 6: Annuler → confirmation → abort(): stream stopped, no "terminé", nothing saved/recorded, Fermer offered', async () => {
+    const h = harness();
+    await toDownload(h);
+    h.dl().on.progress(90 * MB, 149 * MB);
+    await h.advance(4000);
     h.controller.cancel();
-    assert.equal(h.last().confirming, false);
-    assert.equal(h.requests.filter((r) => r.url.endsWith('/cancel')).length, 0);
+    assert.equal(h.last().confirming, true);
+    assert.equal(h.last().confirmText, 'Voulez-vous vraiment annuler ce téléchargement ?');
+    assert.equal(h.dl().aborted, 0, 'nothing aborted before the confirmation');
+    h.controller.confirmCancel();
+    assert.equal(h.dl().aborted, 1, 'the downloader\'s AbortController is used');
+    assert.equal(h.requests.filter((r) => r.url.endsWith('/cancel')).length, 0, 'the server job is not touched');
+
+    const m = h.last();
+    assert.equal(m.state, 'Téléchargement annulé');
+    assert.equal(m.canCancel, false);
+    assert.equal(m.canClose, true);
+    assert.equal(m.percent, null);
+    assert.equal(m.download.title, "90 Mo / 149 Mo reçus avant l'annulation");
+    assert.equal(m.downloadDuration, 'Durée de téléchargement : 00:00:04');
+    // Late callbacks of the aborted stream change nothing.
+    h.dl().on.progress(100 * MB, 149 * MB);
+    h.dl().on.error({ kind: 'aborted' });
+    h.dl().on.done({ loaded: 149 * MB, total: 149 * MB });
+    assert.equal(h.last().state, 'Téléchargement annulé');
+    for (const r of h.renders) assert.doesNotMatch(JSON.stringify(r), /terminé/);
+    await h.advance(10000);
+    assert.equal(h.controller.model().downloadDuration, 'Durée de téléchargement : 00:00:04', 'clock stopped');
+    assert.equal(h.local.get(DOWNLOADED_KEY), null, 'not recorded as downloaded');
+    assert.equal(h.session.get(ACTIVE_KEY), null, 'not restarted by the next page');
+    assert.equal(h.controller.isBusy(), false, 'a new export may start');
+    assert.equal(h.controller.close(), true);
+});
+
+test('"Continuer" in the confirmation keeps the download running', async () => {
+    const h = harness();
+    await toDownload(h);
+    h.controller.cancel();
+    h.controller.abortCancel();
+    assert.equal(h.dl().aborted, 0);
+    assert.equal(h.last().canCancel, true);
+    h.dl().on.done({ loaded: FILE, total: FILE });
+    assert.equal(h.last().state, '✓ Téléchargement terminé');
+});
+
+test('server-side cancellation during the generation is unchanged (POST /cancel, export wording)', async () => {
+    const h = harness();
+    h.answer('/exports/70', running(1000));
+    h.answer('/exports/70/cancel', { success: true, timing: { elapsedSeconds: 31 } });
+    h.controller.begin({ format: 'csv' });
+    h.controller.attach(70, { format: 'csv' });
+    await h.advance(0);
+    h.controller.cancel();
+    assert.equal(h.last().confirmText, 'Voulez-vous vraiment annuler cet export ?');
+    h.controller.confirmCancel();
+    await h.advance(0);
+    assert.equal(h.requests.filter((r) => r.url === '/exports/70/cancel').length, 1);
+    assert.equal(h.last().state, 'Export annulé');
+    assert.equal(h.last().downloadDuration, '');
+});
+
+test('TEST 9: network error during the download → no Annuler, Fermer, download clock frozen', async () => {
+    const h = harness();
+    await toDownload(h);
+    await h.advance(3000);
+    h.dl().on.error({ kind: 'network' });
+    const m = h.last();
+    assert.equal(m.state, 'Échec du téléchargement');
+    assert.equal(m.canCancel, false);
+    assert.equal(m.canClose, true);
+    assert.equal(m.downloadDuration, 'Durée de téléchargement : 00:00:03');
+});
+
+test('sync export (no job id): the download can be cancelled too', () => {
+    const h = harness();
+    h.controller.begin({ format: 'csv', count: 1200 });
+    h.controller.syncDone({ format: 'csv', count: 1200, rows: 1200, downloadUrl: '/dashboard/export/download?f=x', fileSize: 2 * MB, generationSeconds: 4 });
+    assert.equal(h.last().canCancel, true);
+    assert.equal(h.last().duration, 'Durée de génération : 00:00:04');
+    h.controller.cancel();
+    h.controller.confirmCancel();
+    assert.equal(h.dl().aborted, 1);
+    assert.equal(h.last().state, 'Téléchargement annulé');
 });
 
 test('sync export (file generated by the POST) uses the same measured download', () => {

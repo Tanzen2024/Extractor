@@ -6,14 +6,13 @@ use App\Services\CustomersList\DashboardService;
 use App\Services\CustomersList\FilterCriteria;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
-use Config\Oracle as OracleConfig;
 use Throwable;
 
 /**
  * Pre-computes the dashboard's payloads for the ACTIVE SNAPSHOT version, so
- * the first visit after a refresh does not pay for the first queries:
- * unfiltered, and with the first-load filter (the active statuses, see
- * dashboard-defaults.js). Reads the snapshot's DuckDB index only — never
+ * the first visit after a refresh does not pay for the first queries: filter
+ * options and the first-load view (no user filter = the active-customers
+ * perimeter, its Postpaid / Prepaid sections included). Reads the snapshot's DuckDB index only — never
  * Oracle. Cached per version: run it right after `customers:refresh`.
  *
  *   php spark dashboard:warm
@@ -31,11 +30,11 @@ class WarmDashboardCache extends BaseCommand
         try {
             CLI::write('Snapshot : ' . $service->engine()->version());
 
-            $allowed  = array_column($service->filterOptions()['statuses'] ?? [], 'value');
-            $sets     = [
-                'sans filtre'            => FilterCriteria::none(),
-                'statuts actifs (défaut)' => FilterCriteria::fromArray(['statuses' => array_values(array_intersect((new OracleConfig())->activeStatuses, $allowed))]),
-            ];
+            $t = microtime(true);
+            $service->filterOptions(true);
+            CLI::write('options de filtres : ' . $this->ms($t), 'green');
+
+            $sets = ['sans filtre' => FilterCriteria::none()];
 
             foreach ($sets as $label => $criteria) {
                 $t = microtime(true);

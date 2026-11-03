@@ -94,7 +94,9 @@ final class QueryBuilder
             'REGION'         => $c->regions,
             'DIVISION'       => $c->divisions,
             'AGENCE'         => $c->agences,
-            'STATUS'         => $c->statuses,
+            // Always restricted: the selection or the 4 ActiveCustomers
+            // statuses — no criteria reads an out-of-perimeter contract.
+            'STATUS'         => $c->effectiveStatuses(),
             'SEGMENTATION'   => $c->segmentations,
             'SEGMENT_TRESOR' => $c->segmentsTresor,
             // Real column in CMS_RFC.TB_CUSTOMERS_LIST is METER (VARCHAR2(22)),
@@ -123,7 +125,27 @@ final class QueryBuilder
             $conds[]      = $column . ' IN (' . implode(', ', $placeholders) . ')';
         }
 
+        if ($c->hasContact !== null) {
+            $conds[] = self::contactCondition($c->hasContact);
+        }
+
         return ['sql' => implode(' AND ', $conds), 'binds' => $binds];
+    }
+
+    /**
+     * "Contact renseigné" = PHONE_NUMBERS or E_MAIL holds real text (the
+     * "Contacts renseignés" KPI rule). COALESCE(LENGTH(TRIM())) reads " ",
+     * NULL (Oracle) and '' (DuckDB index) all as "empty", so the same SQL
+     * holds on both engines (QueryBuilderSnapshotParityTest).
+     */
+    public static function contactCondition(bool $hasContact): string
+    {
+        $filled = array_map(
+            static fn (string $col): string => "COALESCE(LENGTH(TRIM({$col})), 0) " . ($hasContact ? '> 0' : '= 0'),
+            FilterCriteria::CONTACT_COLUMNS,
+        );
+
+        return '(' . implode($hasContact ? ' OR ' : ' AND ', $filled) . ')';
     }
 
     /**
@@ -202,7 +224,7 @@ final class QueryBuilder
         }
         $meterIn = implode(', ', $meterPlaceholders) ?: "NULL";
 
-        $active             = $this->config->activeStatuses;
+        $active             = ActiveCustomers::STATUSES;
         $activePlaceholders = [];
         foreach (array_values($active) as $i => $value) {
             $key                  = 'active' . $i;
@@ -223,11 +245,11 @@ final class QueryBuilder
         // content" test: NULL -> NULL (uncounted), " " -> false, any real
         // string -> true. Used here only for the "Contacts renseignés" KPI.
         //
-        // INACTIFS = the "Contrats inactifs" group of the STATUT filter
-        // (dashboard.js configureStatusGroups()): every status that is NOT one
-        // of the active ones, blank/NULL included — so ACTIFS + INACTIFS = TOTAL.
+        // ACTIFS = TOTAL since where() keeps ActiveCustomers only; recounted
+        // on the 4 statuses as a guard. (INACTIFS was dropped with the
+        // perimeter: it is 0 by construction.)
         //
-        // TOTAL / ACTIFS / INACTIFS / AVEC_COMPTEUR / NUI_CORRECT are explicit CONTRACT counts
+        // TOTAL / ACTIFS / AVEC_COMPTEUR / NUI_CORRECT are explicit CONTRACT counts
         // (COUNT(DISTINCT CONTRACT), CONTRACT being the row's own unique
         // identifier) — a deliberate business decision: the KPI cards keep
         // their "Clients ..." labels, but count CONTRACTS, not distinct
@@ -240,7 +262,6 @@ final class QueryBuilder
         $sql = 'SELECT
                 COUNT(DISTINCT CONTRACT) TOTAL,
                 COUNT(DISTINCT CASE WHEN STATUS IN (' . $activeIn . ') THEN CONTRACT END) ACTIFS,
-                COUNT(DISTINCT CASE WHEN STATUS IS NULL OR STATUS NOT IN (' . $activeIn . ') THEN CONTRACT END) INACTIFS,
                 COUNT(DISTINCT CASE WHEN METER IN (' . $meterIn . ') THEN CONTRACT END) AVEC_COMPTEUR,
                 COUNT(DISTINCT CASE WHEN UPPER(NUI_QC) LIKE :nuiCorrect THEN CONTRACT END) NUI_CORRECT,
                 SUM(CASE WHEN PHONE_NUMBERS > :blank OR E_MAIL > :blank THEN 1 ELSE 0 END) CONTACT_OK
@@ -259,12 +280,14 @@ final class QueryBuilder
      */
     public function referenceStatement(): array
     {
-        $sql = 'SELECT
+        // "Unfiltered" = no user filter, still the active-customers perimeter.
+        $where = $this->where(FilterCriteria::none());
+        $sql   = 'SELECT
                 COUNT(DISTINCT CONTRACT) TOTAL,
                 COUNT(DISTINCT CASE WHEN NUI_QC > :blank THEN CONTRACT END) NUI_TOTAL
-            FROM ' . self::TABLE;
+            FROM ' . self::TABLE . $this->whereSuffix($where['sql']);
 
-        return ['sql' => $sql, 'binds' => ['blank' => ' ']];
+        return ['sql' => $sql, 'binds' => $where['binds'] + ['blank' => ' ']];
     }
 
     /**

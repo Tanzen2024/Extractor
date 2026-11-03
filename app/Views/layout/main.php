@@ -1,32 +1,47 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="<?= esc(current_locale(), 'attr') ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token-name" content="<?= csrf_token() ?>">
     <meta name="csrf-token-value" content="<?= csrf_hash() ?>">
-    <title><?= esc($title ?? 'Tableau de bord') ?> — <?= esc(config('App')->appName) ?></title>
+    <title><?= esc($title ?? lang('App.defaultTitle')) ?> — <?= esc(config('App')->appName) ?></title>
 
     <link rel="stylesheet" href="<?= base_url('assets/vendor/bootstrap/bootstrap.min.css') ?>">
     <link rel="stylesheet" href="<?= base_url('assets/vendor/fontawesome/css/all.min.css') ?>">
     <link rel="stylesheet" href="<?= base_url('assets/vendor/adminlte/adminlte.min.css') ?>">
     <link rel="stylesheet" href="<?= base_url('assets/css/custom.css') ?>?v=<?= @filemtime(FCPATH . 'assets/css/custom.css') ?: 0 ?>">
     <?= $this->renderSection('styles') ?>
+    <?php // Theme before the first paint (no white flash): saved choice, else the system preference. See assets/js/theme.js. ?>
+    <script>(function () { try { var s = localStorage.getItem('bscd_theme'); var d = s ? s === 'dark' : !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches); document.documentElement.setAttribute('data-theme', d ? 'dark' : 'light'); } catch (e) {} })();</script>
 </head>
 <body class="hold-transition sidebar-mini layout-fixed">
+<script>if (document.documentElement.getAttribute('data-theme') === 'dark') document.body.classList.add('dark-mode');</script>
 <div class="wrapper">
 
     <nav class="main-header navbar navbar-expand navbar-white navbar-light">
         <ul class="navbar-nav">
             <li class="nav-item">
-                <a class="nav-link" data-widget="pushmenu" href="#" role="button"><i class="fas fa-bars"></i></a>
-            </li>
-            <li class="nav-item d-none d-sm-inline-block">
-                <span class="nav-link app-brand-header"><?= esc(config('App')->appName) ?></span>
+                <a class="nav-link" data-widget="pushmenu" href="#" role="button" aria-label="<?= esc(lang('App.nav.toggleMenu'), 'attr') ?>"><i class="fas fa-bars"></i></a>
             </li>
         </ul>
 
+        <div class="app-brand-block">
+            <span class="app-brand-header"><?= esc(config('App')->appName) ?></span>
+            <span class="app-brand-tagline"><?= esc(lang('App.tagline')) ?></span>
+        </div>
+
         <ul class="navbar-nav ml-auto">
+            <li class="nav-item d-flex align-items-center">
+                <?= $this->include('partials/language_switcher', ['variant' => 'navbar']) ?>
+            </li>
+            <li class="nav-item d-flex align-items-center">
+                <button type="button" class="bscd-theme-toggle" data-theme-toggle aria-pressed="false"
+                        data-label-dark="<?= esc(lang('App.theme.toDark'), 'attr') ?>" data-label-light="<?= esc(lang('App.theme.toLight'), 'attr') ?>"
+                        aria-label="<?= esc(lang('App.theme.toDark'), 'attr') ?>" title="<?= esc(lang('App.theme.toDark'), 'attr') ?>">
+                    <i class="fas fa-moon" aria-hidden="true"></i>
+                </button>
+            </li>
             <li class="nav-item dropdown">
                 <a class="nav-link" data-toggle="dropdown" href="#">
                     <i class="fas fa-user-circle mr-1"></i>
@@ -36,7 +51,7 @@
                 </a>
                 <div class="dropdown-menu dropdown-menu-right">
                     <a href="<?= site_url('logout') ?>" class="dropdown-item">
-                        <i class="fas fa-sign-out-alt mr-2"></i> Déconnexion
+                        <i class="fas fa-sign-out-alt mr-2"></i> <?= esc(lang('App.nav.logout')) ?>
                     </a>
                 </div>
             </li>
@@ -46,7 +61,7 @@
     <aside class="main-sidebar sidebar-dark-primary elevation-4">
         <a href="<?= site_url('dashboard') ?>" class="brand-link">
             <i class="fas fa-database brand-icon"></i>
-            <span class="brand-text font-weight-bold">MARKETING (MI)</span>
+            <span class="brand-text font-weight-bold"><?= esc(config('App')->appName) ?></span>
         </a>
 
         <div class="sidebar">
@@ -62,18 +77,18 @@
                     <li class="nav-item">
                         <a href="<?= site_url('dashboard') ?>" class="nav-link <?= ($uri === 'dashboard' || $uri === '') ? 'active' : '' ?>">
                             <i class="nav-icon fas fa-th-large"></i>
-                            <p>Dashboard</p>
+                            <p><?= esc(lang('App.nav.dashboard')) ?></p>
                         </a>
                     </li>
 
                     <?php if ($canUsers || $canRoles || $canPermissions || $canAudit): ?>
-                    <li class="nav-header">ADMINISTRATION</li>
+                    <li class="nav-header"><?= esc(lang('App.nav.administration')) ?></li>
 
                     <?php if ($canUsers): ?>
                     <li class="nav-item">
                         <a href="<?= site_url('admin/users') ?>" class="nav-link <?= ($uri === 'admin/users' || preg_match('#^admin/users/\d#', $uri)) ? 'active' : '' ?>">
                             <i class="nav-icon fas fa-user"></i>
-                            <p>Utilisateur</p>
+                            <p><?= esc(lang('App.nav.users')) ?></p>
                         </a>
                     </li>
                     <?php endif; ?>
@@ -82,7 +97,7 @@
                     <li class="nav-item">
                         <a href="<?= site_url('admin/users/roles') ?>" class="nav-link <?= str_starts_with($uri, 'admin/users/roles') ? 'active' : '' ?>">
                             <i class="nav-icon fas fa-user-shield"></i>
-                            <p>Rôles</p>
+                            <p><?= esc(lang('App.nav.roles')) ?></p>
                         </a>
                     </li>
                     <?php endif; ?>
@@ -91,7 +106,7 @@
                     <li class="nav-item">
                         <a href="<?= site_url('admin/users/permissions') ?>" class="nav-link <?= str_starts_with($uri, 'admin/users/permissions') ? 'active' : '' ?>">
                             <i class="nav-icon fas fa-key"></i>
-                            <p>Permissions</p>
+                            <p><?= esc(lang('App.nav.permissions')) ?></p>
                         </a>
                     </li>
                     <?php endif; ?>
@@ -100,7 +115,7 @@
                     <li class="nav-item">
                         <a href="<?= site_url('admin/audit') ?>" class="nav-link <?= str_starts_with($uri, 'admin/audit') ? 'active' : '' ?>">
                             <i class="nav-icon fas fa-clipboard-list"></i>
-                            <p>Audit</p>
+                            <p><?= esc(lang('App.nav.audit')) ?></p>
                         </a>
                     </li>
                     <?php endif; ?>
@@ -113,10 +128,17 @@
     <div class="content-wrapper">
         <div class="content-header">
             <div class="container-fluid">
+                <?php $pageHeading = $this->renderSection('page_heading'); ?>
                 <div class="row mb-2">
+                    <?php if ($pageHeading !== ''): ?>
+                    <div class="col-12">
+                        <?= $pageHeading ?>
+                    </div>
+                    <?php else: ?>
                     <div class="col-sm-6">
                         <h1 class="m-0"><?= esc($title ?? '') ?></h1>
                     </div>
+                    <?php endif; ?>
                     <div class="col-sm-6">
                         <?= $this->renderSection('breadcrumb') ?>
                     </div>
@@ -146,20 +168,24 @@
 
     <footer class="main-footer">
         <div class="float-right d-none d-sm-inline-block">
-            Version 0.1.0 — Phase 1
+            <?= esc(lang('App.version', ['version' => '0.1.0'])) ?>
         </div>
-        <strong>&copy; <?= date('Y') ?> MARKETING (MI).</strong> Tous droits réservés.
+        <strong>&copy; <?= date('Y') ?> <?= esc(config('App')->appName) ?>.</strong> <?= esc(lang('App.rights')) ?>
     </footer>
 </div>
 
 <?php // Floating export progress window (export-widget.js): one per tab, follows an export across pages. ?>
-<div class="bscd-xw" id="bscdExportWidget" hidden role="region" aria-label="Export en cours"
+<div class="bscd-xw" id="bscdExportWidget" hidden role="region" aria-label="<?= esc(lang('App.exportWidget'), 'attr') ?>"
      data-endpoint="<?= esc(site_url('exports'), 'attr') ?>"></div>
 
 <script src="<?= base_url('assets/vendor/jquery/jquery.min.js') ?>"></script>
 <script src="<?= base_url('assets/vendor/bootstrap/bootstrap.bundle.min.js') ?>"></script>
-<script src="<?= base_url('assets/js/frdatepicker.js') ?>"></script>
-<script src="<?= base_url('assets/js/app.js') ?>"></script>
+<?php // Before every app script: the active locale + its catalog (public/assets/i18n), then bscdI18n.t(). ?>
+<?= i18n_script_tag() ?>
+<script src="<?= base_url('assets/js/i18n.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/i18n.js') ?: 0 ?>"></script>
+<script src="<?= base_url('assets/js/frdatepicker.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/frdatepicker.js') ?: 0 ?>"></script>
+<script src="<?= base_url('assets/js/app.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/app.js') ?: 0 ?>"></script>
+<script src="<?= base_url('assets/js/theme.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/theme.js') ?: 0 ?>"></script>
 <?php // Before the page scripts: dashboard.js reads window.bscdExportWidget when it starts. ?>
 <script src="<?= base_url('assets/js/export-progress.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/export-progress.js') ?: 0 ?>"></script>
 <script src="<?= base_url('assets/js/export-widget.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/export-widget.js') ?: 0 ?>"></script>

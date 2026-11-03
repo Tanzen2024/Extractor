@@ -24,7 +24,7 @@ class AuditController extends BaseController
         $feed = $model->feed($filters);
 
         return view('admin/audit/index', [
-            'title'   => 'Audit',
+            'title'   => lang('Admin.audit.title'),
             'rows'    => $feed['rows'],
             'pager'   => $feed['pager'],
             'filters' => $filters,

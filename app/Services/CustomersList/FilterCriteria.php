@@ -15,10 +15,27 @@ use DateTimeImmutable;
  * Nothing here is trusted from the request: fromRequest() checks every value
  * against AllowedValues (the live list of real column values) and rejects
  * anything else with InvalidFilterException before any query runs.
+ *
+ * It also carries the application's perimeter (ActiveCustomers): $statuses
+ * can only hold active statuses, and every query builder filters STATUS on
+ * effectiveStatuses() — the selection, or the 4 active statuses when
+ * nothing is selected. No criteria object can select an excluded customer.
  */
 final class FilterCriteria
 {
     public const DATE_COLUMN = 'DATE_AB'; // subscription date — the only 100%-populated DATE column
+
+    /**
+     * "Contact renseigné" filter: a contact is filled in when PHONE_NUMBERS or
+     * E_MAIL holds real (non-blank) text — the rule of the "Contacts
+     * renseignés" KPI. Wire values of the `contact` request key.
+     */
+    public const CONTACT_COLUMNS = ['PHONE_NUMBERS', 'E_MAIL'];
+    public const CONTACT_YES     = 'yes';
+    public const CONTACT_NO      = 'no';
+
+    /** @var list<string> STATUT selection, always a subset of ActiveCustomers::STATUSES ([] = all of them). */
+    public readonly array $statuses;
 
     /**
      * @param list<string> $regions
@@ -30,6 +47,7 @@ final class FilterCriteria
      * @param list<string> $meters
      * @param list<string> $voltages
      * @param list<string> $niuQualities
+     * @param bool|null    $hasContact true = contact filled in, false = none, null = no filter
      */
     private function __construct(
         public readonly ?DateTimeImmutable $dateFrom,
@@ -37,13 +55,35 @@ final class FilterCriteria
         public readonly array $regions,
         public readonly array $divisions,
         public readonly array $agences,
-        public readonly array $statuses,
+        array $statuses,
         public readonly array $segmentations,
         public readonly array $segmentsTresor,
         public readonly array $meters,
         public readonly array $voltages,
         public readonly array $niuQualities,
+        public readonly ?bool $hasContact = null,
     ) {
+        // Out-of-perimeter statuses are dropped; a selection made ONLY of
+        // such statuses (e.g. an export job stored before the perimeter
+        // existed) is refused rather than widened to every active status.
+        $active = ActiveCustomers::restrict($statuses);
+        if ($statuses !== [] && $active === []) {
+            throw new InvalidFilterException(lang('Dashboard.validation.invalidValue', ['label' => lang('Glossary.status')]));
+        }
+        // All four ticked = no narrowing inside the perimeter.
+        $this->statuses = count($active) === count(ActiveCustomers::STATUSES) ? [] : $active;
+    }
+
+    /**
+     * The STATUS values a row must have: the selection, or every active
+     * status — never empty, never an excluded status. The ONLY status
+     * condition the query builders use.
+     *
+     * @return list<string>
+     */
+    public function effectiveStatuses(): array
+    {
+        return $this->statuses !== [] ? $this->statuses : ActiveCustomers::STATUSES;
     }
 
     public static function none(): self
@@ -63,11 +103,11 @@ final class FilterCriteria
             return array_values(array_filter(array_map('strval', $raw), static fn ($v) => $v !== ''));
         };
 
-        $dateFrom = self::parseDate($get['date_from'] ?? null, 'date de début');
-        $dateTo   = self::parseDate($get['date_to'] ?? null, 'date de fin');
+        $dateFrom = self::parseDate($get['date_from'] ?? null, lang('Dashboard.validation.dateFrom'));
+        $dateTo   = self::parseDate($get['date_to'] ?? null, lang('Dashboard.validation.dateTo'));
 
         if ($dateFrom !== null && $dateTo !== null && $dateFrom > $dateTo) {
-            throw new InvalidFilterException('La date de début est postérieure à la date de fin.');
+            throw new InvalidFilterException(lang('Dashboard.validation.dateOrder'));
         }
 
         // Every value of a dimension ticked = no restriction on it, exactly
@@ -81,8 +121,17 @@ final class FilterCriteria
             return $values !== [] && count($clean) === count(array_unique($values)) ? [] : $clean;
         };
 
-        $meters        = $pick('le type de compteur', $allowed->meters, 'meter');
-        $segmentations = $pick('la segmentation', $allowed->segmentations, 'segmentation');
+        $meters        = $pick(lang('Glossary.meterType'), $allowed->meters, 'meter');
+        $segmentations = $pick(lang('Glossary.segmentation'), $allowed->segmentations, 'segmentation');
+        // Both "Oui" and "Non" ticked = no restriction, like any other list.
+        $contact = array_values(array_unique($list('contact')));
+        foreach ($contact as $v) {
+            if ($v !== self::CONTACT_YES && $v !== self::CONTACT_NO) {
+                throw new InvalidFilterException(lang('Dashboard.validation.invalidValue', ['label' => lang('Glossary.contactFilled')]));
+            }
+        }
+        $hasContact = count($contact) === 1 ? $contact[0] === self::CONTACT_YES : null;
+
         // Type compteur = PREPAID only and the 8 PREPAID categories ticked =
         // the whole PREPAID universe, i.e. no segmentation restriction.
         if (PrepaidSegmentations::coversPrepaidScope($segmentations, $meters)) {
@@ -92,15 +141,16 @@ final class FilterCriteria
         return new self(
             dateFrom: $dateFrom,
             dateTo: $dateTo,
-            regions: $pick('la région', $allowed->regions, 'region'),
-            divisions: $pick('la division', $allowed->divisions, 'division'),
-            agences: $pick("l'agence", $allowed->agences, 'agence'),
-            statuses: $pick('le statut', $allowed->statuses, 'status'),
+            regions: $pick(lang('Glossary.region'), $allowed->regions, 'region'),
+            divisions: $pick(lang('Glossary.division'), $allowed->divisions, 'division'),
+            agences: $pick(lang('Glossary.agency'), $allowed->agences, 'agence'),
+            statuses: $pick(lang('Glossary.status'), $allowed->statuses, 'status'),
             segmentations: $segmentations,
-            segmentsTresor: $pick('le segment trésor', $allowed->segmentsTresor, 'segment_tresor'),
+            segmentsTresor: $pick(lang('Glossary.treasurySegment'), $allowed->segmentsTresor, 'segment_tresor'),
             meters: $meters,
-            voltages: $pick('la tension', $allowed->voltages, 'voltage'),
-            niuQualities: $pick('la qualité NIU', $allowed->niuQualities, 'niu_qc'),
+            voltages: $pick(lang('Glossary.voltage'), $allowed->voltages, 'voltage'),
+            niuQualities: $pick(lang('Glossary.niuQuality'), $allowed->niuQualities, 'niu_qc'),
+            hasContact: $hasContact,
         );
     }
 
@@ -125,6 +175,7 @@ final class FilterCriteria
             meters: $data['meters'] ?? [],
             voltages: $data['voltages'] ?? [],
             niuQualities: $data['niuQualities'] ?? [],
+            hasContact: isset($data['hasContact']) ? (bool) $data['hasContact'] : null,
         );
     }
 
@@ -145,6 +196,7 @@ final class FilterCriteria
             'meters'         => $this->meters,
             'voltages'       => $this->voltages,
             'niuQualities'   => $this->niuQualities,
+            'hasContact'     => $this->hasContact,
         ], static fn ($v) => $v !== null && $v !== []);
     }
 
@@ -158,7 +210,7 @@ final class FilterCriteria
     {
         return new self(
             $this->dateFrom, $this->dateTo, $this->regions, $this->divisions, $this->agences, $this->statuses,
-            [], $this->segmentsTresor, $this->meters, $this->voltages, $this->niuQualities,
+            [], $this->segmentsTresor, $this->meters, $this->voltages, $this->niuQualities, $this->hasContact,
         );
     }
 
@@ -172,7 +224,7 @@ final class FilterCriteria
      */
     public function cacheKey(): string
     {
-        return md5(json_encode($this->toArray()));
+        return md5(json_encode([ActiveCustomers::SCOPE, $this->toArray()]));
     }
 
     /**
@@ -188,20 +240,21 @@ final class FilterCriteria
         if ($this->dateFrom !== null || $this->dateTo !== null) {
             $from = $this->dateFrom?->format('d/m/Y') ?? '…';
             $to   = $this->dateTo?->format('d/m/Y') ?? '…';
-            $out['Période (abonnement)'] = "{$from} → {$to}";
+            $out[lang('Glossary.subscriptionPeriod')] = "{$from} → {$to}";
         }
 
         $join = static fn (array $v): string => implode(', ', $v);
 
-        if ($this->regions !== [])        { $out['Région']         = $join($this->regions); }
-        if ($this->divisions !== [])      { $out['Division']       = $join($this->divisions); }
-        if ($this->agences !== [])        { $out['Agence']         = $join($this->agences); }
-        if ($this->statuses !== [])       { $out['Statut']         = $join($this->statuses); }
-        if ($this->segmentations !== [])  { $out['Segmentation']   = $join($this->segmentations); }
-        if ($this->segmentsTresor !== []) { $out['Segment trésor'] = $join($this->segmentsTresor); }
-        if ($this->meters !== [])         { $out['Compteur']       = $join($this->meters); }
-        if ($this->voltages !== [])       { $out['Tension']        = $join($this->voltages); }
-        if ($this->niuQualities !== [])   { $out['Qualité NIU']    = $join($this->niuQualities); }
+        if ($this->regions !== [])        { $out[lang('Glossary.region')] = $join($this->regions); }
+        if ($this->divisions !== [])      { $out[lang('Glossary.division')] = $join($this->divisions); }
+        if ($this->agences !== [])        { $out[lang('Glossary.agency')] = $join($this->agences); }
+        if ($this->statuses !== [])       { $out[lang('Glossary.status')] = $join($this->statuses); }
+        if ($this->segmentations !== [])  { $out[lang('Glossary.segmentation')] = $join($this->segmentations); }
+        if ($this->segmentsTresor !== []) { $out[lang('Glossary.treasurySegment')] = $join($this->segmentsTresor); }
+        if ($this->meters !== [])         { $out[lang('Glossary.meter')] = $join($this->meters); }
+        if ($this->voltages !== [])       { $out[lang('Glossary.voltage')] = $join($this->voltages); }
+        if ($this->niuQualities !== [])   { $out[lang('Glossary.niuQuality')] = $join($this->niuQualities); }
+        if ($this->hasContact !== null)   { $out[lang('Glossary.contactFilled')] = lang($this->hasContact ? 'App.yes' : 'App.no'); }
 
         return $out;
     }
@@ -215,13 +268,13 @@ final class FilterCriteria
         $raw = (string) $raw;
 
         if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw) !== 1) {
-            throw new InvalidFilterException("Format de {$label} invalide (attendu AAAA-MM-JJ).");
+            throw new InvalidFilterException(lang('Dashboard.validation.dateFormat', ['label' => $label]));
         }
 
         $date = DateTimeImmutable::createFromFormat('!Y-m-d', $raw);
 
         if ($date === false || $date->format('Y-m-d') !== $raw) {
-            throw new InvalidFilterException("La {$label} n'est pas une date valide.");
+            throw new InvalidFilterException(lang('Dashboard.validation.dateInvalid', ['label' => $label]));
         }
 
         return $date;

@@ -14,6 +14,7 @@ use CodeIgniter\Filters\PerformanceMetrics;
 use CodeIgniter\Filters\SecureHeaders;
 use App\Filters\AuthFilter;
 use App\Filters\CsrfTokenHeaderFilter;
+use App\Filters\LocaleFilter;
 use App\Filters\PermissionFilter;
 
 class Filters extends BaseFilters
@@ -40,6 +41,7 @@ class Filters extends BaseFilters
         'auth'          => AuthFilter::class,
         'csrftoken'     => CsrfTokenHeaderFilter::class,
         'permission'    => PermissionFilter::class,
+        'locale'        => LocaleFilter::class,
     ];
 
     /**
@@ -78,8 +80,10 @@ class Filters extends BaseFilters
      */
     public array $globals = [
         'before' => [
+            // First: every later filter (auth flash messages, 403 page) speaks the user's language.
+            'locale',
             'csrf',
-            'auth' => ['except' => ['login', 'login/*']],
+            'auth' => ['except' => ['login', 'login/*', 'language/*']],
         ],
         'after' => [
             'secureheaders',

@@ -202,4 +202,28 @@ final class ExportJobStatusEndpointTest extends CIUnitTestCase
 
         $this->assertSame(404, $result->response()->getStatusCode());
     }
+
+    /**
+     * A file generated before the active-customers perimeter (its job has no
+     * perimeter marker) holds excluded customers: never served again.
+     */
+    public function testAFileGeneratedBeforeTheActivePerimeterIsNeverServed(): void
+    {
+        $file = tempnam(sys_get_temp_dir(), 'cl');
+        file_put_contents($file, "CONTRACT\n1\n");
+        $done = ['status' => 'done', 'file_path' => $file, 'file_name' => 'customer_list_x.csv'];
+
+        try {
+            $old = $this->job($done + ['filters' => json_encode(['regions' => ['DRC']])]);
+            $res = $this->withResponse(new CodeIgniter\HTTP\Response(config('App')))->controller(ExportJobController::class)->execute('download', $old);
+            $this->assertSame(410, $res->response()->getStatusCode());
+            $this->assertSame('expired', json_decode($res->response()->getBody(), true)['error']);
+
+            $new = $this->job($done + ['filters' => json_encode(['regions' => ['DRC'], 'perimeter' => App\Services\CustomersList\ActiveCustomers::SCOPE])]);
+            $res = $this->withResponse(new CodeIgniter\HTTP\Response(config('App')))->controller(ExportJobController::class)->execute('download', $new);
+            $this->assertSame(200, $res->response()->getStatusCode());
+        } finally {
+            @unlink($file);
+        }
+    }
 }

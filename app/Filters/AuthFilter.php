@@ -17,7 +17,7 @@ class AuthFilter implements FilterInterface
         $session = session();
 
         if (! $session->get('isLoggedIn')) {
-            $session->setFlashdata('error', 'Veuillez vous connecter pour accéder à cette page.');
+            $session->setFlashdata('error', lang('App.errors.loginRequired'));
 
             return redirect()->to(site_url('login'));
         }

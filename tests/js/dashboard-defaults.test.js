@@ -1,6 +1,8 @@
 // Run: node --test tests/js/dashboard-defaults.test.js
-// Initial STATUT selection (public/assets/js/dashboard-defaults.js) and what
-// dashboard.js actually sends on first load, driven through a minimal fake DOM.
+// What dashboard.js shows and sends — first load included — driven through a
+// minimal fake DOM. The STATUT filter only narrows inside the active-customers
+// perimeter (App\Services\CustomersList\ActiveCustomers): no status is
+// pre-checked, no "Contrats inactifs" group exists any more.
 'use strict';
 
 const test = require('node:test');
@@ -8,39 +10,24 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { initialStatuses } = require('../../public/assets/js/dashboard-defaults.js');
 
 const ROOT = path.join(__dirname, '../..');
 const ACTIVE = ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)'];
-const INACTIVE = ['INACTIVE WITH BALANCE.', 'INACTIVE.', 'IN PROCESS (PENDING CONNECTION)', 'IN PROCESS (PENDING READING)'];
-// Real STATUT options of the active snapshot (20260927T183827), backend count order.
+// Real STATUT options of the active snapshot (20261003T092809), backend count
+// order: the server offers the 4 active statuses only.
 const STATUS_OPTIONS = [
-    { value: 'ACTIVE', count: 1453055 }, { value: 'INACTIVE WITH BALANCE.', count: 823486 },
-    { value: 'ACTIVE (PENDING BILLING)', count: 718633 }, { value: 'SUSPENDED (DELINQUENT ACCOUNT)', count: 254623 },
-    { value: 'INACTIVE.', count: 49228 }, { value: 'INACTIVATION IN PROCESS.', count: 3342 },
-    { value: 'IN PROCESS (PENDING CONNECTION)', count: 473 }, { value: 'IN PROCESS (PENDING READING)', count: 1 },
+    { value: 'ACTIVE', count: 1448462 }, { value: 'ACTIVE (PENDING BILLING)', count: 721420 },
+    { value: 'SUSPENDED (DELINQUENT ACCOUNT)', count: 260252 }, { value: 'INACTIVATION IN PROCESS.', count: 3152 },
 ];
 
-test('initialStatuses: the 4 active statuses, none of the inactive ones', () => {
-    const s = initialStatuses(STATUS_OPTIONS, ACTIVE);
-    assert.deepEqual([...s].sort(), [...ACTIVE].sort());
-    INACTIVE.forEach((v) => assert.ok(!s.includes(v), v));
-});
-
-test('initialStatuses: never pre-checks a value the filter does not offer (backend would 422)', () => {
-    assert.deepEqual(initialStatuses([{ value: 'ACTIVE' }, { value: 'INACTIVE.' }], ACTIVE), ['ACTIVE']);
-    assert.deepEqual(initialStatuses([], ACTIVE), []);
-    assert.deepEqual(initialStatuses(null, ACTIVE), []);
-});
-
-test('the JS active list matches Config\\Oracle::$activeStatuses', () => {
-    const cfg = fs.readFileSync(path.join(ROOT, 'app/Config/Oracle.php'), 'utf8');
-    const block = /\$activeStatuses = \[([\s\S]*?)\];/.exec(cfg)[1];
-    const php = [...block.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+test('the perimeter is server-side only: ActiveCustomers lists the 4 statuses, dashboard.js hardcodes none', () => {
+    const php = fs.readFileSync(path.join(ROOT, 'app/Services/CustomersList/ActiveCustomers.php'), 'utf8');
+    const block = /const STATUSES = \[([\s\S]*?)\];/.exec(php)[1];
+    assert.deepEqual([...block.matchAll(/'([^']+)'/g)].map((m) => m[1]).sort(), [...ACTIVE].sort());
     const js = fs.readFileSync(path.join(ROOT, 'public/assets/js/dashboard.js'), 'utf8');
-    const jsList = JSON.parse(/var ACTIVE_STATUSES = (\[[^\]]*\]);/.exec(js)[1].replace(/'/g, '"'));
-    assert.deepEqual([...jsList].sort(), [...php].sort());
-    assert.deepEqual([...jsList].sort(), [...ACTIVE].sort());
+    assert.ok(!js.includes('ACTIVE_STATUSES') && !js.includes('bscdDashboardDefaults'));
+    ACTIVE.concat(['INACTIVE.', 'INACTIVE WITH BALANCE.']).forEach((s) => assert.ok(!js.includes("'" + s + "'"), s));
+    assert.ok(!fs.existsSync(path.join(ROOT, 'public/assets/js/dashboard-defaults.js')));
 });
 
 test('view: no Référentiel line, no Oracle/snapshot banner, NOMBRE DE NUI CORRECTS card', () => {
@@ -51,11 +38,12 @@ test('view: no Référentiel line, no Oracle/snapshot banner, NOMBRE DE NUI CORR
         assert.ok(!src.includes('bscdSourceNote') && !src.includes('bscdSourceWarning') && !src.includes('bscdExportSource'));
         assert.ok(!src.includes('La base Oracle en direct'));
     }
-    assert.ok(view.includes("'NOMBRE DE NUI CORRECTS'"));
-    // "Total clients" is back as a conditional card: hidden unless STATUT differs
-    // from exactly the 4 active statuses (see the KPI layout tests below).
-    assert.match(view, /\['total', 'Total clients'/);
-    assert.ok(view.indexOf('assets/js/dashboard-defaults.js') < view.indexOf("assets/js/dashboard.js')"));
+    // Labels are lang() keys; their French text lives in app/Language/fr/Dashboard.php.
+    const frDashboard = fs.readFileSync(path.join(ROOT, 'app/Language/fr/Dashboard.php'), 'utf8');
+    assert.ok(view.includes("'Dashboard.kpi.nuiCorrects'") && frDashboard.includes("'NOMBRE DE NUI CORRECTS'"));
+    // No "Total clients" card any more: it would always equal "Clients actifs".
+    assert.ok(!view.includes("'Dashboard.kpi.total'") && !view.includes('dashboard-defaults.js'));
+    assert.ok(!/'total'\s*=>\s*'Total clients'/.test(frDashboard));
 });
 
 // ── dashboard.js in a fake DOM ────────────────────────────────────────
@@ -97,7 +85,8 @@ function makeEl(dataset = {}) {
     return el;
 }
 
-function bootDashboard(overrides = {}, extraEndpoints = {}) {
+// `parked` = a sessionStorage restore payload (filters parked before a reload).
+function bootDashboard(overrides = {}, extraEndpoints = {}, parked = null) {
     const byId = {};
     const bySel = {};
     const requests = [];
@@ -129,7 +118,7 @@ function bootDashboard(overrides = {}, extraEndpoints = {}) {
         createElement: () => makeEl(),
     };
     const responses = {
-        '/dashboard/filter-options': { regions: [], statuses: STATUS_OPTIONS, segmentations: [], segmentsTresor: [], meters: [], voltages: [], niuQualities: [{ value: 'NUI CORRECT', count: 2624178 }], geoTree: {}, dateBounds: {} },
+        '/dashboard/filter-options': { regions: [], statuses: STATUS_OPTIONS, segmentations: [], segmentsTresor: [], meters: [{ value: 'POSTPAID', count: 6 }, { value: 'PREPAID', count: 4 }], voltages: [], niuQualities: [{ value: 'NUI CORRECT', count: 2624178 }], geoTree: {}, dateBounds: {} },
         '/dashboard/stats': { totalRows: 10, kpis: { total: 10, totalPct: 40, nuiCorrects: { value: 7, pct: 70 }, actifs: { value: 10, pct: 100 }, avecCompteur: { value: 4, pct: 40 }, contacts: { value: 2, pct: 20 } }, charts: { region: [], status: [], segmentation: [], meterType: [] } },
         '/dashboard/count': { count: 10 },
         '/dashboard/rows': { data: [], columns: ['CONTRACT', 'STATUS'], page: 1, perPage: 50, total: 10, sort: 'CONTRACT', dir: 'asc', search: '' },
@@ -140,11 +129,13 @@ function bootDashboard(overrides = {}, extraEndpoints = {}) {
         document, JSON, Math, Date, Object, Array, String, Number, Promise, URLSearchParams, console,
         setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {},
         localStorage: { getItem: () => null, setItem() {} },
+        sessionStorage: { getItem: () => parked, setItem() {}, removeItem() { parked = null; } },
         Chart: function (ctx, config) { charts[ctx.canvas] = config; this.destroy = () => { if (charts[ctx.canvas] === config) delete charts[ctx.canvas]; }; },
         $: () => ({ modal() {} }),
         frdate: { clear() {}, setBounds() {} },
         bscdExportProgress: require('../../public/assets/js/export-progress.js'),
-        bscdDashboardDefaults: require('../../public/assets/js/dashboard-defaults.js'),
+        bscdI18n: require('../../public/assets/js/i18n.js'), // French catalog, the default language
+        bscdDashboardSections: require('../../public/assets/js/dashboard-sections.js'),
         bscdFetch(url) {
             requests.push(url);
             const key = Object.keys(responses).find((k) => url.startsWith(k));
@@ -162,82 +153,72 @@ function bootDashboard(overrides = {}, extraEndpoints = {}) {
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
+// KPI cards and charts live in the "Vue Postpaid" / "Vue Prepaid" sections.
+const inSection = (document, key, sel) => document.querySelector('[data-section="' + key + '"]').querySelector(sel);
 const statusesOf = (url) => new URLSearchParams(url.split('?')[1] || '').getAll('status[]');
 
-test('first load: the 4 active boxes are checked, the inactive ones are not', async () => {
+test('first load: STATUT offers the 4 active statuses, none pre-checked, no "Contrats inactifs" group', async () => {
     const { statusList } = bootDashboard();
     await settle();
     const boxes = statusList.querySelectorAll('input[type=checkbox]');
-    assert.equal(boxes.length, 8);
-    boxes.forEach((cb) => assert.equal(cb.checked, ACTIVE.includes(cb.value), cb.value));
+    assert.deepEqual(boxes.map((cb) => cb.value), STATUS_OPTIONS.map((o) => o.value));
+    boxes.forEach((cb) => assert.equal(cb.checked, false, cb.value));
+    assert.ok(!/Contrats inactifs|Contrats actifs/.test(statusList.innerHTML));
 });
 
-test('first load: stats, count and rows are all requested with exactly the 4 active statuses', async () => {
+test('first load: stats (one per section), count and rows carry no STATUT filter (= the whole active perimeter, server-side)', async () => {
     const { requests } = bootDashboard();
     await settle();
-    ['/dashboard/stats', '/dashboard/count', '/dashboard/rows'].forEach((ep) => {
+    ['/dashboard/count', '/dashboard/rows'].forEach((ep) => {
         const calls = requests.filter((u) => u.startsWith(ep));
         assert.equal(calls.length, 1, ep);
-        assert.deepEqual([...statusesOf(calls[0])].sort(), [...ACTIVE].sort(), ep);
+        assert.deepEqual(statusesOf(calls[0]), [], ep);
+        assert.deepEqual(new URLSearchParams(calls[0].split('?')[1]).getAll('meter[]'), [], ep + ': page filters, no meter added');
     });
+    const stats = requests.filter((u) => u.startsWith('/dashboard/stats'));
+    assert.equal(stats.length, 2);
+    stats.forEach((u) => assert.deepEqual(statusesOf(u), []));
+    assert.deepEqual(stats.map((u) => new URLSearchParams(u.split('?')[1]).getAll('meter[]')), [['POSTPAID'], ['PREPAID']]);
 });
 
 test('first load: the NUI card shows the stats figure', async () => {
     const { document } = bootDashboard();
     await settle();
-    assert.equal(document.querySelector('[data-kpi="nuiCorrects"]').textContent, '7');
-    assert.equal(document.querySelector('[data-kpi-sub="nuiCorrects"]').textContent, '70,0 % du total'); // NUI corrects / all NUI (backend pct)
+    assert.equal(inSection(document, 'postpaid', '[data-kpi="nuiCorrects"]').textContent, '7');
+    assert.equal(inSection(document, 'postpaid', '[data-kpi-sub="nuiCorrects"]').textContent, '70,0 % du total'); // NUI corrects / all NUI (backend pct)
 });
 
-test('the user can uncheck / recheck: the next apply sends exactly the new selection', async () => {
+test('the user can narrow STATUT inside the perimeter: the next apply sends exactly the new selection', async () => {
     const { statusList, requests, byId } = bootDashboard();
     await settle();
-    statusList.querySelectorAll('input[type=checkbox]').find((c) => c.value === 'ACTIVE').fire('change'); // checked stays true -> no-op
-    const active = statusList.querySelectorAll('input[type=checkbox]').find((c) => c.value === 'ACTIVE');
-    active.checked = false; active.fire('change');
-    const inactive = statusList.querySelectorAll('input[type=checkbox]').find((c) => c.value === 'INACTIVE.');
-    inactive.checked = true; inactive.fire('change');
+    ['ACTIVE', 'SUSPENDED (DELINQUENT ACCOUNT)'].forEach((v) => {
+        const cb = statusList.querySelectorAll('input[type=checkbox]').find((c) => c.value === v);
+        cb.checked = true; cb.fire('change');
+    });
     requests.length = 0;
     byId.bscdFilters.fire('submit');
     await settle();
-    const expected = ['ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVE.'].sort();
+    const expected = ['ACTIVE', 'SUSPENDED (DELINQUENT ACCOUNT)'].sort();
     ['/dashboard/stats', '/dashboard/count', '/dashboard/rows'].forEach((ep) => {
         const call = requests.find((u) => u.startsWith(ep));
         assert.deepEqual([...statusesOf(call)].sort(), expected, ep);
     });
 });
 
-// ── KPI layout: "Total clients" only when STATUT ≠ exactly the 4 active statuses ──
+// ── KPI row: "Clients actifs" is the section's total (no separate "Total clients") ──
 
-const { isExactlyActiveStatuses } = require('../../public/assets/js/dashboard-defaults.js');
-
-test('isExactlyActiveStatuses: all 4 active statuses and nothing else, in any order', () => {
-    assert.equal(isExactlyActiveStatuses([...ACTIVE], ACTIVE), true);
-    assert.equal(isExactlyActiveStatuses([...ACTIVE].reverse(), ACTIVE), true);
-    assert.equal(isExactlyActiveStatuses(ACTIVE.slice(0, 3), ACTIVE), false);            // one missing
-    assert.equal(isExactlyActiveStatuses([...ACTIVE, 'INACTIVE.'], ACTIVE), false);      // one extra
-    assert.equal(isExactlyActiveStatuses(['INACTIVE.', 'ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.'], ACTIVE), false);
-    assert.equal(isExactlyActiveStatuses(undefined, ACTIVE), false);                     // no STATUT filter
-    assert.equal(isExactlyActiveStatuses([], ACTIVE), false);
-});
-
-test('KPI row, first load (exactly the 4 active statuses): 3 cards, "Total clients" hidden', async () => {
+test('KPI row: "Clients actifs" shows the stats figure and its share of every active contract', async () => {
     const { document } = bootDashboard();
     await settle();
-    assert.equal(document.querySelector('[data-kpi-col="total"]').classList.contains('d-none'), true);
-    assert.equal(document.querySelector('[data-kpi="actifs"]').textContent, '10');
+    assert.equal(inSection(document, 'postpaid', '[data-kpi="actifs"]').textContent, '10');
+    assert.equal(inSection(document, 'postpaid', '[data-kpi-sub="actifs"]').textContent, '100,0 % du total'); // backend actifs.pct
 });
 
-test('KPI row, another STATUT selection: 4 cards, "Total clients" shown with the stats total', async () => {
-    const { statusList, byId, document } = bootDashboard();
+test('a parked STATUT value that is no longer offered (an excluded status) is dropped, never sent', async () => {
+    const saved = JSON.stringify({ applied: { status: ['INACTIVE.', 'ACTIVE'] }, table: {} });
+    const { requests } = bootDashboard({}, {}, saved);
     await settle();
-    const inactive = statusList.querySelectorAll('input[type=checkbox]').find((c) => c.value === 'INACTIVE.');
-    inactive.checked = true; inactive.fire('change');
-    byId.bscdFilters.fire('submit');
-    await settle();
-    assert.equal(document.querySelector('[data-kpi-col="total"]').classList.contains('d-none'), false);
-    assert.equal(document.querySelector('[data-kpi="total"]').textContent, '10');
-    assert.equal(document.querySelector('[data-kpi-sub="total"]').textContent, '40,0 % du total'); // selected / global reference total (backend totalPct)
+    requests.filter((u) => /\/dashboard\/(stats|count|rows)/.test(u)).forEach((u) => assert.deepEqual(statusesOf(u), ['ACTIVE'], u));
 });
 
 // ── Segmentation groups: Type de compteur -> group label (display only) ──
@@ -435,6 +416,7 @@ function msList(ctx, dim) {
 }
 
 async function applyScope(meters, segs = [], statsOpts = {}) {
+    const sk = meters.length && meters.every((m) => m === 'PREPAID') ? 'prepaid' : 'postpaid';
     const ctx = bootDashboard({
         '/dashboard/filter-options': { meters: CHART_METERS, segmentations: ALL_SEGS },
         '/dashboard/stats': (url) => statsFor(url, statsOpts),
@@ -444,12 +426,12 @@ async function applyScope(meters, segs = [], statsOpts = {}) {
     msList(ctx, 'segmentation').querySelectorAll('input[type=checkbox]').forEach((cb) => { if (segs.includes(cb.value)) { cb.checked = true; cb.fire('change'); } });
     ctx.byId.bscdFilters.fire('submit');
     await settle();
-    const chart = ctx.charts.bscdChartSegmentation;
+    const chart = ctx.charts['bscdChart_' + sk + '_segmentation'];
     return {
         ctx,
         labels: chart ? [...chart.data.labels] : null,
         counts: chart ? [...chart.data.datasets[0].data] : null,
-        message: ctx.byId.bscdChartSegmentation.parentNode.dataset.chartMsg,
+        message: ctx.byId['bscdChart_' + sk + '_segmentation'].parentNode.dataset.chartMsg,
     };
 }
 
@@ -629,10 +611,23 @@ test('PREPAID filter: a category at 0 can be ticked and unticked like any other'
     assert.deepEqual(r.statsParams().getAll('segmentation[]'), []);
 });
 
-test('segmentation chart, Toutes: POSTPAID order then PREPAID order, every segment, no "Autres" bucket', async () => {
+test('segmentation charts, Toutes: Vue Postpaid = POSTPAID order, Vue Prepaid = PREPAID order, together every segment once', async () => {
     const r = await applyScope([]);
-    assert.deepEqual(r.labels, POSTPAID_ORDER.concat(PREPAID_ORDER));
-    assert.equal(r.counts.reduce((a, b) => a + b, 0), ALL_SEGS.reduce((a, p) => a + p.count, 0));
+    assert.deepEqual(r.labels, POSTPAID_ORDER);
+    const pre = r.ctx.charts.bscdChart_prepaid_segmentation;
+    assert.deepEqual([...pre.data.labels], PREPAID_ORDER);
+    const both = r.counts.concat(pre.data.datasets[0].data);
+    assert.equal(both.reduce((a, b) => a + b, 0), ALL_SEGS.reduce((a, p) => a + p.count, 0));
+});
+
+test('sections: Type de compteur = PREPAID only -> Vue Postpaid empty without any request, Vue Prepaid filled', async () => {
+    const r = await applyScope(['PREPAID']);
+    const stats = r.ctx.requests.filter((u) => u.startsWith('/dashboard/stats'));
+    assert.deepEqual(new URLSearchParams(stats[stats.length - 1].split('?')[1]).getAll('meter[]'), ['PREPAID']);
+    assert.equal(r.ctx.charts.bscdChart_postpaid_segmentation, undefined);
+    assert.equal(r.ctx.byId.bscdChart_postpaid_segmentation.parentNode.dataset.chartMsg, 'Aucune donnée disponible pour les filtres sélectionnés.');
+    assert.equal(inSection(r.ctx.document, 'postpaid', '[data-kpi="actifs"]').textContent, '0');
+    assert.deepEqual(r.labels, PREPAID_ORDER);
 });
 
 test('segmentation chart: a segment empty in the scope keeps its slot, at 0', async () => {
@@ -650,11 +645,11 @@ test('segmentation chart, Segmentation = PERFECT: only PERFECT, the other segmen
 test('empty scope: every chart shows the empty-state message, no chart and no global fallback', async () => {
     const r = await applyScope(['POSTPAID'], [], { empty: true });
     const msg = 'Aucune donnée disponible pour les filtres sélectionnés.';
-    ['bscdChartRegion', 'bscdChartStatus', 'bscdChartSegmentation'].forEach((id) => {
+    ['bscdChart_postpaid_region', 'bscdChart_postpaid_status', 'bscdChart_postpaid_segmentation'].forEach((id) => {
         assert.equal(r.ctx.charts[id], undefined, id);
         assert.equal(r.ctx.byId[id].parentNode.dataset.chartMsg, msg, id);
     });
-    assert.match(r.ctx.document.querySelector('[data-metertype="list"]').innerHTML, /Aucune donnée disponible pour les filtres sélectionnés/);
+    assert.match(inSection(r.ctx.document, 'postpaid', '[data-metertype="list"]').innerHTML, /Aucune donnée disponible pour les filtres sélectionnés/);
 });
 
 test('a slow answer for an older filter set never overwrites the current charts; loading hides the old ones', async () => {
@@ -673,13 +668,14 @@ test('a slow answer for an older filter set never overwrites the current charts;
 
     tick('PREPAID', true); ctx.byId.bscdFilters.fire('submit'); // slow answer, still pending
     await settle();
-    assert.equal(ctx.charts.bscdChartSegmentation, undefined, 'old chart removed while loading');
-    assert.equal(ctx.byId.bscdChartSegmentation.parentNode.dataset.chartMsg, 'Chargement…');
+    assert.equal(ctx.charts.bscdChart_prepaid_segmentation, undefined, 'old chart removed while loading');
+    assert.equal(ctx.byId.bscdChart_prepaid_segmentation.parentNode.dataset.chartMsg, 'Chargement…');
 
     tick('PREPAID', false); tick('POSTPAID', true); ctx.byId.bscdFilters.fire('submit'); // fast answer
     await settle();
-    assert.deepEqual([...ctx.charts.bscdChartSegmentation.data.labels], POSTPAID_ORDER);
+    assert.deepEqual([...ctx.charts.bscdChart_postpaid_segmentation.data.labels], POSTPAID_ORDER);
 
     releaseOld(); await settle(); // the old answer lands last
-    assert.deepEqual([...ctx.charts.bscdChartSegmentation.data.labels], POSTPAID_ORDER, 'still the POSTPAID scope');
+    assert.deepEqual([...ctx.charts.bscdChart_postpaid_segmentation.data.labels], POSTPAID_ORDER, 'still the POSTPAID scope');
+    assert.equal(ctx.charts.bscdChart_prepaid_segmentation, undefined, 'the old PREPAID answer is dropped');
 });

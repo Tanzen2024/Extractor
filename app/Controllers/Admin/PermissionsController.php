@@ -27,7 +27,7 @@ class PermissionsController extends BaseController
     public function index()
     {
         return view('admin/permissions/index', [
-            'title'       => 'Permissions',
+            'title'       => lang('Admin.permissions.title'),
             'permissions' => $this->permissions->allOrdered(),
         ]);
     }
@@ -36,7 +36,7 @@ class PermissionsController extends BaseController
     {
         $permission = $this->permissions->find($id);
         if ($permission === null) {
-            return redirect()->to(site_url('admin/users/permissions'))->with('error', 'Permission introuvable.');
+            return redirect()->to(site_url('admin/users/permissions'))->with('error', lang('Admin.permissions.notFound'));
         }
 
         $new = (int) $permission['is_active'] === 1 ? 0 : 1;
@@ -49,6 +49,6 @@ class PermissionsController extends BaseController
             'description' => $permission['code'] . ' -> ' . ($new ? 'active' : 'inactive'),
         ]);
 
-        return redirect()->to(site_url('admin/users/permissions'))->with('success', 'Permission mise à jour.');
+        return redirect()->to(site_url('admin/users/permissions'))->with('success', lang('Admin.permissions.updated'));
     }
 }

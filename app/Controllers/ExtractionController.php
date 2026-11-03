@@ -101,7 +101,7 @@ class ExtractionController extends BaseController
                 'message' => $e->getMessage(),
             ]);
 
-            $data['errorMessage'] = "Une erreur est survenue lors de l'extraction. Référence : {$reference}. Veuillez contacter l'administrateur.";
+            $data['errorMessage'] = lang('Extraction.failed', ['ref' => $reference]);
         }
 
         $renderStart = microtime(true);
@@ -140,7 +140,7 @@ class ExtractionController extends BaseController
         ]);
 
         return $this->response->setStatusCode(403)->setBody(
-            "L'extraction directe de la liste clients depuis Oracle est désactivée : utilisez le tableau de bord (" . site_url('dashboard') . '), qui lit le snapshot quotidien.'
+            lang('Extraction.customersListDisabled', ['url' => site_url('dashboard')])
         );
     }
 

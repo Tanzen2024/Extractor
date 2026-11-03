@@ -83,12 +83,12 @@ final class ExportFilterParityTest extends TestCase
         $this->assertSame($countWhere, $exportWhere);
     }
 
-    public function testAnEmptyCriteriaExportsTheWholeTableWithNoBinds(): void
+    public function testAnEmptyCriteriaExportsTheActiveCustomersOnly(): void
     {
         $stmt = $this->qb->exportStatement(FilterCriteria::none());
 
-        $this->assertSame([], $stmt['binds']);
-        $this->assertStringNotContainsString('WHERE', $stmt['sql']);
+        $this->assertSame(\App\Services\CustomersList\ActiveCustomers::STATUSES, array_values($stmt['binds']));
+        $this->assertSame('STATUS IN (:f0, :f1, :f2, :f3)', $this->extractWhere($stmt['sql']));
     }
 
     private function extractWhere(string $sql): string

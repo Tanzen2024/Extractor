@@ -197,9 +197,9 @@ final class SnapshotUserFlowTest extends CIUnitTestCase
     {
         $v1 = $this->installVersion(5, 'DRC');
 
-        // 04:59 — queued on V1 (all 5 rows).
+        // 04:59 — queued on V1 (5 rows, row 3 INACTIVE. is out of the perimeter).
         [, $async] = $this->call('export', ['format' => 'csv'], true);
-        $this->assertSame([5, $v1], [$async['count'], (new ExportJobModel())->find($async['jobId'])['snapshot_version']]);
+        $this->assertSame([4, $v1], [$async['count'], (new ExportJobModel())->find($async['jobId'])['snapshot_version']]);
 
         // 05:00 — refreshes activate V2 then V3 (keepVersions = 2 would
         // normally delete V1 at V3: the pending job pins it).
@@ -208,11 +208,12 @@ final class SnapshotUserFlowTest extends CIUnitTestCase
         $this->assertSame($v3, $this->fx->store->active()->id);
         $this->assertDirectoryExists($this->fx->store->versionDir($v1), 'still needed by the queued job');
 
-        // 05:01 — the worker generates the job: V1's 5 rows, never V2/V3's.
+        // 05:01 — the worker generates the job: V1's 4 active rows, never V2/V3's.
         $result = $this->runWorker();
         $this->assertSame(ExportJobRunner::DONE, $result['status']);
-        $this->assertSame(5, (int) $result['job']['rows_exported']);
-        $this->assertSame(5, (int) $result['job']['rows_total'], "V1's row count, not V3's 11");
+        $this->assertSame(4, (int) $result['job']['rows_exported']);
+        $this->assertSame(5, (int) $result['job']['rows_total'], "V1's scanned rows, not V3's 11");
+        $this->assertStringNotContainsString('100003', (string) file_get_contents($result['job']['file_path']), 'INACTIVE. row never exported');
 
         $csv = (string) file_get_contents($result['job']['file_path']);
         $this->assertStringContainsString('100001', $csv);
@@ -230,7 +231,7 @@ final class SnapshotUserFlowTest extends CIUnitTestCase
     {
         $v1 = $this->installVersion(4, 'DRC');
         [, $async] = $this->call('export', ['format' => 'xlsx'], true);
-        $this->assertSame([4, $v1], [$async['count'], (new ExportJobModel())->find($async['jobId'])['snapshot_version']]);
+        $this->assertSame([3, $v1], [$async['count'], (new ExportJobModel())->find($async['jobId'])['snapshot_version']]);
 
         $this->installVersion(9, 'DRE');
 
@@ -241,7 +242,7 @@ final class SnapshotUserFlowTest extends CIUnitTestCase
 
         try {
             $this->assertSame(ExportJobRunner::DONE, $status);
-            $this->assertSame([4, 4], [(int) $job['rows_exported'], (int) $job['rows_total']]);
+            $this->assertSame([3, 4], [(int) $job['rows_exported'], (int) $job['rows_total']], '3 active of the 4 scanned rows');
             $this->assertStringEndsWith('.xlsx', $job['file_name']);
 
             $reader = new OpenSpout\Reader\XLSX\Reader();
@@ -252,7 +253,7 @@ final class SnapshotUserFlowTest extends CIUnitTestCase
                     $contracts[] = (string) $row->toArray()[array_search('CONTRACT', \App\Services\CustomerListExportService::COLUMNS, true)];
                 }
             }
-            $this->assertSame(['CONTRACT', '100001', '100002', '100003', '100004'], $contracts, "V1's rows only");
+            $this->assertSame(['CONTRACT', '100001', '100002', '100004'], $contracts, "V1's active rows only (100003 is INACTIVE.)");
         } finally {
             $reader?->close(); // Windows: an open file cannot be deleted
             @unlink((string) $job['file_path']);

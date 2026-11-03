@@ -11,6 +11,9 @@ $routes->get('login', 'AuthController::showLogin');
 $routes->post('login', 'AuthController::attemptLogin');
 $routes->get('logout', 'AuthController::logout');
 
+// ---- Interface language (fr default / en), stored in a cookie --------
+$routes->get('language/(:segment)', 'LanguageController::change/$1');
+
 // ---- CUSTOMERS_LIST analytics dashboard = the application core --------
 $routes->get('dashboard', 'DashboardController::index');
 $routes->get('dashboard/stats', 'DashboardController::stats');

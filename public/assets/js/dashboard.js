@@ -14,22 +14,15 @@
 
     var boot = JSON.parse(document.getElementById('bscd-dashboard-data').textContent || '{}');
     var EP = boot.endpoints;
-    var DEFAULTS = window.bscdDashboardDefaults; // public/assets/js/dashboard-defaults.js
+    var I18N = window.bscdI18n;                  // public/assets/js/i18n.js — every text below
+    var t = I18N.t;
 
     var PALETTE = ['#1f6fb2', '#7c3aed', '#d97706', '#1a7f4d', '#c0392b', '#0891b2', '#db2777', '#ca8a04', '#475569', '#94a3b8'];
     var OTHER_COLOR = '#c7ccd6';
 
-    var COLUMN_LABELS = {
-        REGION: 'Région', DIVISION: 'Division', AGENCE: 'Agence', COD_UNICOM: 'COD_UNICOM',
-        COD_CLI: 'Code client', CONTRACT: 'Contrat', STATUS: 'Statut', METER_NO: 'N° compteur',
-        CUST_NAME: 'Client', PHONE_NUMBERS: 'Téléphone', E_MAIL: 'E-mail', REF_GEO: 'REF_GEO',
-        DATE_AB: 'Date abo.', DATE_RESILIATION: 'Date résil.', VOLTAGE: 'VOLTAGE',
-        SEGMENT_TRESOR: 'SEGMENT_TRESOR', METER: 'METER', NIU_RIGHT: 'NIU_RIGHT',
-        XCOORD: 'XCOORD', YCOORD: 'YCOORD', NIU_TO_RECLASS: 'NIU à reclasser', NUI_QC: 'NUI_QC',
-        LAST_VC_DATE: 'LAST_VC_DATE', SEGMENT_RFM_2: 'SEGMENT_RFM_2',
-        POSTPAID_PROFILE_DATE: 'POSTPAID_PROFILE_DATE', SEGMENTATION: 'Segmentation',
-        UPDATED_AT: 'Mis à jour le'
-    };
+    // Translated headers (i18n "dashboard.columns"); a technical column name
+    // without an entry (COD_UNICOM, REF_GEO, VOLTAGE, …) is shown as-is.
+    var COLUMN_LABELS = t('dashboard.columns');
 
     // Columns selected/visible on first load — server-provided (see
     // QueryBuilder::DEFAULT_VISIBLE_COLUMNS), so the 16-default vs
@@ -37,16 +30,13 @@
     // boot.tableColumns but not here starts hidden — see loadHiddenColumns().
     var DEFAULT_VISIBLE_COLUMNS = boot.defaultVisibleColumns || boot.tableColumns;
 
-    var MS_DIMS = ['region', 'division', 'agence', 'status', 'meter', 'segmentation', 'segment_tresor', 'voltage', 'niu_qc'];
+    var MS_DIMS = ['region', 'division', 'agence', 'status', 'meter', 'segmentation', 'segment_tresor', 'voltage', 'niu_qc', 'contact'];
 
-    // STATUT: the 4 statuses the business defines as "actif" (client/contrat
-    // actif). Drives the dropdown's two-group layout (see
-    // configureStatusGroups()) and the initial selection on first load (see
-    // bootstrapAll(); "Réinitialiser" still clears it like any filter). The KPI
-    // definitions in Config\Oracle::$activeStatuses are the real source of
-    // truth for what counts as "actif" server-side; this array is a display
-    // concern only and is kept in sync with it by convention.
-    var ACTIVE_STATUSES = ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)'];
+    // STATUT: the application only knows active customers — the server
+    // (App\Services\CustomersList\ActiveCustomers) offers, accepts and
+    // returns nothing but the 4 active statuses, and "no STATUT ticked" means
+    // all 4 of them. The dropdown just narrows inside that perimeter; nothing
+    // here decides it.
 
     // SEGMENTATION values per Type de compteur — exact technical values, as
     // observed in TB_CUSTOMERS_LIST (METER x SEGMENTATION, 2026-09-24):
@@ -79,12 +69,12 @@
     var SEGMENTATION_LABELS = {
         '1 PERFECT': 'PERFECT', '2 RELIABLE': 'RELIABLE', '3 Occasionnal': 'Occasional',
         '4 At-Risk': 'At-Risk', '5 Delinquant': 'Delinquant', '6 Always Late': 'Always Late',
-        '8 Never Paid': 'Never Paid', '7 sometime Paid': 'sometime Paid', '8 Autre': 'Other'
+        '8 Never Paid': 'Never Paid', '7 sometime Paid': 'sometime Paid', '8 Autre': t('dashboard.values.other')
     };
     var PREPAID_SEGMENTATION_LABELS = {
-        '1-Stable': 'Stable', '2-InStable': 'Instable', '3-At Risk': 'À risque',
+        '1-Stable': 'Stable', '2-InStable': t('dashboard.values.unstable'), '3-At Risk': t('dashboard.values.atRisk'),
         '4-Suspect Dormant': 'Suspect Dormant', '5-Dormant': 'Dormant',
-        '6 Old_Dormant': 'Old Dormant', '7 Never Vending': 'Never Vending', 'Other': 'Other'
+        '6 Old_Dormant': 'Old Dormant', '7 Never Vending': 'Never Vending', 'Other': t('dashboard.values.other')
     };
     Object.keys(PREPAID_SEGMENTATION_LABELS).forEach(function (v) { SEGMENTATION_LABELS[v] = PREPAID_SEGMENTATION_LABELS[v]; });
     var DIM_LABELS = {
@@ -95,17 +85,25 @@
         // value ("correct") and treat anything else as the other.
         niu_qc: function (v) {
             var upper = String(v).toUpperCase();
-            if (upper.indexOf('CORRECT') !== -1) return 'NUI CORRECT';
-            return 'NUI à RECLASSER';
+            if (upper.indexOf('CORRECT') !== -1) return t('dashboard.values.niuCorrect');
+            return t('dashboard.values.niuToReclass');
         },
         meter: function (v) {
             var upper = String(v).toUpperCase();
-            if (upper.indexOf('COMMUNICANT') !== -1) return 'COMPTEURS COMMUNICANTS';
-            return v;
+            if (upper.indexOf('COMMUNICANT') !== -1) return t('dashboard.values.smartMeters');
+            return displayValue(v);
         },
-        segmentation: function (v) { return SEGMENTATION_LABELS[v] || v; }
+        segmentation: function (v) { return SEGMENTATION_LABELS[v] || v; },
+        // "Contact renseigné": wire values yes / no (FilterCriteria::CONTACT_YES / _NO).
+        contact: function (v) { return v === 'yes' ? t('common.yes') : t('common.no'); }
     };
-    function dimLabel(dim, value) { return DIM_LABELS[dim] ? DIM_LABELS[dim](value) : value; }
+    function dimLabel(dim, value) { return DIM_LABELS[dim] ? DIM_LABELS[dim](value) : displayValue(value); }
+
+    // Server-side bucket names ("Non renseigné" for a blank value, "Autres"
+    // for a folded tail) are DATA — sent back as filter values, never
+    // translated on the wire; only what the user reads is.
+    var BUCKET_LABELS = { 'Non renseigné': 'glossary.notProvided', 'Autres': 'dashboard.groups.others' };
+    function displayValue(value) { return BUCKET_LABELS[value] ? t(BUCKET_LABELS[value]) : value; }
 
     // Table columns that carry a date — displayed dd/mm/yyyy (the wire value
     // stays ISO: filters/sort/SQL are untouched).
@@ -119,7 +117,11 @@
         hiddenColumns: loadHiddenColumns(),
         lastStatsAt: null,
         exporting: false,
-        filterTotal: null            // snapshot count for state.applied (GET /dashboard/count)
+        filterTotal: null,           // snapshot count for state.applied (GET /dashboard/count)
+        tableScope: 'all',           // 'all' | 'postpaid' | 'prepaid' — table + export (tableCriteria())
+        sectionCriteria: {},         // section -> criteria of its KPIs/charts (null = no possible row)
+        sectionTotals: {},           // section -> rows of that criteria (stats totalRows)
+        sectionData: {}              // section -> last stats answer, re-drawn on a theme change
     };
 
     var els = {
@@ -141,8 +143,16 @@
     };
 
     // ── helpers ────────────────────────────────────────────────────────
-    function fmt(n) { return (Number(n) || 0).toLocaleString('fr-FR'); }
-    function pct(v) { return (Number(v) || 0).toFixed(1).replace('.', ',') + ' %'; }
+    function fmt(n) { return I18N.number(n); }
+    function pct(v) { return I18N.percent(v, 1); }
+
+    // Values always visible on every chart (public/assets/js/chart-value-labels.js),
+    // with the same fmt / pct as the tooltips, KPIs and table.
+    if (window.Chart && window.bscdChartValueLabels) {
+        Chart.register(window.bscdChartValueLabels.plugin);
+        Chart.defaults.plugins.bscdValueLabels.formatValue = fmt;
+        Chart.defaults.plugins.bscdValueLabels.formatPercent = pct;
+    }
 
     // "2026-09-03" or "2026-09-03 14:30:00" -> "03/09/2026". Empty/invalid ->
     // returned as-is (never "Invalid Date"). String-only: no new Date(), so a
@@ -160,7 +170,7 @@
     }
 
     function showGlobalError(ref) {
-        els.globalErrorRef.textContent = ref ? ('Référence : ' + ref) : '';
+        els.globalErrorRef.textContent = ref ? t('common.reference', { ref: ref }) : '';
         els.globalError.classList.remove('d-none');
     }
     function hideGlobalError() { els.globalError.classList.add('d-none'); }
@@ -199,9 +209,9 @@
         this.onChange = null;
 
         root.innerHTML =
-            '<button type="button" class="bscd-ms__button"><span class="bscd-ms__label">Toutes</span><i class="fas fa-chevron-down"></i></button>' +
+            '<button type="button" class="bscd-ms__button"><span class="bscd-ms__label">' + escapeHtml(t('dashboard.multiselect.all')) + '</span><i class="fas fa-chevron-down"></i></button>' +
             '<div class="bscd-ms__panel">' +
-            '  <input type="search" class="bscd-ms__filter" placeholder="Filtrer…">' +
+            '  <input type="search" class="bscd-ms__filter" placeholder="' + escapeAttr(t('dashboard.multiselect.filter')) + '">' +
             '  <div class="bscd-ms__list"></div>' +
             '</div>';
 
@@ -264,7 +274,7 @@
             html = filtered.map(function (o) { return self.optionHtml(o); }).join('');
         }
 
-        this.list.innerHTML = html || '<div class="bscd-ms__none">Aucune valeur</div>';
+        this.list.innerHTML = html || '<div class="bscd-ms__none">' + escapeHtml(t('dashboard.multiselect.none')) + '</div>';
 
         this.list.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
             cb.addEventListener('change', function () {
@@ -276,9 +286,9 @@
         });
     };
     MultiSelect.prototype.renderLabel = function () {
-        if (this.selected.length === 0) { this.labelEl.textContent = 'Toutes'; this.root.classList.remove('is-active'); }
+        if (this.selected.length === 0) { this.labelEl.textContent = t('dashboard.multiselect.all'); this.root.classList.remove('is-active'); }
         else if (this.selected.length === 1) { this.labelEl.textContent = dimLabel(this.dim, this.selected[0]); this.root.classList.add('is-active'); }
-        else { this.labelEl.textContent = this.selected.length + ' sélectionnées'; this.root.classList.add('is-active'); }
+        else { this.labelEl.textContent = I18N.tn('dashboard.multiselect.selected', this.selected.length); this.root.classList.add('is-active'); }
         this.updateTooltip();
     };
     // Native `title` tooltip on the closed field — set ONLY when the text is
@@ -305,12 +315,13 @@
         var root = document.querySelector('.bscd-ms[data-dim="' + dim + '"]');
         if (root) ms[dim] = new MultiSelect(root);
     });
+    // Fixed choices, no per-value count (none is computed for this filter).
+    if (ms.contact) ms.contact.setOptions([{ value: 'yes', count: '' }, { value: 'no', count: '' }]);
 
     function refreshAllTooltips() {
         Object.keys(ms).forEach(function (dim) { ms[dim].updateTooltip(); });
     }
     window.addEventListener('resize', debounce(refreshAllTooltips, 200));
-    configureStatusGroups();
     configureSegmentationGroups();
 
     // ── geo cascade ───────────────────────────────────────────────────
@@ -387,12 +398,12 @@
     // unchanged "Postpaid". Type de compteur = Toutes (nothing selected) ->
     // both as well.
     function postpaidGroupLabel(meterValues) {
-        if (meterValues.length === 0) return 'Postpaid | Compteurs communicants';
+        if (meterValues.length === 0) return t('dashboard.groups.postpaidAndSmart');
         var postpaid = meterValues.some(function (m) { return normalizeMatch(m) === 'POSTPAID'; });
         var smart = meterValues.some(isSmartMeter);
-        if (postpaid && smart) return 'Postpaid | Compteurs communicants';
-        if (smart) return 'Compteurs communicants';
-        return 'Postpaid';
+        if (postpaid && smart) return t('dashboard.groups.postpaidAndSmart');
+        if (smart) return t('glossary.smartMeters');
+        return t('dashboard.groups.postpaid');
     }
     // -> 'POSTPAID' | 'PREPAID' | null (a value in neither list).
     function segmentationUniverse(value) {
@@ -484,16 +495,6 @@
         if (this.panel.classList.contains('is-open')) loadSegmentationCounts();
     };
 
-    // Two visual groups in the STATUT dropdown — "Contrats actifs" first
-    // (the 4 business-active statuses), then "Contrats inactifs" (every
-    // other status the backend actually returns, never hardcoded here).
-    // Purely a display grouping: group labels are not options, selection
-    // and the values sent to the backend are unaffected.
-    function configureStatusGroups() {
-        ms.status.groupLabels = ['Contrats actifs', 'Contrats inactifs'];
-        ms.status.groupOf = function (value) { return ACTIVE_STATUSES.indexOf(value) !== -1 ? 0 : 1; };
-    }
-
     // Three visual groups in the SEGMENTATION dropdown, same mechanism as
     // STATUT: "Postpaid" (POSTPAID_SEGMENTATIONS, in that order), "Prepaid"
     // (PREPAID_SEGMENTATIONS, count order), then "Autres" for any value the
@@ -502,7 +503,7 @@
     // values sent to the backend and the counts are unaffected.
     function configureSegmentationGroups() {
         var groupIndex = { POSTPAID: 0, PREPAID: 1 };
-        ms.segmentation.groupLabels = ['Postpaid', 'Prepaid', 'Autres'];
+        ms.segmentation.groupLabels = [t('dashboard.groups.postpaid'), t('dashboard.groups.prepaid'), t('dashboard.groups.others')];
         ms.segmentation.groupOf = function (value) {
             var u = segmentationUniverse(value);
             return u ? groupIndex[u] : 2;
@@ -540,9 +541,11 @@
     }
 
     var FILTER_LABELS = {
-        date_from: 'Depuis', date_to: "Jusqu'au", region: 'Région', division: 'Division',
-        agence: 'Agence', status: 'Statut', segmentation: 'Segmentation',
-        segment_tresor: 'Segment trésor', meter: 'Compteur', voltage: 'Tension', niu_qc: 'Qualité NIU'
+        date_from: t('dashboard.filters.date_from'), date_to: t('dashboard.filters.date_to'),
+        region: t('glossary.region'), division: t('glossary.division'), agence: t('glossary.agency'),
+        status: t('glossary.status'), segmentation: t('glossary.segmentation'),
+        segment_tresor: t('glossary.treasurySegment'), meter: t('glossary.meter'),
+        voltage: t('glossary.voltage'), niu_qc: t('glossary.niuQuality'), contact: t('glossary.contactFilled')
     };
 
     function filterText(k, v) {
@@ -557,7 +560,7 @@
         Object.keys(c).forEach(function (k) {
             var text = filterText(k, c[k]);
             chips.push('<span class="bscd-chip" data-chip="' + k + '">' + escapeHtml(FILTER_LABELS[k] || k) + ' : ' +
-                escapeHtml(text) + '<button type="button" aria-label="Retirer">&times;</button></span>');
+                escapeHtml(text) + '<button type="button" aria-label="' + escapeAttr(t('common.remove')) + '">&times;</button></span>');
         });
         els.chips.innerHTML = chips.join('');
         els.chips.querySelectorAll('.bscd-chip button').forEach(function (btn) {
@@ -595,30 +598,102 @@
         });
     }
 
+    // ── Vue Postpaid / Vue Prepaid ──────────────────────────────────────
+    // Each section = the page filters with the METER filter narrowed to its
+    // universe (dashboard-sections.js, same meterUniverse() rule as the
+    // segmentation dropdown). The server validates it like any meter filter.
+    var SECTIONS = window.bscdDashboardSections;
+    var CHART_KINDS = ['region', 'status', 'segmentation'];
+
+    function sectionRoot(key) { return document.querySelector('[data-section="' + key + '"]'); }
+    function eachSection(fn) { SECTIONS.SECTIONS.forEach(function (sec) { fn(sec.key, sectionRoot(sec.key)); }); }
+    function canvasIdOf(key, kind) { return 'bscdChart_' + key + '_' + kind; }
+    function offeredMeters() { return ((state.options && state.options.meters) || []).map(function (o) { return o.value; }); }
+    function criteriaFor(key) {
+        return SECTIONS.sectionCriteria(state.applied, SECTIONS.universeOf(key), offeredMeters(), meterUniverse, segmentationUniverse);
+    }
+
+    // The table and its server export follow the scope switch of
+    // "Détail des clients": the page filters, or one section's criteria.
+    // null = that scope has no possible row (nothing is requested).
+    function tableCriteria() {
+        return state.tableScope === 'all' ? state.applied : criteriaFor(state.tableScope);
+    }
+    function exportCount() {
+        if (state.tableScope === 'all') return state.filterTotal;
+        if (!tableCriteria()) return 0;
+        var n = state.sectionTotals[state.tableScope];
+        return typeof n === 'number' ? n : null;
+    }
+
+    // "1 234 clients" in the quick links and section headers, plus the rows of
+    // the page filters that belong to no section (blank METER).
+    function renderSectionTotals() {
+        eachSection(function (key, root) {
+            var n = state.sectionTotals[key];
+            var text = typeof n === 'number' ? I18N.tn('dashboard.sections.clients', n) : '';
+            var nav = document.querySelector('[data-section-count="' + key + '"]');
+            if (nav) nav.textContent = text;
+            var badge = root && root.querySelector('[data-section-total]');
+            if (badge) badge.textContent = text;
+        });
+        var note = document.querySelector('[data-section-unassigned]');
+        if (!note) return;
+        var rest = SECTIONS.unassigned(state.filterTotal, state.sectionTotals);
+        note.hidden = !rest;
+        note.textContent = rest ? I18N.tn('dashboard.sections.unassigned', rest) : '';
+    }
+
     var statsSeq = 0;
 
     function loadStats(fresh) {
         var seq = ++statsSeq;
         var applied = state.applied;
-        applyKpiLayout();
         setKpiSkeleton(true);
-        setChartsLoading('Chargement…');
-        var key = toParams(applied).toString();
-        if (EP.count) loadCount(key); // in parallel: the snapshot count behind export "Résultats"
-        var url = EP.stats + '?' + key + (fresh ? '&fresh=1' : '');
-        return json(url).then(function (data) {
-            // A slower answer for an older filter set never overwrites the current one.
+        setChartsLoading(t('common.loading'));
+        state.sectionTotals = {};
+        state.sectionData = {};
+        renderSectionTotals();
+        if (EP.count) loadCount(toParams(applied).toString()); // in parallel: the page count (export "Tous", unassigned rows)
+        return Promise.all(SECTIONS.SECTIONS.map(function (sec) {
+            var key = sec.key;
+            var criteria = criteriaFor(key);
+            state.sectionCriteria[key] = criteria;
+            if (!criteria) { renderSectionEmpty(key); return null; }
+            var url = EP.stats + '?' + toParams(criteria).toString() + (fresh ? '&fresh=1' : '');
+            return json(url).then(function (data) {
+                // A slower answer for an older filter set never overwrites the current one.
+                if (seq !== statsSeq) return;
+                if (data.error) throw data;
+                state.sectionData[key] = data;
+                state.sectionTotals[key] = data.totalRows;
+                renderKpis(key, data);
+                renderCharts(key, data, criteria);
+                renderSectionTotals();
+                refreshExportCount();
+            }).catch(function (err) {
+                if (seq !== statsSeq) return;
+                setChartsLoading(t('common.unavailable'), key); // never the previous charts
+                throw err;
+            });
+        })).then(function () {
             if (seq !== statsSeq) return;
-            if (data.error) throw data;
-            renderKpis(data);
-            renderCharts(data, applied);
             state.lastStatsAt = Date.now();
             updateCacheNote();
-        }).catch(function (err) {
-            if (seq !== statsSeq) return;
-            setChartsLoading('Données indisponibles.'); // never the previous charts
-            throw err;
         });
+    }
+
+    // A section with no possible row under the filters (e.g. Type de compteur
+    // = PREPAID only, seen from the Postpaid section): zeros, no request.
+    function renderSectionEmpty(key) {
+        var root = sectionRoot(key);
+        state.sectionTotals[key] = 0;
+        ['actifs', 'nuiCorrects', 'contacts'].forEach(function (k) {
+            root.querySelector('[data-kpi="' + k + '"]').textContent = fmt(0);
+            root.querySelector('[data-kpi-sub="' + k + '"]').innerHTML = '&nbsp;';
+        });
+        setChartsLoading(CHART_EMPTY, key);
+        renderSectionTotals();
     }
 
     // Rows matching the filters in the ACTIVE SNAPSHOT — the file the exports
@@ -636,6 +711,7 @@
             if (!data || data.error || typeof data.count !== 'number') throw data;
             state.filterTotal = data.count;
             refreshExportCount();
+            renderSectionTotals();
         }).catch(function () {
             // No snapshot count: the modal keeps showing '…', never an Oracle stand-in.
         });
@@ -646,13 +722,21 @@
     function refreshExportCount() {
         var modal = document.getElementById('bscdExportModal');
         if (!modal || !modal.classList.contains('show')) return;
-        document.getElementById('bscdExportCount').textContent = state.filterTotal != null ? fmt(state.filterTotal) : '…';
+        var n = exportCount();
+        document.getElementById('bscdExportCount').textContent = n != null ? fmt(n) : '…';
     }
 
     var rowsSeq = 0;
 
     function loadRows(fresh) {
-        var params = toParams(state.applied);
+        var criteria = tableCriteria();
+        if (!criteria) { // this scope has no possible row: empty table, no request
+            ++rowsSeq;
+            els.tableBody.classList.remove('is-loading');
+            renderTable({ data: [], page: 1, perPage: state.table.perPage, total: 0 });
+            return Promise.resolve();
+        }
+        var params = toParams(criteria);
         params.set('page', state.table.page);
         params.set('per_page', state.table.perPage);
         params.set('sort', state.table.sort);
@@ -676,47 +760,44 @@
     }
 
     // ── renderers ─────────────────────────────────────────────────────
-    // "Total clients" only when STATUT is not exactly the 4 active statuses
-    // (it would just repeat "Clients actifs"). The KPI columns are equal flex
-    // columns (col-lg), so the visible cards — 3 or 4 — always share one
-    // desktop line. Decided from the filters the stats are requested for.
-    function applyKpiLayout() {
-        var showTotal = !DEFAULTS.isExactlyActiveStatuses(state.applied.status, ACTIVE_STATUSES);
-        document.querySelector('[data-kpi-col="total"]').classList.toggle('d-none', !showTotal);
-    }
-
+    // No "Total clients" card: every row is an active customer, so it would
+    // always repeat "Clients actifs". The KPI columns are equal flex columns
+    // (col-lg): the 3 cards share one desktop line.
     function setKpiSkeleton(on) {
-        ['total', 'actifs', 'nuiCorrects', 'contacts'].forEach(function (k) {
-            var v = document.querySelector('[data-kpi="' + k + '"]');
-            var s = document.querySelector('[data-kpi-sub="' + k + '"]');
-            if (on) { v.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>'; s.innerHTML = '&nbsp;'; }
+        ['actifs', 'nuiCorrects', 'contacts'].forEach(function (k) {
+            eachSection(function (key, root) {
+                var v = root.querySelector('[data-kpi="' + k + '"]');
+                var s = root.querySelector('[data-kpi-sub="' + k + '"]');
+                if (on) { v.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>'; s.innerHTML = '&nbsp;'; }
+            });
         });
     }
 
-    function renderKpis(stats) {
+    // The 4 cards of one section, from that section's /dashboard/stats answer.
+    function renderKpis(key, stats) {
+        var root = sectionRoot(key);
         var k = stats.kpis;
-        if (!EP.count) state.filterTotal = stats.totalRows; // no count endpoint (older page shell): previous behaviour
         // Same filters and same query as the other cards (QueryBuilder::kpiStatement() NUI_CORRECT).
         // "% du total" = NUI corrects (filtered) / all NUI of the unfiltered reference.
-        document.querySelector('[data-kpi="nuiCorrects"]').textContent = k.nuiCorrects ? fmt(k.nuiCorrects.value) : '—';
-        setKpiSub('nuiCorrects', k.nuiCorrects ? pct(k.nuiCorrects.pct) + ' du total' : '', 'NUI corrects correspondant aux filtres');
-        // Same query and filters as the other cards (QueryBuilder::kpiStatement() TOTAL);
-        // "% du total" = selected contracts / unfiltered reference total.
-        document.querySelector('[data-kpi="total"]').textContent = fmt(k.total);
-        setKpiSub('total', k.totalPct != null ? pct(k.totalPct) + ' du total' : '', 'contrats correspondant aux filtres');
+        root.querySelector('[data-kpi="nuiCorrects"]').textContent = k.nuiCorrects ? fmt(k.nuiCorrects.value) : '—';
+        setKpiSub(root, 'nuiCorrects', k.nuiCorrects ? ofTotal(k.nuiCorrects.pct) : '', t('dashboard.kpi.nuiCorrectsNote'));
+        // "Clients actifs" = the section's contracts (all in-perimeter);
+        // "% du total" = of every active contract without user filter.
         [['actifs', k.actifs], ['contacts', k.contacts]].forEach(function (pair) {
             if (!pair[1]) { // stats cached before this card existed
-                document.querySelector('[data-kpi="' + pair[0] + '"]').textContent = '—';
+                root.querySelector('[data-kpi="' + pair[0] + '"]').textContent = '—';
                 return;
             }
-            document.querySelector('[data-kpi="' + pair[0] + '"]').textContent = fmt(pair[1].value);
-            document.querySelector('[data-kpi-sub="' + pair[0] + '"]').textContent = pct(pair[1].pct) + ' du total';
+            root.querySelector('[data-kpi="' + pair[0] + '"]').textContent = fmt(pair[1].value);
+            root.querySelector('[data-kpi-sub="' + pair[0] + '"]').textContent = ofTotal(pair[1].pct);
         });
     }
 
+    function ofTotal(value) { return t('dashboard.kpi.ofTotal', { pct: pct(value) }); }
+
     // Percentage line + the card's descriptive note underneath (both text only).
-    function setKpiSub(key, pctText, note) {
-        var s = document.querySelector('[data-kpi-sub="' + key + '"]');
+    function setKpiSub(root, key, pctText, note) {
+        var s = root.querySelector('[data-kpi-sub="' + key + '"]');
         s.textContent = pctText;
         var n = document.createElement('span');
         n.className = 'bscd-kpi-note';
@@ -724,16 +805,69 @@
         s.appendChild(n);
     }
 
-    function destroyChart(id) { if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; } }
-
-    // `applied` = the filters these stats were computed for.
-    function renderCharts(stats, applied) {
-        var ch = stats.charts;
-        bar('bscdChartRegion', ch.region, true);
-        donut('bscdChartStatus', ch.status);
-        bar('bscdChartSegmentation', segmentationChartPairs(ch.segmentation, applied || {}), false);
-        meterTypeSummary(ch.meterType);
+    function destroyChart(id) {
+        if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; }
+        delete chartPairs[id];
+        chartExport(chartKey(id), null);
     }
+
+    // Per-chart export menu (public/assets/js/chart-export.js): each chart
+    // hands over the dataset it was just drawn from — same API answer, same
+    // filters, same transformations ("Autres" fold, business order) — so the
+    // CSV / Excel / PNG always match the screen; never a re-fetch. null =
+    // loading or empty: nothing to export. Keys are "{section}-{chart}", and
+    // the filters listed are the section's (its narrowed Type de compteur).
+    var chartPairs = {};      // canvasId -> pairs actually plotted (technical values)
+    var exportFilters = {};   // section -> its criteria, as the chips show them
+    function chartKey(canvasId) { var p = canvasId.split('_'); return p[1] + '-' + p[2]; }
+    function chartExport(key, spec) {
+        var cx = window.bscdChartExport;
+        if (!cx) return;
+        if (spec) { spec.filters = exportFilters[key.split('-')[0]] || []; cx.register(key, spec); } else { cx.clear(key); }
+    }
+
+    // `criteria` = the section filters these stats were computed for.
+    function renderCharts(key, stats, criteria) {
+        var ch = stats.charts;
+        exportFilters[key] = Object.keys(criteria || {}).map(function (k) {
+            return { label: FILTER_LABELS[k] || k, text: filterText(k, criteria[k]) };
+        });
+        applyChartTheme();
+        bar(canvasIdOf(key, 'region'), ch.region, true);
+        donut(canvasIdOf(key, 'status'), ch.status);
+        bar(canvasIdOf(key, 'segmentation'), segmentationChartPairs(ch.segmentation, criteria || {}), false);
+        meterTypeSummary(sectionRoot(key), key, ch.meterType);
+        CHART_KINDS.forEach(function (kind) {
+            var id = canvasIdOf(key, kind);
+            if (!state.charts[id]) return;
+            chartExport(chartKey(id), {
+                chart: state.charts[id],
+                values: (chartPairs[id] || []).map(function (p) { return p.value; })
+            });
+        });
+    }
+
+    // Light / dark theme (public/assets/js/theme.js): chart text, grid and
+    // value-label colours follow it; a switch re-draws the charts from the
+    // answers already received (no new request).
+    function isDark() { return !!(document.body && document.body.classList.contains('dark-mode')); }
+    function applyChartTheme() {
+        if (!window.Chart || !Chart.defaults) return;
+        var dark = isDark();
+        Chart.defaults.color = dark ? '#cbd5e1' : '#666';
+        Chart.defaults.borderColor = dark ? 'rgba(148, 163, 184, .18)' : 'rgba(0, 0, 0, .1)';
+        var vl = Chart.defaults.plugins && Chart.defaults.plugins.bscdValueLabels;
+        if (vl) {
+            vl.color = dark ? '#e5e7eb' : '#374151';
+            vl.haloColor = dark ? '#1f2633' : '#ffffff';
+        }
+    }
+    document.addEventListener('bscd:themechange', function () {
+        eachSection(function (key) {
+            var data = state.sectionData[key];
+            if (data) renderCharts(key, data, state.sectionCriteria[key]);
+        });
+    });
 
     // Position in PREPAID_SEGMENTATIONS (full normalised value), -1 if none.
     function prepaidRank(value) {
@@ -779,7 +913,7 @@
 
     // Loading / empty / error message in place of a chart (CSS shows
     // data-chart-msg over a hidden canvas). null = show the chart.
-    var CHART_EMPTY = 'Aucune donnée disponible pour les filtres sélectionnés.';
+    var CHART_EMPTY = t('common.noData');
     function setChartMessage(canvasId, text) {
         var wrap = document.getElementById(canvasId).parentNode;
         if (!wrap || !wrap.dataset) return;
@@ -788,15 +922,21 @@
 
     // New filter set: the previous charts are removed right away — never
     // left on screen as if they matched the new filters.
-    function setChartsLoading(text) {
-        ['bscdChartRegion', 'bscdChartStatus', 'bscdChartSegmentation'].forEach(function (id) {
-            destroyChart(id);
-            setChartMessage(id, text);
+    function setChartsLoading(text, onlyKey) {
+        eachSection(function (key, root) {
+            if (onlyKey && key !== onlyKey) return;
+            CHART_KINDS.forEach(function (kind) {
+                var id = canvasIdOf(key, kind);
+                if (!document.getElementById(id)) return;
+                destroyChart(id);
+                setChartMessage(id, text);
+            });
+            var totalEl = root.querySelector('[data-metertype="total"]');
+            var listEl = root.querySelector('[data-metertype="list"]');
+            if (totalEl) totalEl.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>';
+            if (listEl) listEl.innerHTML = '<li class="bscd-metertype__empty">' + escapeHtml(text) + '</li>';
+            chartExport(key + '-meterType', null);
         });
-        var totalEl = document.querySelector('[data-metertype="total"]');
-        var listEl = document.querySelector('[data-metertype="list"]');
-        if (totalEl) totalEl.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>';
-        if (listEl) listEl.innerHTML = '<li class="bscd-metertype__empty">' + escapeHtml(text) + '</li>';
     }
 
     function bar(canvasId, pairs, horizontal) {
@@ -806,10 +946,11 @@
         var total = pairs.reduce(function (s, p) { return s + p.count; }, 0);
         setChartMessage(canvasId, total ? null : CHART_EMPTY);
         if (!total) return;
+        chartPairs[canvasId] = pairs;
         state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
             type: 'bar',
             data: {
-                labels: pairs.map(function (p) { return p.label || p.value; }),
+                labels: pairs.map(function (p) { return p.label || displayValue(p.value); }),
                 datasets: [{
                     data: pairs.map(function (p) { return p.count; }),
                     backgroundColor: pairs.map(function (p, i) { return p.value === 'Autres' ? OTHER_COLOR : colorFor(i); }),
@@ -842,10 +983,11 @@
         var total = pairs.reduce(function (s, p) { return s + p.count; }, 0);
         setChartMessage(canvasId, total ? null : CHART_EMPTY);
         if (!total) return;
+        chartPairs[canvasId] = pairs;
         state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
             type: 'doughnut',
             data: {
-                labels: pairs.map(function (p) { return p.label || p.value; }),
+                labels: pairs.map(function (p) { return p.label || displayValue(p.value); }),
                 datasets: [{ data: pairs.map(function (p) { return p.count; }),
                     backgroundColor: pairs.map(function (p, i) { return p.value === 'Autres' ? OTHER_COLOR : colorFor(i); }), borderWidth: 0 }]
             },
@@ -865,10 +1007,10 @@
     // Oracle (GROUP BY METER). No hardcoded type list: whatever buckets the
     // backend returns are rendered, in descending-count order, blank -> the
     // "Non renseigné" bucket the backend already labels.
-    function meterTypeSummary(pairs) {
+    function meterTypeSummary(root, key, pairs) {
         pairs = pairs || [];
-        var totalEl = document.querySelector('[data-metertype="total"]');
-        var listEl = document.querySelector('[data-metertype="list"]');
+        var totalEl = root.querySelector('[data-metertype="total"]');
+        var listEl = root.querySelector('[data-metertype="list"]');
         if (!totalEl || !listEl) return;
 
         var total = pairs.reduce(function (s, p) { return s + (Number(p.count) || 0); }, 0);
@@ -881,7 +1023,7 @@
             li.className = 'bscd-metertype__row';
             li.innerHTML =
                 '<span class="bscd-metertype__swatch" style="background:' + colorFor(i) + '"></span>' +
-                '<span class="bscd-metertype__name">' + escapeHtml(p.value) + '</span>' +
+                '<span class="bscd-metertype__name">' + escapeHtml(displayValue(p.value)) + '</span>' +
                 '<span class="bscd-metertype__count">' + fmt(p.count) + '</span>' +
                 '<span class="bscd-metertype__pct">' + pct(share) + '</span>';
             listEl.appendChild(li);
@@ -890,13 +1032,16 @@
         if (pairs.length === 0) {
             listEl.innerHTML = '<li class="bscd-metertype__empty">' + escapeHtml(CHART_EMPTY) + '</li>';
         }
+        chartExport(key + '-meterType', pairs.length ? {
+            rows: pairs.map(function (p, i) { return { label: p.value, value: p.value, count: p.count, color: colorFor(i) }; })
+        } : null);
     }
 
     function foldTail(pairs, topN) {
         if (pairs.length <= topN) return pairs;
         var head = pairs.slice(0, topN - 1);
         var rest = pairs.slice(topN - 1).reduce(function (s, p) { return s + p.count; }, 0);
-        return head.concat([{ value: 'Autres', count: rest }]);
+        return head.concat([{ value: 'Autres', label: t('dashboard.groups.others'), count: rest }]);
     }
 
     function visibleColumns() {
@@ -908,8 +1053,7 @@
         state.table.page = data.page;
         state.table.total = data.total;
 
-        els.rowCount.textContent = fmt(data.total) + ' résultat' + (data.total > 1 ? 's' : '') +
-            (isFiltered() ? ' correspondant aux filtres' : '');
+        els.rowCount.textContent = I18N.tn(isFiltered() ? 'dashboard.table.resultsFiltered' : 'dashboard.table.results', data.total);
 
         var cols = visibleColumns();
         els.tableHead.innerHTML = cols.map(function (col) {
@@ -961,7 +1105,7 @@
         if (end < pages) { if (end < pages - 1) btns.push('<span class="bscd-page-gap">…</span>'); btns.push(pageBtn(String(pages), pages, false)); }
         btns.push(pageBtn('»', cur + 1, cur === pages));
 
-        els.pagination.innerHTML = '<div class="bscd-page-info">Page ' + cur + ' / ' + fmt(pages) + '</div><div class="bscd-page-btns">' + btns.join('') + '</div>';
+        els.pagination.innerHTML = '<div class="bscd-page-info">' + escapeHtml(t('dashboard.table.page', { page: fmt(cur), pages: fmt(pages) })) + '</div><div class="bscd-page-btns">' + btns.join('') + '</div>';
         els.pagination.querySelectorAll('button[data-page]').forEach(function (b) {
             b.addEventListener('click', function () {
                 state.table.page = parseInt(b.dataset.page, 10);
@@ -994,16 +1138,15 @@
 
     function updateCacheNote() {
         if (!state.lastStatsAt) { els.cacheNote.textContent = ''; return; }
-        els.cacheNote.textContent = 'Actualisé ' + timeAgo(state.lastStatsAt);
+        els.cacheNote.textContent = timeAgo(state.lastStatsAt);
     }
     function timeAgo(ts) {
         var s = Math.round((Date.now() - ts) / 1000);
-        if (s < 60) return "à l'instant";
-        var m = Math.round(s / 60);
-        return 'il y a ' + m + ' min';
+        if (s < 60) return t('dashboard.cache.justNow');
+        return t('dashboard.cache.minutesAgo', { minutes: Math.round(s / 60) });
     }
 
-    function isFiltered() { return Object.keys(state.applied).length > 0; }
+    function isFiltered() { return Object.keys(state.applied).length > 0 || state.tableScope !== 'all'; }
 
     // ── apply / errors ────────────────────────────────────────────────
     function apply() {
@@ -1019,7 +1162,7 @@
     }
 
     function handleError(err) {
-        if (err && err.error === 'filter') { alert(err.message || 'Filtre invalide.'); return; }
+        if (err && err.error === 'filter') { alert(err.message || t('dashboard.errors.invalidFilter')); return; }
         showGlobalError(err && err.reference);
     }
 
@@ -1034,40 +1177,47 @@
 
     function openExportModal(format) {
         currentExportFormat = format;
-        document.getElementById('bscdExportFormat').textContent = format === 'xlsx' ? 'Excel (.xlsx)' : 'CSV';
+        document.getElementById('bscdExportFormat').textContent = t(format === 'xlsx' ? 'dashboard.export.formatXlsx' : 'dashboard.export.formatCsv');
 
         // The export applies the filters only (never the table search box),
         // so show the filter-only count from the last stats call.
         // Snapshot count only (see loadCount) — never the table's live Oracle
         // count as a stand-in: '…' until it arrives, then refreshExportCount().
-        var total = state.filterTotal != null ? state.filterTotal : (EP.count ? null : state.table.total);
+        var total = exportCount();
+        if (total == null && !EP.count) total = state.table.total;
         document.getElementById('bscdExportCount').textContent = total != null ? fmt(total) : '…';
 
-        var rows = Object.keys(state.applied).map(function (k) {
+        // Scope Postpaid / Prepaid: its narrowed Type de compteur is listed too.
+        var criteria = tableCriteria() || {};
+        var rows = Object.keys(criteria).map(function (k) {
             return '<div><strong>' + escapeHtml(FILTER_LABELS[k] || k) + '</strong> : ' +
-                escapeHtml(filterText(k, state.applied[k])) + '</div>';
+                escapeHtml(filterText(k, criteria[k])) + '</div>';
         });
         if (state.table.search) {
-            rows.push('<div class="text-muted mt-1"><em>La recherche « ' + escapeHtml(state.table.search) +
-                ' » n\'est pas appliquée à l\'export.</em></div>');
+            rows.push('<div class="text-muted mt-1"><em>' + escapeHtml(t('dashboard.export.searchNotApplied', { search: state.table.search })) + '</em></div>');
         }
         document.getElementById('bscdExportFilters').innerHTML = rows.length
             ? rows.join('')
-            : '<div class="text-muted">Aucun filtre — tout le référentiel.</div>';
+            : '<div class="text-muted">' + escapeHtml(t('dashboard.export.noFilter')) + '</div>';
 
         var status = document.getElementById('bscdExportStatus');
         status.classList.add('d-none'); status.innerHTML = '';
         var launch = document.getElementById('bscdExportLaunch');
-        launch.textContent = "Lancer l'export";
+        launch.textContent = t('dashboard.export.launch');
         launch.disabled = false;
         exportLocked = false;
+
+        if (!tableCriteria()) { // this scope has no possible row: nothing to export
+            launch.disabled = true;
+            status.classList.remove('d-none');
+            status.innerHTML = '<span class="text-muted">' + escapeHtml(t('common.noData')) + '</span>';
+        }
 
         // One export followed at a time: the running one stays in its window.
         if (WIDGET && WIDGET.isBusy()) {
             launch.disabled = true;
             status.classList.remove('d-none');
-            status.innerHTML = '<span class="text-muted">Un export est déjà en cours (fenêtre en bas à droite). ' +
-                'Attendez sa fin ou annulez-le avant d\'en lancer un autre.</span>';
+            status.innerHTML = '<span class="text-muted">' + escapeHtml(t('dashboard.export.busy')) + '</span>';
         }
 
         $('#bscdExportModal').modal('show');
@@ -1081,31 +1231,33 @@
         btn.disabled = false;
         if (canRetry === false) {
             exportLocked = true;
-            btn.textContent = 'Fermer';
+            btn.textContent = t('common.close');
         } else {
-            btn.textContent = 'Réessayer';
+            btn.textContent = t('common.retry');
         }
     }
 
     function launchExport() {
         if (exportLocked) { $('#bscdExportModal').modal('hide'); return; }
-        if (!WIDGET) { exportFail('Suivi des exports indisponible. Rechargez la page.', false); return; }
+        if (!WIDGET) { exportFail(t('dashboard.export.trackingUnavailable'), false); return; }
 
         var format = currentExportFormat;
-        if (!WIDGET.begin({ format: format, count: state.filterTotal })) {
-            exportFail("Un export est déjà en cours. Attendez sa fin ou annulez-le.", false);
+        var criteria = tableCriteria();
+        if (!criteria) { $('#bscdExportModal').modal('hide'); return; }
+        if (!WIDGET.begin({ format: format, count: exportCount() })) {
+            exportFail(t('dashboard.export.busyShort'), false);
             return;
         }
         // The floating window takes over ("Préparation de l'export…"): the page stays usable.
         $('#bscdExportModal').modal('hide');
 
-        var body = toParams(state.applied);
+        var body = toParams(criteria);
         body.set('format', format);
 
         bscdFetch(EP.export, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() })
             .then(function (res) {
                 if (!res) {
-                    WIDGET.fail({ message: 'Réponse vide du serveur. Rechargez la page puis réessayez.' });
+                    WIDGET.fail({ message: t('dashboard.export.emptyResponse') });
                     return;
                 }
                 // A server-reported failure — surface its reference/message so
@@ -1114,7 +1266,8 @@
                 // 403 from a stale CSRF token, a redirect to /login, …).
                 if (res.error) {
                     WIDGET.fail({
-                        message: "L'export n'a pas pu être lancé" + (res.message ? ' : ' + res.message : (res.reference ? '.' : ' (HTTP ' + (res.status || '?') + ').')) + ' Réessayez.',
+                        message: res.message ? t('dashboard.export.launchFailedMessage', { message: res.message })
+                            : (res.reference ? t('dashboard.export.launchFailedReference') : t('dashboard.export.launchFailedHttp', { status: res.status || '?' })),
                         reference: res.reference || ''
                     });
                     return;
@@ -1136,10 +1289,10 @@
                 }
                 // No recognised mode and no error flag — never fall through to
                 // the async branch with no job id.
-                WIDGET.fail({ message: 'Réponse inattendue du serveur. Rechargez la page puis réessayez.' });
+                WIDGET.fail({ message: t('dashboard.export.unexpected') });
             })
             .catch(function () {
-                WIDGET.fail({ message: 'Erreur réseau. Réessayez.' });
+                WIDGET.fail({ message: t('dashboard.export.network') });
             });
     }
 
@@ -1147,13 +1300,6 @@
     els.form.addEventListener('submit', function (e) { e.preventDefault(); apply(); });
     document.getElementById('bscdReset').addEventListener('click', resetFilters);
     document.querySelectorAll('[data-reset-filters]').forEach(function (b) { b.addEventListener('click', resetFilters); });
-    document.getElementById('bscdToggleAdvanced').addEventListener('click', function () {
-        document.getElementById('bscdAdvanced').classList.toggle('d-none');
-        // The advanced dims (segmentation, meter, …) were hidden (display:none)
-        // when their tooltip was first computed, so scrollWidth/clientWidth
-        // read 0/0 back then — recheck now that they are actually laid out.
-        refreshAllTooltips();
-    });
     document.getElementById('bscdRefresh').addEventListener('click', function () {
         loadFilterOptions(true).then(function () { return Promise.all([loadStats(true), loadRows(true)]); }).catch(handleError);
     });
@@ -1174,6 +1320,71 @@
     });
     document.getElementById('bscdExportLaunch').addEventListener('click', launchExport);
 
+    // "Détail des clients" scope: Tous / Postpaid / Prepaid (table + export).
+    function setTableScope(scope) {
+        state.tableScope = scope === 'postpaid' || scope === 'prepaid' ? scope : 'all';
+        document.querySelectorAll('[data-table-scope]').forEach(function (b) {
+            var on = b.dataset.tableScope === state.tableScope;
+            b.classList.toggle('is-active', on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+    }
+    document.querySelectorAll('[data-table-scope]').forEach(function (b) {
+        b.addEventListener('click', function () {
+            if (b.dataset.tableScope === state.tableScope) return;
+            setTableScope(b.dataset.tableScope);
+            state.table.page = 1;
+            loadRows().catch(handleError);
+        });
+    });
+
+    // Language switch (layout's [data-locale-switch] links): the page is
+    // reloaded in the other language, so the applied filters and the table
+    // state are parked in sessionStorage and put back by bootstrapAll().
+    var RESTORE_KEY = 'bscd_dashboard_restore';
+    document.querySelectorAll('[data-locale-switch]').forEach(function (a) {
+        a.addEventListener('click', function () {
+            try {
+                sessionStorage.setItem(RESTORE_KEY, JSON.stringify({
+                    applied: state.applied,
+                    table: { sort: state.table.sort, dir: state.table.dir, perPage: state.table.perPage, search: state.table.search, page: state.table.page, scope: state.tableScope }
+                }));
+            } catch (e) { /* private mode: the defaults apply */ }
+        });
+    });
+
+    function takeRestore() {
+        try {
+            var saved = JSON.parse(sessionStorage.getItem(RESTORE_KEY) || 'null');
+            sessionStorage.removeItem(RESTORE_KEY);
+            return saved && saved.applied ? saved : null;
+        } catch (e) { return null; }
+    }
+
+    // Puts the parked filters back into the form, cascades in order (geo, then
+    // meter -> segmentation), then the table state.
+    function applyRestore(saved) {
+        var a = saved.applied || {};
+        if (window.frdate.set) { window.frdate.set(els.dateFrom, a.date_from || ''); window.frdate.set(els.dateTo, a.date_to || ''); }
+        ms.region.setValues(a.region); refreshCascade();
+        ms.division.setValues(a.division); refreshCascade();
+        ms.agence.setValues(a.agence);
+        // A parked STATUT value the server no longer offers (an excluded
+        // status saved before the active-customers perimeter) is dropped.
+        var offeredStatuses = ((state.options && state.options.statuses) || []).map(function (o) { return o.value; });
+        ms.status.setValues((a.status || []).filter(function (v) { return offeredStatuses.indexOf(v) !== -1; }));
+        ['segment_tresor', 'voltage', 'niu_qc', 'contact', 'meter'].forEach(function (d) { ms[d].setValues(a[d]); });
+        refreshSegmentationOptions();
+        ms.segmentation.setValues(a.segmentation);
+        var tb = saved.table || {};
+        if (tb.sort) state.table.sort = tb.sort;
+        if (tb.dir) state.table.dir = tb.dir;
+        if (tb.perPage) { state.table.perPage = tb.perPage; els.perPage.value = String(tb.perPage); }
+        if (tb.search) { state.table.search = tb.search; els.search.value = tb.search; }
+        if (tb.scope) setTableScope(tb.scope);
+        return tb.page || 1;
+    }
+
     function resetFilters() {
         window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo);
         MS_DIMS.forEach(function (d) { ms[d].clear(); }); // STATUT: reset leaves it empty, like every other filter
@@ -1186,17 +1397,17 @@
         hideGlobalError();
         renderColumnsMenu();
         // Fresh start: clear the staged form and chips, then — once the
-        // options are known — pre-check the "Contrats actifs" statuses and
-        // apply them, so the very first KPI / chart / table / count / export
-        // requests carry exactly what the STATUT checkboxes show.
+        // options are known — apply the (empty) form: no STATUT ticked = the
+        // 4 active statuses, the whole perimeter, server-side.
         window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo); els.search.value = '';
         MS_DIMS.forEach(function (d) { ms[d].clear(); });
         state.applied = {};
         state.table.search = '';
         state.table.page = 1;
         renderChips();
+        var restore = takeRestore();
         loadFilterOptions().then(function () {
-            ms.status.setValues(DEFAULTS.initialStatuses(state.options.statuses, ACTIVE_STATUSES));
+            if (restore) state.table.page = applyRestore(restore);
             state.applied = readForm();
             renderChips();
             loadSegmentationCounts();

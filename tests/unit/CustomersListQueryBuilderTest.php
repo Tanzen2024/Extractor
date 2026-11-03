@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\CustomersList\ActiveCustomers;
 use App\Services\CustomersList\AllowedValues;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\QueryBuilder;
@@ -30,7 +31,7 @@ final class CustomersListQueryBuilderTest extends TestCase
             regions: ['DCUD', 'DCUY', 'DRE'],
             divisions: ['DVC DOUALA NORD'],
             agences: ['CSC_LOGPOM'],
-            statuses: ['ACTIVE', 'INACTIVE.'],
+            statuses: ['ACTIVE', 'ACTIVE (PENDING BILLING)'],
             segmentations: ['1 PERFECT'],
             segmentsTresor: ['PRIVATE'],
             meters: ['PREPAID', 'POSTPAID', 'COMPTEURS COMMUNICANTS'],
@@ -44,12 +45,12 @@ final class CustomersListQueryBuilderTest extends TestCase
         return FilterCriteria::fromRequest($get, $this->allowed());
     }
 
-    public function testEmptyCriteriaProducesNoWhere(): void
+    public function testEmptyCriteriaStillRestrictsToTheActivePerimeter(): void
     {
         $w = $this->qb->where(FilterCriteria::none());
 
-        $this->assertSame('', $w['sql']);
-        $this->assertSame([], $w['binds']);
+        $this->assertSame('STATUS IN (:f0, :f1, :f2, :f3)', $w['sql']);
+        $this->assertSame(array_combine(['f0', 'f1', 'f2', 'f3'], ActiveCustomers::STATUSES), $w['binds']);
     }
 
     public function testEveryValueIsBoundNeverInlined(): void
@@ -101,7 +102,7 @@ final class CustomersListQueryBuilderTest extends TestCase
     public function testEveryValueTickedIsTheSameAsNothingTicked(): void
     {
         $all = $this->criteria([
-            'region' => ['DCUD', 'DCUY', 'DRE'], 'status' => ['INACTIVE.', 'ACTIVE'], 'meter' => ['PREPAID', 'POSTPAID', 'COMPTEURS COMMUNICANTS'],
+            'region' => ['DCUD', 'DCUY', 'DRE'], 'status' => ['ACTIVE (PENDING BILLING)', 'ACTIVE'], 'meter' => ['PREPAID', 'POSTPAID', 'COMPTEURS COMMUNICANTS'],
             'segmentation' => ['1 PERFECT'], 'segment_tresor' => ['PRIVATE'], 'voltage' => ['LV'], 'niu_qc' => ['NUI correct', 'NUI a RECLASSER'],
             'division' => ['DVC DOUALA NORD'], 'agence' => ['CSC_LOGPOM'],
         ]);
@@ -111,8 +112,8 @@ final class CustomersListQueryBuilderTest extends TestCase
         $this->assertSame(FilterCriteria::none()->cacheKey(), $all->cacheKey(), 'same perimeter = same cache entry');
 
         $subset = $this->qb->where($this->criteria(['region' => ['DCUD', 'DRE'], 'region_x' => 'ignored']));
-        $this->assertSame('REGION IN (:f0, :f1)', $subset['sql']);
-        $this->assertSame(['f0' => 'DCUD', 'f1' => 'DRE'], $subset['binds']);
+        $this->assertSame('REGION IN (:f0, :f1) AND STATUS IN (:f2, :f3, :f4, :f5)', $subset['sql']);
+        $this->assertSame(['f0' => 'DCUD', 'f1' => 'DRE'], array_slice($subset['binds'], 0, 2, true));
     }
 
     public function testDateToIsInclusiveOfItsWholeDay(): void
@@ -270,38 +271,33 @@ final class CustomersListQueryBuilderTest extends TestCase
         $this->assertContains('DCUD', $where['binds']);
     }
 
-    public function testKpiStatementCountsInactifsAsTheStatutFilterInactiveGroupUnderTheSameFilters(): void
+    public function testKpiStatementHasNoInactifsAndItsWhereKeepsTheActivePerimeter(): void
     {
         $where = $this->qb->where($this->criteria(['region' => ['DCUD']]));
         $stmt  = $this->qb->kpiStatement($where);
 
-        // Same rule as the STATUT filter's "Contrats inactifs" group
-        // (dashboard.js configureStatusGroups()): every status that is NOT one
-        // of the configured active statuses — blank/NULL included — counted
-        // per CONTRACT like ACTIFS, with the very same active-status binds.
+        // ACTIFS on the 4 active statuses; no INACTIFS figure: out-of-perimeter
+        // contracts never reach the query (its WHERE restricts STATUS).
         $this->assertMatchesRegularExpression(
             '/COUNT\(DISTINCT CASE WHEN STATUS IN \((:active\d+(, )?)+\) THEN CONTRACT END\) ACTIFS/',
             $stmt['sql'],
         );
-        preg_match('/STATUS IN \(([^)]*)\) THEN CONTRACT END\) ACTIFS/', $stmt['sql'], $actifs);
-        $this->assertStringContainsString(
-            'COUNT(DISTINCT CASE WHEN STATUS IS NULL OR STATUS NOT IN (' . $actifs[1] . ') THEN CONTRACT END) INACTIFS',
-            $stmt['sql'],
-        );
+        $this->assertStringNotContainsString('INACTIFS', $stmt['sql']);
+        $this->assertStringContainsString('STATUS IN (', $where['sql']);
 
         // Same WHERE (and binds) as every other KPI of the call.
         $this->assertStringEndsWith(' WHERE ' . $where['sql'], $stmt['sql']);
         $this->assertContains('DCUD', $stmt['binds']);
     }
 
-    public function testReferenceStatementIsUnfilteredAndCountsContractsAndAllNui(): void
+    public function testReferenceStatementHasNoUserFilterButKeepsThePerimeter(): void
     {
         $stmt = $this->qb->referenceStatement();
 
         $this->assertStringContainsString('COUNT(DISTINCT CONTRACT) TOTAL', $stmt['sql']);
         $this->assertStringContainsString('COUNT(DISTINCT CASE WHEN NUI_QC > :blank THEN CONTRACT END) NUI_TOTAL', $stmt['sql']);
-        $this->assertStringNotContainsString('WHERE', $stmt['sql']);
-        $this->assertSame(['blank' => ' '], $stmt['binds']);
+        $this->assertStringEndsWith(' WHERE STATUS IN (:f0, :f1, :f2, :f3)', $stmt['sql']);
+        $this->assertSame(array_combine(['f0', 'f1', 'f2', 'f3'], ActiveCustomers::STATUSES) + ['blank' => ' '], $stmt['binds']);
     }
 
     public function testKpiStatementCountsTotalActifsAndAvecCompteurByDistinctContract(): void

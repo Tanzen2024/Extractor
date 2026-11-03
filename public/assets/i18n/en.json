@@ -1,0 +1,261 @@
+{
+    "meta": {
+        "numberLocale": "en-GB",
+        "decimalSeparator": ".",
+        "percent": "{value}%"
+    },
+    "glossary": {
+        "payerProfile": "Payer Profile",
+        "consumerProfile": "Consumer Profile",
+        "segmentation": "Segmentation",
+        "region": "Region",
+        "division": "Division",
+        "agency": "Agency",
+        "status": "Status",
+        "meter": "Meter",
+        "meterType": "Meter type",
+        "treasurySegment": "Treasury segment",
+        "voltage": "Voltage",
+        "niuQuality": "NIU quality",
+        "contactFilled": "Contact on file",
+        "activeContracts": "Active contracts",
+        "smartMeters": "Smart meters",
+        "notProvided": "Not provided"
+    },
+    "common": {
+        "loading": "Loading…",
+        "unavailable": "Data unavailable.",
+        "noData": "No data available for the selected filters.",
+        "reference": "Reference: {ref}",
+        "unexpectedResponse": "Unexpected server response (HTTP {status}).",
+        "close": "Close",
+        "retry": "Retry",
+        "remove": "Remove",
+        "yes": "Yes",
+        "no": "No"
+    },
+    "dashboard": {
+        "sections": {
+            "clients": {
+                "one": "{count} customer",
+                "other": "{count} customers"
+            },
+            "unassigned": {
+                "one": "{count} customer with no meter type is in neither view",
+                "other": "{count} customers with no meter type are in neither view"
+            }
+        },
+        "columns": {
+            "REGION": "Region",
+            "DIVISION": "Division",
+            "AGENCE": "Agency",
+            "COD_CLI": "Customer code",
+            "CONTRACT": "Contract",
+            "STATUS": "Status",
+            "METER_NO": "Meter no.",
+            "CUST_NAME": "Customer",
+            "PHONE_NUMBERS": "Phone",
+            "E_MAIL": "Email",
+            "DATE_AB": "Subscr. date",
+            "DATE_RESILIATION": "Termin. date",
+            "NIU_TO_RECLASS": "NIU to reclassify",
+            "SEGMENTATION": "Segmentation",
+            "UPDATED_AT": "Updated on"
+        },
+        "multiselect": {
+            "all": "All",
+            "filter": "Filter…",
+            "none": "No values",
+            "selected": {
+                "one": "{count} selected",
+                "other": "{count} selected"
+            }
+        },
+        "groups": {
+            "postpaid": "Postpaid",
+            "prepaid": "Prepaid",
+            "others": "Others",
+            "postpaidAndSmart": "Postpaid | Smart meters"
+        },
+        "values": {
+            "niuCorrect": "CORRECT NIU",
+            "niuToReclass": "NIU TO RECLASSIFY",
+            "smartMeters": "SMART METERS",
+            "unstable": "Unstable",
+            "atRisk": "At risk",
+            "other": "Other"
+        },
+        "filters": {
+            "date_from": "From",
+            "date_to": "Until"
+        },
+        "kpi": {
+            "ofTotal": "{pct} of total",
+            "nuiCorrectsNote": "Correct NIUs matching the filters"
+        },
+        "table": {
+            "results": {
+                "one": "{count} result",
+                "other": "{count} results"
+            },
+            "resultsFiltered": {
+                "one": "{count} result matching the filters",
+                "other": "{count} results matching the filters"
+            },
+            "page": "Page {page} of {pages}"
+        },
+        "cache": {
+            "justNow": "Updated just now",
+            "minutesAgo": "Updated {minutes} min ago"
+        },
+        "errors": {
+            "invalidFilter": "Invalid filter."
+        },
+        "export": {
+            "formatCsv": "CSV",
+            "formatXlsx": "Excel (.xlsx)",
+            "searchNotApplied": "The search “{search}” is not applied to the export.",
+            "noFilter": "No filters — the full dataset.",
+            "launch": "Start export",
+            "busy": "An export is already running (window at the bottom right). Wait for it to finish or cancel it before starting another one.",
+            "busyShort": "An export is already running. Wait for it to finish or cancel it.",
+            "trackingUnavailable": "Export tracking is unavailable. Please reload the page.",
+            "emptyResponse": "Empty server response. Reload the page and try again.",
+            "launchFailedMessage": "The export could not be started: {message} Please try again.",
+            "launchFailedReference": "The export could not be started. Please try again.",
+            "launchFailedHttp": "The export could not be started (HTTP {status}). Please try again.",
+            "unexpected": "Unexpected server response. Reload the page and try again.",
+            "network": "Network error. Please try again."
+        }
+    },
+    "export": {
+        "title": "Data export",
+        "running": "Export in progress",
+        "confirmDownload": "Do you really want to cancel this download?",
+        "confirmExport": "Do you really want to cancel this export?",
+        "close": "Close",
+        "closeWindow": "Close window",
+        "cancel": "Cancel",
+        "keep": "Continue",
+        "yesCancel": "Yes, cancel",
+        "format": "Format: {format}",
+        "size": "Size: {size}",
+        "downloadDuration": "Download time: {time}",
+        "scanned": "{processed} / {total} rows scanned",
+        "exported": {
+            "one": "{count} row exported",
+            "other": "{count} rows exported"
+        },
+        "preparingExport": "Preparing the export…",
+        "pending": "Waiting to be processed…",
+        "finalizing": "Finalising the file…",
+        "preparingFile": "Preparing the file…",
+        "fileGenerated": "✓ File generated",
+        "bytesOf": "{loaded} / {total}",
+        "received": "{bytes} received",
+        "receivedBeforeCancel": "{received} before cancellation",
+        "downloadDone": "✓ Download complete",
+        "downloadDoneText": "The file has been fully downloaded and saved by your browser to your downloads.",
+        "downloadCancelled": "Download cancelled",
+        "downloadCancelledText": "No file was saved. Start the export again to download it.",
+        "downloading": "↓ Downloading",
+        "stayOnPage": "Stay on this page until the download is complete.",
+        "browserLaunched": "Download started",
+        "browserText": "Handled by your browser. The download continues in your browser, even if you close this window.",
+        "cancelled": "Export cancelled",
+        "nothing": "Nothing to export",
+        "nothingText": "No rows match the filters.",
+        "failed": "Export failed",
+        "failedText": "The export failed. Please start it again.",
+        "cancelling": "Cancelling the export…",
+        "gone": "This export is no longer available.",
+        "unreadable": "Export status temporarily unreadable — retrying…",
+        "unreadableHttp": "Export status temporarily unreadable (HTTP {status}) — retrying…",
+        "incomplete": "Incomplete download: {loaded} received out of {total}.",
+        "httpRefused": "The server refused the download (HTTP {status}).",
+        "interrupted": "The download was interrupted (network error).",
+        "downloadFailed": "Download failed",
+        "retryHint": "{message} Start the export again to retry.",
+        "noLink": "File ready but the download link is unavailable. Please try again.",
+        "alreadyDone": "This export has already finished.",
+        "cancelFailed": "The cancellation did not go through. Please try again.",
+        "cancelFailedDetail": "The cancellation did not go through ({detail}). Please try again.",
+        "cancelNetwork": "The cancellation did not go through (network error). Please try again.",
+        "sessionExpired": "Session expired: reload the page, then start the export again.",
+        "reference": "{message} (reference: {ref})"
+    },
+    "progress": {
+        "running": "Export in progress",
+        "pending": "Waiting to be processed…",
+        "preparing": "Preparing the file…",
+        "cancelledHeading": "Export cancelled",
+        "cancelledTitle": "Export cancelled.",
+        "errorHeading": "Export failed",
+        "errorTitle": "Export failed.",
+        "doneHeading": "File ready",
+        "doneTitle": "Download started",
+        "units": [
+            "B",
+            "KB",
+            "MB",
+            "GB"
+        ],
+        "durationTotal": "Total time",
+        "durationElapsed": "Elapsed time",
+        "durationGeneration": "Generation time",
+        "durationWait": "Waiting time",
+        "durationLine": "{label}: {time}"
+    },
+    "datepicker": {
+        "months": [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December"
+        ],
+        "monthsShort": [
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec"
+        ],
+        "weekdays": [
+            "M",
+            "T",
+            "W",
+            "T",
+            "F",
+            "S",
+            "S"
+        ],
+        "errorFormat": "Invalid date (expected format: dd/mm/yyyy).",
+        "errorRange": "Date outside the available period.",
+        "previousMonth": "Previous month",
+        "nextMonth": "Next month",
+        "chooseMonth": "Choose the month",
+        "chooseYear": "Choose the year",
+        "previousYear": "Previous year",
+        "nextYear": "Next year",
+        "previousYears": "Previous years",
+        "nextYears": "Next years",
+        "year": "Year",
+        "goToYear": "Go to a specific year",
+        "go": "Go"
+    }
+}

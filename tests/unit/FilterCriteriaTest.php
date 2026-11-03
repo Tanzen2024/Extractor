@@ -145,6 +145,33 @@ final class FilterCriteriaTest extends TestCase
         $described = $c->describe();
         $this->assertSame('01/01/2024 → 31/12/2024', $described['Période (abonnement)']);
         $this->assertSame('DCUD, DCUY', $described['Région']);
-        $this->assertSame('NUI correct', $described['Qualité NIU']);
+        $this->assertSame('NUI correct', $described['Qualité NUI']);
+    }
+
+    public function testContactFilter(): void
+    {
+        $yes = FilterCriteria::fromRequest(['contact' => ['yes']], $this->allowed());
+        $no  = FilterCriteria::fromRequest(['contact' => ['no']], $this->allowed());
+        $this->assertTrue($yes->hasContact);
+        $this->assertFalse($no->hasContact);
+
+        // Oui + Non ticked, or nothing = no restriction.
+        $this->assertNull(FilterCriteria::fromRequest(['contact' => ['yes', 'no']], $this->allowed())->hasContact);
+        $this->assertNull(FilterCriteria::fromRequest([], $this->allowed())->hasContact);
+
+        // Persisted on an export job and replayed by the worker unchanged.
+        $this->assertFalse(FilterCriteria::fromArray($no->toArray())->hasContact);
+        $this->assertTrue(FilterCriteria::fromArray($yes->toArray())->hasContact);
+        $this->assertNotSame($yes->cacheKey(), $no->cacheKey());
+        $this->assertTrue($yes->withoutSegmentations()->hasContact);
+
+        $this->assertSame('Oui', $yes->describe()['Contact renseigné']);
+        $this->assertSame('Non', $no->describe()['Contact renseigné']);
+    }
+
+    public function testContactFilterRejectsAnUnknownValue(): void
+    {
+        $this->expectException(InvalidFilterException::class);
+        FilterCriteria::fromRequest(['contact' => ['maybe']], $this->allowed());
     }
 }

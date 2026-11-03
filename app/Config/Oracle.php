@@ -102,23 +102,8 @@ class Oracle extends BaseConfig
      */
     public int $exportSyncMaxRows = 150_000;
 
-    /**
-     * The exact STATUS values that define an "active" customer for the
-     * dashboard's "Clients actifs" KPI — the business rule, not a pattern:
-     * a customer counts if ANY of their rows carries one of these statuses.
-     * Everything else (INACTIVE*, IN PROCESS (PENDING CONNECTION/READING))
-     * does not. Verified against the real distinct STATUS values in
-     * CMS_RFC.TB_CUSTOMERS_LIST (exact spelling, including the trailing
-     * period on "INACTIVATION IN PROCESS.").
-     *
-     * @var list<string>
-     */
-    public array $activeStatuses = [
-        'ACTIVE',
-        'ACTIVE (PENDING BILLING)',
-        'INACTIVATION IN PROCESS.',
-        'SUSPENDED (DELINQUENT ACCOUNT)',
-    ];
+    // The active statuses are no longer configuration: they define the
+    // application's whole perimeter, see App\Services\CustomersList\ActiveCustomers.
 
     /**
      * METER values that count as "client avec compteur" for that KPI: a

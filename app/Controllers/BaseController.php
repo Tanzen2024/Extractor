@@ -42,4 +42,25 @@ abstract class BaseController extends Controller
         // Preload any models, libraries, etc, here.
         // $this->session = service('session');
     }
+
+    /**
+     * Gives each validated field its translated label, so validation
+     * messages read "Le champ Nom est obligatoire." / "The Name field is
+     * required." instead of the raw field name.
+     *
+     * @param array<string, string> $rules  field => rule string
+     * @param array<string, string> $labels field => lang() key
+     *
+     * @return array<string, array{label: string, rules: string}|string>
+     */
+    protected function withLabels(array $rules, array $labels): array
+    {
+        foreach ($rules as $field => $rule) {
+            if (isset($labels[$field]) && is_string($rule)) {
+                $rules[$field] = ['label' => lang($labels[$field]), 'rules' => $rule];
+            }
+        }
+
+        return $rules;
+    }
 }

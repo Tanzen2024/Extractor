@@ -29,7 +29,7 @@ class RolesController extends BaseController
     public function index()
     {
         return view('admin/roles/index', [
-            'title' => 'Rôles',
+            'title' => lang('Admin.roles.title'),
             'roles' => $this->roles->orderBy('code', 'ASC')->findAll(),
         ]);
     }
@@ -37,7 +37,7 @@ class RolesController extends BaseController
     public function create()
     {
         return view('admin/roles/form', [
-            'title' => 'Nouveau rôle',
+            'title' => lang('Admin.roles.new'),
             'mode'  => 'create',
             'role'  => ['id' => null, 'code' => '', 'name' => '', 'description' => '', 'is_active' => 1],
         ]);
@@ -45,7 +45,7 @@ class RolesController extends BaseController
 
     public function store()
     {
-        if (! $this->validate($this->roles->getValidationRules())) {
+        if (! $this->validate($this->withLabels($this->roles->getValidationRules(), ['code' => 'Admin.roles.code', 'name' => 'Admin.roles.name']))) {
             return redirect()->back()->withInput()->with('errors', $this->validator->getErrors());
         }
 
@@ -61,18 +61,18 @@ class RolesController extends BaseController
             'description' => (string) $this->request->getPost('code'),
         ]);
 
-        return redirect()->to(site_url('admin/users/roles'))->with('success', 'Rôle créé.');
+        return redirect()->to(site_url('admin/users/roles'))->with('success', lang('Admin.roles.created'));
     }
 
     public function edit(int $id)
     {
         $role = $this->roles->find($id);
         if ($role === null) {
-            return redirect()->to(site_url('admin/users/roles'))->with('error', 'Rôle introuvable.');
+            return redirect()->to(site_url('admin/users/roles'))->with('error', lang('Admin.roles.notFound'));
         }
 
         return view('admin/roles/form', [
-            'title' => 'Modifier ' . $role['name'],
+            'title' => lang('Admin.roles.editTitle', ['name' => $role['name']]),
             'mode'  => 'edit',
             'role'  => $role,
         ]);
@@ -82,13 +82,13 @@ class RolesController extends BaseController
     {
         $role = $this->roles->find($id);
         if ($role === null) {
-            return redirect()->to(site_url('admin/users/roles'))->with('error', 'Rôle introuvable.');
+            return redirect()->to(site_url('admin/users/roles'))->with('error', lang('Admin.roles.notFound'));
         }
 
         $rules        = $this->roles->getValidationRules();
         $rules['code'] = "required|max_length[60]|regex_match[/^[A-Z0-9_]+$/]|is_unique[app_roles.code,id,{$id}]";
 
-        if (! $this->validate($rules)) {
+        if (! $this->validate($this->withLabels($rules, ['code' => 'Admin.roles.code', 'name' => 'Admin.roles.name']))) {
             return redirect()->back()->withInput()->with('errors', $this->validator->getErrors());
         }
 
@@ -104,7 +104,7 @@ class RolesController extends BaseController
             'description' => $role['code'],
         ]);
 
-        return redirect()->to(site_url('admin/users/roles'))->with('success', 'Rôle mis à jour.');
+        return redirect()->to(site_url('admin/users/roles'))->with('success', lang('Admin.roles.updated'));
     }
 
     /**
@@ -114,7 +114,7 @@ class RolesController extends BaseController
     {
         $role = $this->roles->find($id);
         if ($role === null) {
-            return redirect()->to(site_url('admin/users/roles'))->with('error', 'Rôle introuvable.');
+            return redirect()->to(site_url('admin/users/roles'))->with('error', lang('Admin.roles.notFound'));
         }
 
         if ($this->request->is('post')) {
@@ -125,11 +125,11 @@ class RolesController extends BaseController
                 'description' => 'Permissions du role ' . $role['code'] . ' mises a jour',
             ]);
 
-            return redirect()->to(site_url('admin/users/roles'))->with('success', 'Permissions du rôle enregistrées.');
+            return redirect()->to(site_url('admin/users/roles'))->with('success', lang('Admin.roles.permissionsSaved'));
         }
 
         return view('admin/roles/permissions', [
-            'title'       => 'Permissions — ' . $role['name'],
+            'title'       => lang('Admin.roles.permissionsTitle', ['name' => $role['name']]),
             'role'        => $role,
             'permissions' => $this->permissions->allOrdered(),
             'granted'     => $this->rolePermissions->permissionIdsForRole($id),

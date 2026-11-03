@@ -18,14 +18,16 @@
  *                           "done" answers arrive).
  */
 (function (root, factory) {
-    var api = factory();
+    var api = factory(root.bscdI18n || (typeof require === 'function' ? require('./i18n.js') : null));
     if (typeof module === 'object' && module.exports) {
         module.exports = api;
     } else {
         root.bscdExportProgress = api;
     }
-}(typeof self !== 'undefined' ? self : this, function () {
+}(typeof self !== 'undefined' ? self : this, function (I18N) {
     'use strict';
+
+    var t = I18N.t; // public/assets/js/i18n.js — catalog "progress"
 
     function isNumber(value) {
         return typeof value === 'number' && isFinite(value);
@@ -61,20 +63,20 @@
         // It never stands for the download: see 'done' below.
         if (status === 'pending') {
             return {
-                state: 'pending', phase: PHASE.GENERATING, heading: 'Export en cours', title: 'En attente du traitement…',
+                state: 'pending', phase: PHASE.GENERATING, heading: t('progress.running'), title: t('progress.pending'),
                 percent: 0, indeterminate: false, processed: null, total: null, exported: null, fileSize: null
             };
         }
         if (status === 'running') {
             if (!p || total === 0 || !isNumber(p.percent)) {
                 return {
-                    state: 'running', phase: PHASE.GENERATING, heading: 'Export en cours', title: 'Préparation du fichier…',
+                    state: 'running', phase: PHASE.GENERATING, heading: t('progress.running'), title: t('progress.preparing'),
                     percent: null, indeterminate: false, processed: null, total: null, exported: null, fileSize: null
                 };
             }
             // Still running = never 100 %: the file is finalised after the scan.
             return {
-                state: 'running', phase: PHASE.GENERATING, heading: 'Export en cours', title: 'Préparation du fichier…',
+                state: 'running', phase: PHASE.GENERATING, heading: t('progress.running'), title: t('progress.preparing'),
                 percent: clampPercent(p.percent, 99), indeterminate: false,
                 processed: counts.processed, total: counts.total, exported: counts.exported, fileSize: null
             };
@@ -82,11 +84,11 @@
         if (status === 'cancelled') {
             // No progress shown for a cancelled export (the API's frozen
             // counters are history, not something still moving).
-            return { state: 'cancelled', phase: PHASE.CANCELLED, heading: 'Export annulé', title: 'Export annulé.', percent: null, indeterminate: false, processed: null, total: null, exported: null, fileSize: null };
+            return { state: 'cancelled', phase: PHASE.CANCELLED, heading: t('progress.cancelledHeading'), title: t('progress.cancelledTitle'), percent: null, indeterminate: false, processed: null, total: null, exported: null, fileSize: null };
         }
         if (status === 'error') {
             // Like cancelled: frozen counters are not shown as a moving bar.
-            return { state: 'error', phase: PHASE.ERROR, heading: "Échec de l'export", title: "Échec de l'export.", percent: null, indeterminate: false, processed: null, total: null, exported: null, fileSize: null };
+            return { state: 'error', phase: PHASE.ERROR, heading: t('progress.errorHeading'), title: t('progress.errorTitle'), percent: null, indeterminate: false, processed: null, total: null, exported: null, fileSize: null };
         }
         if (status === 'done') {
             // The file is generated, NOT downloaded: the browser downloads it
@@ -95,7 +97,7 @@
             // percentage, no bar, and no "en cours" either (false as soon as
             // the browser has finished): only what stays true — launched.
             return {
-                state: 'done', phase: PHASE.DOWNLOADING, heading: 'Fichier prêt', title: 'Téléchargement lancé',
+                state: 'done', phase: PHASE.DOWNLOADING, heading: t('progress.doneHeading'), title: t('progress.doneTitle'),
                 percent: null, indeterminate: false,
                 processed: counts.processed, total: counts.total, exported: counts.exported,
                 fileSize: job && isNumber(job.fileSize) && job.fileSize > 0 ? job.fileSize : null
@@ -104,15 +106,15 @@
         return null;
     }
 
-    /** Bytes → "7,5 Mo" / "606 Mo" / "1,2 Go" (French decimal comma). */
+    /** Bytes → "7,5 Mo" / "606 Mo" / "1,2 Go" (fr) — "7.5 MB" … (en). */
     function formatSize(bytes) {
         var n = Number(bytes);
         if (!isFinite(n) || n < 0) return '';
-        var units = ['o', 'Ko', 'Mo', 'Go'];
+        var units = t('progress.units');
         var i = 0;
         while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
         var digits = i === 0 || n >= 10 ? 0 : 1;
-        return n.toFixed(digits).replace('.', ',') + ' ' + units[i];
+        return I18N.decimal(n, digits) + ' ' + units[i];
     }
 
     /**
@@ -347,7 +349,7 @@
      */
     function createDurationClock() {
         var phase = null;       // 'wait' | 'run' | 'final'
-        var finalLabel = 'Durée totale';
+        var finalLabel = t('progress.durationTotal');
         var base = null;        // server seconds at `baseAt`
         var baseAt = 0;         // local ms when `base` was received
         var shown = 0;          // highest value displayed in this phase
@@ -374,7 +376,7 @@
                     // Cancelled: time spent until the cancellation, then frozen.
                     // Done: the server's started_at → finished_at, i.e. the
                     // GENERATION only — the download is still going on.
-                    finalLabel = status === 'cancelled' ? 'Durée écoulée' : (status === 'done' ? 'Durée de génération' : 'Durée totale');
+                    finalLabel = I18N.t(status === 'cancelled' ? 'progress.durationElapsed' : (status === 'done' ? 'progress.durationGeneration' : 'progress.durationTotal'));
                     // Fallback: no server total → freeze what is shown now.
                     var total = t && isNumber(t.elapsedSeconds) ? t.elapsedSeconds : (phase === 'run' ? current(nowMs) : null);
                     phase = 'final'; base = total; baseAt = nowMs;
@@ -393,8 +395,8 @@
             display: function (nowMs) {
                 var value = current(nowMs);
                 if (value === null) return null;
-                var label = phase === 'final' ? finalLabel : (phase === 'run' ? 'Durée écoulée' : "Durée d'attente");
-                return { label: label, text: label + ' : ' + formatDuration(value) };
+                var label = phase === 'final' ? finalLabel : t(phase === 'run' ? 'progress.durationElapsed' : 'progress.durationWait');
+                return { label: label, text: t('progress.durationLine', { label: label, time: formatDuration(value) }) };
             },
             isFinal: function () { return phase === 'final'; }
         };

@@ -6,7 +6,7 @@
     <div class="col-lg-8">
         <div class="card card-primary">
             <div class="card-header">
-                <h3 class="card-title mb-0">Permissions du rôle <code><?= esc($role['code']) ?></code></h3>
+                <h3 class="card-title mb-0"><?= esc(lang('Admin.roles.permissionsOf')) ?> <code><?= esc($role['code']) ?></code></h3>
             </div>
             <form method="post" action="<?= site_url('admin/users/roles/' . $role['id'] . '/permissions') ?>">
                 <?= csrf_field() ?>
@@ -20,14 +20,14 @@
                                    <?= (int) $p['is_active'] === 1 ? '' : 'disabled' ?>>
                             <label class="custom-control-label" for="perm_<?= $p['id'] ?>">
                                 <code><?= esc($p['code']) ?></code> — <?= esc($p['name']) ?>
-                                <?= (int) $p['is_active'] === 1 ? '' : ' <span class="badge badge-secondary">inactive</span>' ?>
+                                <?= (int) $p['is_active'] === 1 ? '' : ' <span class="badge badge-secondary">' . esc(lang('Admin.permissions.inactive')) . '</span>' ?>
                             </label>
                         </div>
                     <?php endforeach; ?>
                 </div>
                 <div class="card-footer">
-                    <button class="btn btn-primary"><i class="fas fa-save mr-1"></i> Enregistrer</button>
-                    <a href="<?= site_url('admin/users/roles') ?>" class="btn btn-default">Retour</a>
+                    <button class="btn btn-primary"><i class="fas fa-save mr-1"></i> <?= esc(lang('App.actions.save')) ?></button>
+                    <a href="<?= site_url('admin/users/roles') ?>" class="btn btn-default"><?= esc(lang('App.actions.back')) ?></a>
                 </div>
             </form>
         </div>

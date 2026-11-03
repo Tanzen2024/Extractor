@@ -58,6 +58,9 @@ final class QueryBuilderSnapshotParityTest extends CIUnitTestCase
                 'VOLTAGE'        => $n % 5 === 0 ? 'MV' : 'LV',
                 'NUI_QC'         => $n % 3 === 0 ? 'NUI àECLASSER' : 'NUI CORRECT',
                 'DATE_AB'        => $dates[$n % 7],
+                // Contact: phone " " / empty / filled, e-mail on some of the phone-less rows.
+                'PHONE_NUMBERS'  => [' ', '', '690000000', '677000000'][$n % 4],
+                'E_MAIL'         => $n % 8 === 1 ? 'client' . $n . '@eneo.cm' : ' ',
             ]);
         }
         $r = $this->fx->install($rows);
@@ -102,10 +105,13 @@ final class QueryBuilderSnapshotParityTest extends CIUnitTestCase
             'POSTPAID'              => FilterCriteria::fromArray(['meters' => ['POSTPAID'], 'segmentations' => ['1 PERFECT', '4 At-Risk', '8 Sometimes Paid']]),
             'PREPAID'               => FilterCriteria::fromArray(['meters' => ['PREPAID'], 'segmentations' => ['1-Stable', '3-At Risk', '6 Old_Dormant', 'Other']]),
             'COMPTEURS COMMUNICANTS' => FilterCriteria::fromArray(['meters' => ['Compteurs Communicants'], 'segmentations' => ['1 PERFECT', '9 Others']]),
-            'segment Trésor'        => FilterCriteria::fromArray(['segmentsTresor' => ['PUBLIC']]),
+            'Segment Trésorerie'        => FilterCriteria::fromArray(['segmentsTresor' => ['PUBLIC']]),
             'compteur'              => FilterCriteria::fromArray(['meters' => ['PREPAID', 'Compteurs Communicants']]),
             'tension'               => FilterCriteria::fromArray(['voltages' => ['MV']]),
             'NUI QC'                => FilterCriteria::fromArray(['niuQualities' => ['NUI CORRECT']]),
+            'contact renseigné'     => FilterCriteria::fromArray(['hasContact' => true]),
+            'contact non renseigné' => FilterCriteria::fromArray(['hasContact' => false]),
+            'contact + région'      => FilterCriteria::fromArray(['hasContact' => true, 'regions' => ['DCUD']]),
             'combiné'               => FilterCriteria::fromArray([
                 'statuses' => $active, 'regions' => ['DCUD', 'DCUY'], 'divisions' => ['DVC 0', 'DVC 1', 'DVC 2'], 'meters' => ['PREPAID', 'POSTPAID'],
                 'segmentsTresor' => ['PRIVATE'], 'voltages' => ['LV'], 'niuQualities' => ['NUI CORRECT'], 'dateFrom' => '2019-01-01', 'dateTo' => '2024-12-31',
@@ -130,7 +136,7 @@ final class QueryBuilderSnapshotParityTest extends CIUnitTestCase
     {
         $counts = array_map(fn (FilterCriteria $c): int => $this->oracleWhereCount($c), self::criteria());
 
-        $this->assertSame(90, $counts['aucun filtre']);
+        $this->assertSame(72, $counts['aucun filtre'], '90 rows, 18 of them out of the active-customers perimeter');
         foreach ($counts as $name => $n) {
             if ($name !== 'aucun filtre') {
                 $this->assertGreaterThan(0, $n, $name);

@@ -69,7 +69,7 @@ final class SnapshotExportTest extends TestCase
     {
         return [
             SnapshotFixture::row(1, ['REGION' => 'DRC', 'STATUS' => 'ACTIVE', 'METER' => 'PREPAID', 'DATE_AB' => '2020-01-01', 'SEGMENTATION' => '1 PERFECT']),
-            SnapshotFixture::row(2, ['REGION' => 'DRC', 'STATUS' => 'SUSPENDED', 'METER' => 'POSTPAID', 'DATE_AB' => '2020-01-31', 'SEGMENTATION' => '8 Autre']),
+            SnapshotFixture::row(2, ['REGION' => 'DRC', 'STATUS' => 'SUSPENDED (DELINQUENT ACCOUNT)', 'METER' => 'POSTPAID', 'DATE_AB' => '2020-01-31', 'SEGMENTATION' => '8 Autre']),
             SnapshotFixture::row(3, ['REGION' => 'DRE', 'STATUS' => 'ACTIVE', 'METER' => 'Compteurs Communicants', 'DATE_AB' => '2020-02-01', 'NUI_QC' => 'NUI a RECLASSER']),
             SnapshotFixture::row(4, ['REGION' => 'DRE', 'STATUS' => 'ACTIVE (PENDING BILLING)', 'METER' => 'PREPAID', 'DATE_AB' => '2019-12-31', 'VOLTAGE' => 'MV']),
             SnapshotFixture::row(5, ['REGION' => 'DRO', 'STATUS' => 'ACTIVE', 'METER' => ' ', 'DATE_AB' => 'n/a', 'SEGMENT_TRESOR' => 'PUBLIC']),
@@ -334,13 +334,19 @@ final class SnapshotExportTest extends TestCase
         $criteria = FilterCriteria::fromArray(['dateFrom' => '2020-01-01']);
 
         $this->expectException(\App\Services\Snapshot\SnapshotException::class);
-        new RowMatcher($criteria, ['DATE_AB' => 0], null);
+        new RowMatcher($criteria, ['DATE_AB' => 0, 'STATUS' => 1], null);
     }
 
-    public function testUnfilteredMatcherIsDetected(): void
+    public function testNoMatcherIsUnfilteredTheActivePerimeterAlwaysApplies(): void
     {
-        $matcher = new RowMatcher(FilterCriteria::none(), [], null);
-        $this->assertTrue($matcher->isUnfiltered());
+        $matcher = new RowMatcher(FilterCriteria::none(), ['STATUS' => 0], null);
+
+        foreach (['ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.', ' ACTIVE '] as $status) {
+            $this->assertTrue($matcher->matches([$status]), $status);
+        }
+        foreach (['INACTIVE.', 'INACTIVE WITH BALANCE.', 'IN PROCESS (PENDING CONNECTION)', 'IN PROCESS (PENDING READING)', '', ' ', 'active', 'UNKNOWN'] as $status) {
+            $this->assertFalse($matcher->matches([$status]), "« {$status} »");
+        }
         $this->assertInstanceOf(AllowedValues::class, AllowedValues::fromFilterOptions([]));
     }
 }

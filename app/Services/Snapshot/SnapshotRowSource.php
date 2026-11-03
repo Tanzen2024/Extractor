@@ -23,6 +23,9 @@ use Config\Snapshot as SnapshotConfig;
  * Output rows carry exactly CustomerListExportService::COLUMNS (the 25
  * export columns, same order as before); the snapshot's other columns are
  * read but not exported. Values are passed through as found in the file.
+ *
+ * Every row goes through RowMatcher, even without any user filter: the
+ * file holds every contract, the export only the ActiveCustomers ones.
  */
 final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsProgress
 {
@@ -78,7 +81,6 @@ final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsP
         $reader  = $this->snapshot->reader();
         $index   = $reader->index();
         $matcher = new RowMatcher($criteria, $index, $this->snapshot->dateFormat());
-        $all     = $matcher->isUnfiltered();
 
         $columns   = CustomerListExportService::COLUMNS;
         $positions = [];
@@ -111,7 +113,7 @@ final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsP
                 $progress(0, $total, 0);
             }
 
-            $reader->each(static function (array $fields) use ($matcher, $all, $positions, $columns, $combine, $onRow, $max, $progress, $total, $every, &$emitted, &$read, &$filterNs, &$emitNs): bool {
+            $reader->each(static function (array $fields) use ($matcher, $positions, $columns, $combine, $onRow, $max, $progress, $total, $every, &$emitted, &$read, &$filterNs, &$emitNs): bool {
                 // Progress follows the scan, not the matches: a selective
                 // filter still moves the bar. One modulo per row, the
                 // listener itself only every $every rows.
@@ -121,13 +123,11 @@ final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsP
 
                 $read++;
 
-                if (! $all) {
-                    $tf      = hrtime(true);
-                    $matches = $matcher->matches($fields);
-                    $filterNs += hrtime(true) - $tf;
-                    if (! $matches) {
-                        return true;
-                    }
+                $tf      = hrtime(true);
+                $matches = $matcher->matches($fields);
+                $filterNs += hrtime(true) - $tf;
+                if (! $matches) {
+                    return true;
                 }
 
                 $te = hrtime(true);
@@ -168,16 +168,12 @@ final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsP
     }
 
     /**
-     * Rows matching $criteria in this snapshot. Unfiltered = the row count
-     * validated at install (instant); otherwise one streaming pass, cached
-     * per (version, filters) since a version never changes.
+     * Rows matching $criteria in this snapshot — in-perimeter rows only, so
+     * never the file's row count: one streaming pass, cached per (version,
+     * filters) since a version never changes.
      */
     public function count(FilterCriteria $criteria): int
     {
-        if ($criteria->isEmpty()) {
-            return $this->snapshot->rows();
-        }
-
         $cache = $this->cache ?? Services::cache();
         $key   = 'snapcount_' . $this->snapshot->id . '_' . $criteria->cacheKey();
 

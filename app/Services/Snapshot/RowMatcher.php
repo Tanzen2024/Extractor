@@ -17,7 +17,12 @@ use App\Services\CustomersList\FilterCriteria;
  *   - DATE_AB: dateFrom <= date < dateTo + 1 day, i.e. both ends inclusive
  *     at day granularity; a row whose date can't be read never matches a
  *     date filter (SQL: NULL never satisfies a comparison);
- *   - all active dimensions are ANDed; no filter = every row.
+ *   - STATUS is ALWAYS restricted, to FilterCriteria::effectiveStatuses()
+ *     (the selection, or the 4 ActiveCustomers statuses): no criteria,
+ *     not even FilterCriteria::none(), lets an excluded customer through;
+ *   - "Contact renseigné": PHONE_NUMBERS or E_MAIL non-blank once trimmed
+ *     (QueryBuilder::contactCondition(), the "Contacts renseignés" KPI rule);
+ *   - all active dimensions are ANDed; no filter = every in-perimeter row.
  * The export has no free-text search (QueryBuilder::withSearch is table-only).
  */
 final class RowMatcher
@@ -43,16 +48,25 @@ final class RowMatcher
     private ?string $to   = null;
     private ?SnapshotDate $date = null;
 
+    /** @var list<int>|null PHONE_NUMBERS / E_MAIL field indexes when the contact filter is on */
+    private ?array $contactIdx = null;
+    private bool $hasContact   = false;
+
     /**
      * @param array<string, int> $index Column name => field index.
      */
     public function __construct(FilterCriteria $criteria, array $index, ?string $dateFormat)
     {
         foreach (self::LIST_FILTERS as $column => $property) {
-            $values = $criteria->{$property};
+            $values = $property === 'statuses' ? $criteria->effectiveStatuses() : $criteria->{$property};
             if ($values !== []) {
                 $this->lists[] = [$index[$column], array_fill_keys(array_map('strval', $values), true)];
             }
+        }
+
+        if ($criteria->hasContact !== null) {
+            $this->contactIdx = array_map(static fn (string $col): int => $index[$col], FilterCriteria::CONTACT_COLUMNS);
+            $this->hasContact = $criteria->hasContact;
         }
 
         if ($criteria->dateFrom !== null || $criteria->dateTo !== null) {
@@ -66,11 +80,6 @@ final class RowMatcher
         }
     }
 
-    public function isUnfiltered(): bool
-    {
-        return $this->lists === [] && $this->dateIdx === null;
-    }
-
     /**
      * @param list<string> $fields
      */
@@ -78,6 +87,19 @@ final class RowMatcher
     {
         foreach ($this->lists as [$i, $accepted]) {
             if (! isset($accepted[trim($fields[$i])])) {
+                return false;
+            }
+        }
+
+        if ($this->contactIdx !== null) {
+            $filled = false;
+            foreach ($this->contactIdx as $i) {
+                if (trim($fields[$i]) !== '') {
+                    $filled = true;
+                    break;
+                }
+            }
+            if ($filled !== $this->hasContact) {
                 return false;
             }
         }

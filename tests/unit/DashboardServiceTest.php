@@ -28,19 +28,19 @@ final class DashboardServiceTest extends TestCase
         return new DashboardService($engine, new OracleConfig(), new DummyHandler());
     }
 
-    private static function kpis(int $total, int $actifs = 0, int $inactifs = 0, int $avecCompteur = 0, int $nuiCorrect = 0, int $contactOk = 0): array
+    private static function kpis(int $total, int $actifs = 0, int $avecCompteur = 0, int $nuiCorrect = 0, int $contactOk = 0): array
     {
-        return ['total' => $total, 'actifs' => $actifs, 'inactifs' => $inactifs, 'avecCompteur' => $avecCompteur, 'nuiCorrect' => $nuiCorrect, 'contactOk' => $contactOk];
+        return ['total' => $total, 'actifs' => $actifs, 'avecCompteur' => $avecCompteur, 'nuiCorrect' => $nuiCorrect, 'contactOk' => $contactOk];
     }
 
     public function testStatsComputesEveryKpiFromTheEngineFigures(): void
     {
         $engine = new FakeEngine(
-            kpis: self::kpis(1000, actifs: 660, inactifs: 340, avecCompteur: 383, contactOk: 804),
+            kpis: self::kpis(1000, actifs: 1000, avecCompteur: 383, contactOk: 804),
             reference: ['totalClients' => 1000, 'totalNui' => 1000],
             distributions: [
                 'region'       => ['DCUD' => 600, 'DCUY' => 400],
-                'status'       => ['ACTIVE' => 660, 'INACTIVE.' => 340],
+                'status'       => ['ACTIVE' => 660, 'SUSPENDED (DELINQUENT ACCOUNT)' => 340],
                 'segmentation' => ['' => 10, '8 Autre' => 990],
                 'meterType'    => ['PREPAID' => 620, 'POSTPAID' => 300, 'Compteurs Communicants' => 80],
             ],
@@ -49,16 +49,15 @@ final class DashboardServiceTest extends TestCase
         $stats = $this->service($engine)->stats(FilterCriteria::none());
 
         $this->assertSame(1000, $stats['totalRows']);
-        $this->assertSame(['value' => 660, 'pct' => 66.0], $stats['kpis']['actifs']);
-        $this->assertSame(['value' => 340, 'pct' => 34.0], $stats['kpis']['inactifs']);
+        $this->assertSame(['value' => 1000, 'pct' => 100.0], $stats['kpis']['actifs']);
+        $this->assertArrayNotHasKey('inactifs', $stats['kpis'], 'no KPI about out-of-perimeter customers');
         $this->assertSame(383, $stats['kpis']['avecCompteur']['value']);
         $this->assertSame(['value' => 804, 'pct' => 80.4], $stats['kpis']['contacts']);
         $this->assertSame(
             [['value' => 'PREPAID', 'count' => 620], ['value' => 'POSTPAID', 'count' => 300], ['value' => 'Compteurs Communicants', 'count' => 80]],
             $stats['charts']['meterType'],
         );
-        // The business rules travel to the engine unchanged (Config\Oracle).
-        $this->assertSame(array_values((new OracleConfig())->activeStatuses), $engine->lastKpiArgs['active']);
+        // The metered rule travels to the engine unchanged (Config\Oracle).
         $this->assertSame(array_values((new OracleConfig())->meteredMeterValues), $engine->lastKpiArgs['metered']);
     }
 
@@ -87,7 +86,7 @@ final class DashboardServiceTest extends TestCase
     public function testKpiPercentagesUseTheUnfilteredReferenceDenominators(): void
     {
         $engine = new FakeEngine(
-            kpis: self::kpis(1000000, actifs: 980000, inactifs: 20000, nuiCorrect: 900000, contactOk: 500000),
+            kpis: self::kpis(1000000, actifs: 980000, nuiCorrect: 900000, contactOk: 500000),
             reference: ['totalClients' => 2480095, 'totalNui' => 2473000],
         );
 
@@ -265,6 +264,17 @@ final class DashboardServiceTest extends TestCase
         $this->assertSame(['ACTIVE'], $svc->allowedValues()->statuses);
     }
 
+    public function testAllowedStatusesNeverIncludeAnExcludedStatusEvenIfOffered(): void
+    {
+        $svc = $this->service(new FakeEngine(filterOptions: ['statuses' => [
+            ['value' => 'INACTIVE WITH BALANCE.', 'count' => 9], ['value' => 'ACTIVE', 'count' => 5], ['value' => 'INACTIVE.', 'count' => 1],
+        ]]));
+
+        $this->assertSame(['ACTIVE'], $svc->allowedValues()->statuses);
+        $this->expectException(InvalidFilterException::class);
+        FilterCriteria::fromRequest(['status' => ['INACTIVE.']], $svc->allowedValues());
+    }
+
     public function testCacheKeysBelongToTheSnapshotVersion(): void
     {
         $cache = new class () extends DummyHandler {
@@ -283,7 +293,7 @@ final class DashboardServiceTest extends TestCase
 
         $this->assertNotEmpty($cache->saved);
         foreach ($cache->saved as $key) {
-            $this->assertStringStartsWith('cl_snap_20261002T050000_aaaaaaaa_', $key, 'a new version never reads an older version\'s figures');
+            $this->assertStringStartsWith('cl_snap_20261002T050000_aaaaaaaa_active4_', $key, 'a new version (or the former all-statuses rules) never reads older figures');
         }
     }
 }
@@ -300,7 +310,7 @@ final class FakeEngine implements SnapshotQueryEngine
     public ?string $lastCountSearch = null;
 
     public function __construct(
-        private readonly array $kpis = ['total' => 0, 'actifs' => 0, 'inactifs' => 0, 'avecCompteur' => 0, 'nuiCorrect' => 0, 'contactOk' => 0],
+        private readonly array $kpis = ['total' => 0, 'actifs' => 0, 'avecCompteur' => 0, 'nuiCorrect' => 0, 'contactOk' => 0],
         private readonly array $reference = ['totalClients' => 0, 'totalNui' => 0],
         private readonly array $distributions = ['region' => [], 'status' => [], 'segmentation' => [], 'meterType' => []],
         private readonly array $segmentationCounts = [],
@@ -327,16 +337,21 @@ final class FakeEngine implements SnapshotQueryEngine
         return $this->count;
     }
 
-    public function kpis(FilterCriteria $criteria, array $activeStatuses, array $meteredMeters): array
+    public function kpis(FilterCriteria $criteria, array $meteredMeters): array
     {
-        $this->lastKpiArgs = ['criteria' => $criteria, 'active' => $activeStatuses, 'metered' => $meteredMeters];
+        $this->lastKpiArgs = ['criteria' => $criteria, 'metered' => $meteredMeters];
 
         return $this->kpis;
     }
 
-    public function summary(FilterCriteria $criteria, array $activeStatuses, array $meteredMeters): array
+    public function summary(FilterCriteria $criteria, array $meteredMeters): array
     {
-        return ['kpis' => $this->kpis($criteria, $activeStatuses, $meteredMeters), 'distributions' => $this->distributions($criteria)];
+        return ['kpis' => $this->kpis($criteria, $meteredMeters), 'distributions' => $this->distributions($criteria)];
+    }
+
+    public function filterOptions(): array
+    {
+        return $this->filterOptions;
     }
 
     public function reference(): array

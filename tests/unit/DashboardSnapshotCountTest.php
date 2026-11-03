@@ -58,7 +58,10 @@ final class DashboardSnapshotCountTest extends CIUnitTestCase
         $_ENV[$key] = $_SERVER[$key] = $value;
     }
 
-    /** 30 rows: ZZ-NORTH x12 (8 ACTIVE), ZZ-SOUTH x18 — region names that exist nowhere in Oracle. */
+    /**
+     * 30 rows: ZZ-NORTH x12 (8 ACTIVE), ZZ-SOUTH x18 — region names that exist
+     * nowhere in Oracle. Only the 8 ACTIVE rows are in the perimeter.
+     */
     private function install(): void
     {
         $rows = [];
@@ -90,9 +93,9 @@ final class DashboardSnapshotCountTest extends CIUnitTestCase
         [$status, $json] = $this->get('count');
 
         $this->assertSame(200, $status);
-        $this->assertSame(30, $json['count']);
+        $this->assertSame(8, $json['count'], 'the 22 INACTIVE rows are out of the perimeter');
         $this->assertSame('snapshot', $json['source']);
-        $this->assertSame(30, $json['snapshot']['rows']);
+        $this->assertSame(30, $json['snapshot']['rows'], 'the file itself keeps every row');
         $this->assertSame((new SnapshotRowSource(store: $this->fx->store))->snapshot()->id, $json['snapshot']['id']);
         $this->assertArrayHasKey('generatedAt', $json['snapshot']);
         // Only dates actually present in the meta; the fixture manifest has
@@ -126,10 +129,9 @@ final class DashboardSnapshotCountTest extends CIUnitTestCase
         [$status, $json] = $this->get('filterOptions');
 
         $this->assertSame(200, $status);
-        $this->assertEqualsCanonicalizing(
-            [['value' => 'ZZ-NORTH', 'count' => 12], ['value' => 'ZZ-SOUTH', 'count' => 18]],
-            $json['regions'],
-        );
+        // ZZ-SOUTH only holds INACTIVE customers: not offered.
+        $this->assertSame([['value' => 'ZZ-NORTH', 'count' => 8]], $json['regions']);
+        $this->assertSame([['value' => 'ACTIVE', 'count' => 8]], $json['statuses']);
     }
 
     public function testAValueAbsentFromTheSnapshotIsRejected(): void
@@ -168,15 +170,15 @@ final class DashboardSnapshotCountTest extends CIUnitTestCase
 
         [$status, $after] = $this->get('count');
         $this->assertSame(200, $status);
-        $this->assertSame(30, $after['count']);                        // never 50, never a partial figure
+        $this->assertSame(8, $after['count']);                         // never 50, never a partial figure
         $this->assertSame($before['snapshot']['id'], $after['snapshot']['id']);
-        $this->assertSame(12, $this->get('count', ['region' => ['ZZ-NORTH']])[1]['count']);
+        $this->assertSame(8, $this->get('count', ['region' => ['ZZ-NORTH']])[1]['count']);
     }
 
     public function testANewlyActivatedSnapshotIsUsedAtOnce(): void
     {
         $this->install();
-        $this->assertSame(30, $this->get('count')[1]['count']);
+        $this->assertSame(8, $this->get('count')[1]['count']);
 
         // customers:refresh / snapshot:install publishing a bigger version.
         $rows = [];

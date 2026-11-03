@@ -39,7 +39,9 @@ function bscdFetch(url, options = {}) {
                 return {
                     error: 'http',
                     status: response.status,
-                    message: 'Réponse inattendue du serveur (HTTP ' + response.status + ').'
+                    message: window.bscdI18n
+                        ? window.bscdI18n.t('common.unexpectedResponse', { status: response.status })
+                        : 'Réponse inattendue du serveur (HTTP ' + response.status + ').'
                 };
             }
             if (data && typeof data === 'object' && data.error && data.status === undefined) {

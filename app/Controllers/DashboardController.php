@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Models\ExportJobModel;
 use App\Services\CustomerListExportService;
+use App\Services\CustomersList\ActiveCustomers;
 use App\Services\CustomersList\DashboardService;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\InvalidFilterException;
@@ -59,7 +60,7 @@ class DashboardController extends BaseController
         session()->close();
 
         return view('dashboard/index', [
-            'title'     => 'Customer Data Analytics',
+            'title'     => lang('Dashboard.title'),
             'bootstrap' => [
                 'endpoints' => [
                     'stats'         => site_url('dashboard/stats'),
@@ -168,7 +169,7 @@ class DashboardController extends BaseController
         return $this->guarded(function () {
             $format = strtolower((string) $this->request->getPost('format'));
             if (! in_array($format, ['csv', 'xlsx'], true)) {
-                return $this->response->setStatusCode(422)->setJSON(['error' => 'format', 'message' => 'Format invalide.']);
+                return $this->response->setStatusCode(422)->setJSON(['error' => 'format', 'message' => lang('Dashboard.messages.invalidFormat')]);
             }
 
             $criteria = FilterCriteria::fromRequest((array) $this->request->getPost(), $this->dashboard->allowedValues());
@@ -211,7 +212,7 @@ class DashboardController extends BaseController
             $jobId = $jobs->insert([
                 'requested_by'     => (string) (session('username') ?? 'inconnu'),
                 'format'           => $format,
-                'filters'          => json_encode($criteria->toArray()),
+                'filters'          => json_encode($criteria->toArray() + [ActiveCustomers::JOB_MARKER => ActiveCustomers::SCOPE]),
                 'filters_label'    => $this->labelFor($criteria),
                 'snapshot_version' => $snapshot->id,
                 'status'           => 'pending',
@@ -251,7 +252,7 @@ class DashboardController extends BaseController
         if (! is_file($path)) {
             return $this->response->setStatusCode(410)->setJSON([
                 'error'   => 'expired',
-                'message' => "Le fichier n'est plus disponible. Relancez l'export.",
+                'message' => lang('Dashboard.messages.fileGone'),
             ]);
         }
 
@@ -278,7 +279,7 @@ class DashboardController extends BaseController
         return $this->response->setStatusCode(503)->setJSON([
             'error'     => 'snapshot_unavailable',
             'reference' => $ref,
-            'message'   => "Les données de référence ne sont pas disponibles actuellement (réf. {$ref}). Réessayez plus tard ou contactez l'administrateur",
+            'message'   => lang('Dashboard.messages.snapshotUnavailable', ['ref' => $ref]),
         ]);
     }
 
@@ -348,7 +349,7 @@ class DashboardController extends BaseController
     {
         $described = $criteria->describe();
         if ($described === []) {
-            return 'Aucun filtre (tout le référentiel)';
+            return lang('Dashboard.messages.noFilter');
         }
 
         $parts = [];

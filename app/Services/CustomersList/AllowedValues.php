@@ -58,7 +58,10 @@ final class AllowedValues
             regions: $values('regions'),
             divisions: $values('divisions'),
             agences: $values('agences'),
-            statuses: $values('statuses'),
+            // Never an out-of-perimeter status, whatever the options list
+            // (a version installed before the perimeter lists all of them):
+            // ticking one is a 422, it can't bring those customers back.
+            statuses: ActiveCustomers::restrict($values('statuses')),
             segmentations: $values('segmentations'),
             segmentsTresor: $values('segmentsTresor'),
             meters: $values('meters'),
@@ -88,7 +91,7 @@ final class AllowedValues
             }
 
             if (! in_array($value, $allowed, true)) {
-                throw new InvalidFilterException("Valeur de filtre invalide pour {$label}.");
+                throw new InvalidFilterException(lang('Dashboard.validation.invalidValue', ['label' => $label]));
             }
 
             if (! in_array($value, $clean, true)) {

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="<?= esc(function_exists('current_locale') ? current_locale() : 'fr', 'attr') ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="robots" content="noindex">
-    <title>403 — Accès refusé</title>
+    <title><?= esc(lang('Auth.forbidden.title')) ?></title>
     <style>
         body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f4f6f9; color:#3d4852; display:flex; min-height:100vh; margin:0; align-items:center; justify-content:center; }
         .box { text-align:center; padding:2rem; }
@@ -16,12 +16,12 @@
 <body>
     <div class="box">
         <h1>403</h1>
-        <p><strong>Accès refusé.</strong></p>
-        <p>Vous êtes authentifié mais votre rôle ne vous accorde pas cette action.</p>
+        <p><strong><?= esc(lang('Auth.forbidden.heading')) ?></strong></p>
+        <p><?= esc(lang('Auth.forbidden.text')) ?></p>
         <?php if (! empty($permission)): ?>
-            <p class="text-muted">Permission requise : <code><?= esc($permission) ?></code></p>
+            <p class="text-muted"><?= esc(lang('Auth.forbidden.permission')) ?> <code><?= esc($permission) ?></code></p>
         <?php endif; ?>
-        <p><a href="<?= site_url('dashboard') ?>">Retour au tableau de bord</a></p>
+        <p><a href="<?= site_url('dashboard') ?>"><?= esc(lang('Auth.forbidden.back')) ?></a></p>
     </div>
 </body>
 </html>

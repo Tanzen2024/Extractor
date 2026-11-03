@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\CustomersList\ActiveCustomers;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\QueryBuilder;
 use App\Services\Snapshot\DuckDb;
@@ -24,11 +25,14 @@ use Tests\Support\Snapshot\SnapshotFixture;
  * A few figures are also checked by hand, so "both engines agree" cannot
  * hide a rule both got wrong.
  *
+ * The fixture holds out-of-perimeter rows (STATUS 'INACTIVE.' and blank, 24
+ * of the 72): no answer of either engine, nor the export, may count them.
+ *
  * @internal
  */
 final class SnapshotDashboardParityTest extends CIUnitTestCase
 {
-    private const ACTIVE  = ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)'];
+    private const ACTIVE  = ActiveCustomers::STATUSES;
     private const METERED = ['PREPAID', 'Compteurs Communicants'];
 
     private SnapshotFixture $fx;
@@ -119,12 +123,13 @@ final class SnapshotDashboardParityTest extends CIUnitTestCase
             'bornes de dates incluses' => FilterCriteria::fromArray(['dateFrom' => '2019-12-31', 'dateTo' => '2020-01-15']),
             'date de début seule' => FilterCriteria::fromArray(['dateFrom' => '2024-02-29']),
             'date de fin seule (0980 incluse)' => FilterCriteria::fromArray(['dateTo' => '1990-01-01']),
-            'segment trésor + tension + NUI' => FilterCriteria::fromArray(['segmentsTresor' => ['PRIVATE'], 'voltages' => ['LV'], 'niuQualities' => ['NUI correct', 'NUI CORRECT']]),
+            'Segment Trésorerie + tension + NUI' => FilterCriteria::fromArray(['segmentsTresor' => ['PRIVATE'], 'voltages' => ['LV'], 'niuQualities' => ['NUI correct', 'NUI CORRECT']]),
             'combiné'            => FilterCriteria::fromArray([
                 'statuses' => self::ACTIVE, 'regions' => ['DRC', 'DRE'], 'divisions' => ['DIV A', 'DIV B'], 'agences' => ['AG 1', 'AG 2', 'AG 3'],
                 'meters' => ['PREPAID', 'POSTPAID'], 'dateFrom' => '2019-01-01', 'dateTo' => '2024-12-31',
             ]),
-            'aucun résultat'     => FilterCriteria::fromArray(['regions' => ['DRC'], 'meters' => ['Compteurs Communicants'], 'statuses' => ['INACTIVE.'], 'dateFrom' => '2030-01-01']),
+            'aucun résultat'     => FilterCriteria::fromArray(['regions' => ['DRC'], 'meters' => ['Compteurs Communicants'], 'statuses' => ['INACTIVATION IN PROCESS.'], 'dateFrom' => '2030-01-01']),
+            'un seul statut actif' => FilterCriteria::fromArray(['statuses' => ['SUSPENDED (DELINQUENT ACCOUNT)']]),
         ];
     }
 
@@ -162,11 +167,11 @@ final class SnapshotDashboardParityTest extends CIUnitTestCase
                 $this->assertSame($count, $duck->count($c), "count — {$name} ({$mode})");
                 $this->assertSame($count, $this->rowSource->count($c), "export count — {$name}");
 
-                $kpis = $this->scan->kpis($c, self::ACTIVE, self::METERED);
-                $this->assertSame($kpis, $duck->kpis($c, self::ACTIVE, self::METERED), "kpis — {$name} ({$mode})");
+                $kpis = $this->scan->kpis($c, self::METERED);
+                $this->assertSame($kpis, $duck->kpis($c, self::METERED), "kpis — {$name} ({$mode})");
 
                 $expected = $this->scan->distributions($c);
-                $summary  = $duck->summary($c, self::ACTIVE, self::METERED);
+                $summary  = $duck->summary($c, self::METERED);
                 $this->assertSame($kpis, $summary['kpis'], "summary kpis — {$name} ({$mode})");
                 foreach ([$duck->distributions($c), $summary['distributions']] as $actual) {
                     foreach (['region', 'status', 'segmentation', 'meterType'] as $dim) {
@@ -184,7 +189,56 @@ final class SnapshotDashboardParityTest extends CIUnitTestCase
             }
 
             $this->assertSame($this->scan->reference(), $duck->reference(), "reference ({$mode})");
+            $this->assertSame($this->scan->filterOptions(), $duck->filterOptions(), "filter options ({$mode})");
         }
+        // The install-time options (meta) are built by the same code, same perimeter.
+        $this->assertSame($this->scan->filterOptions(), $this->fx->store->active()->filterOptions(), 'install-time filter options');
+    }
+
+    /** Rows of the fixture inside the perimeter: n % 6 in {0, 1, 2, 5} (ACTIVE, PENDING BILLING, SUSPENDED, INACTIVATION). */
+    private static function inScope(int $n): bool
+    {
+        return in_array($n % 6, [0, 1, 2, 5], true);
+    }
+
+    /** @param callable(int): bool $rule */
+    private static function rowsWhere(callable $rule): int
+    {
+        return count(array_filter(range(1, 72), static fn (int $n): bool => self::inScope($n) && $rule($n)));
+    }
+
+    public function testOutOfPerimeterRowsNeverReachAnyResult(): void
+    {
+        foreach ($this->duckEngines() as $mode => $duck) {
+            foreach (self::criteriaSets() as $name => $c) {
+                foreach ($duck->page($c, '', 'STATUS', 'asc', 0, 100) as $row) {
+                    $this->assertTrue(ActiveCustomers::isActive($row['STATUS']), "table row — {$name} ({$mode}): {$row['STATUS']}");
+                }
+                foreach (array_keys($duck->distributions($c)['status']) as $status) {
+                    $this->assertTrue(ActiveCustomers::isActive((string) $status), "status chart — {$name} ({$mode}): {$status}");
+                }
+                $k = $duck->kpis($c, self::METERED);
+                $this->assertSame($k['total'], $k['actifs'], "every counted contract is active — {$name} ({$mode})");
+            }
+
+            $options = $duck->filterOptions();
+            $this->assertSame(
+                ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)'],
+                array_map(static fn (array $o): string => $o['value'], $options['statuses']),
+                "only the active statuses are offered ({$mode}) — ties by value",
+            );
+            $this->assertSame(48, array_sum(array_column($options['statuses'], 'count')));
+            $this->assertSame(48, array_sum(array_column($options['regions'], 'count')), 'region counts: in-perimeter rows only');
+        }
+
+        // CSV / XLSX export rows (same RowSource for both formats).
+        $statuses = [];
+        $n        = $this->rowSource->stream(FilterCriteria::none(), static function (array $row) use (&$statuses): void {
+            $statuses[trim($row['STATUS'])] = true;
+        });
+        $this->assertSame(48, $n);
+        $this->assertSame([], array_values(array_filter(array_keys($statuses), static fn ($s): bool => ! ActiveCustomers::isActive((string) $s))));
+        $this->assertSame(48, $this->rowSource->count(FilterCriteria::none()), 'never the 72 rows of the file');
     }
 
     public function testTablePagesMatchForEverySortDirectionSearchAndOffset(): void
@@ -220,33 +274,37 @@ final class SnapshotDashboardParityTest extends CIUnitTestCase
     {
         $none = FilterCriteria::none();
 
-        // 72 rows, CONTRACT unique.
-        $this->assertSame(72, $this->duck->count($none));
-        $this->assertSame(['totalClients' => 72, 'totalNui' => 54], $this->duck->reference()); // NUI_QC blank for n % 4 == 3
+        // 72 rows, CONTRACT unique; 48 in the perimeter (n % 6 in {0, 1, 2, 5}),
+        // 'INACTIVE.' (n % 6 == 3) and blank (n % 6 == 4) are out.
+        $this->assertSame(48, $this->duck->count($none));
+        $this->assertSame(['totalClients' => 48, 'totalNui' => self::rowsWhere(static fn (int $n): bool => $n % 4 !== 3)], $this->duck->reference()); // NUI_QC blank for n % 4 == 3
 
-        // Active statuses: n % 6 in {0, 1, 2, 5} -> 4 out of every 6 rows.
-        $k = $this->duck->kpis($none, self::ACTIVE, self::METERED);
+        $k = $this->duck->kpis($none, self::METERED);
+        $this->assertSame(48, $k['total']);
         $this->assertSame(48, $k['actifs']);
-        $this->assertSame(24, $k['inactifs'], "'' and INACTIVE. are inactive");
-        $this->assertSame(36, $k['avecCompteur'], 'PREPAID + Compteurs Communicants: n % 4 in {0, 2}');
-        $this->assertSame(36, $k['nuiCorrect'], '"NUI correct" + "NUI CORRECT" (n % 4 in {0, 1}), case-insensitive; "àECLASSER" and blank are not');
-        // contact: phone only for n % 3 == 2 (24 rows), or an e-mail (n % 8 == 0)
-        $contacts = count(array_filter(range(1, 72), static fn (int $n): bool => $n % 3 === 2 || $n % 8 === 0));
-        $this->assertSame($contacts, $k['contactOk'], 'a blank or single-space phone is no contact');
+        $this->assertArrayNotHasKey('inactifs', $k);
+        $this->assertSame(self::rowsWhere(static fn (int $n): bool => in_array($n % 4, [0, 2], true)), $k['avecCompteur'], 'PREPAID + Compteurs Communicants: n % 4 in {0, 2}');
+        $this->assertSame(self::rowsWhere(static fn (int $n): bool => in_array($n % 4, [0, 1], true)), $k['nuiCorrect'], '"NUI correct" + "NUI CORRECT" (n % 4 in {0, 1}), case-insensitive; "àECLASSER" and blank are not');
+        // contact: phone only for n % 3 == 2, or an e-mail (n % 8 == 0)
+        $this->assertSame(self::rowsWhere(static fn (int $n): bool => $n % 3 === 2 || $n % 8 === 0), $k['contactOk'], 'a blank or single-space phone is no contact');
 
         // The padded " DRO " in the file is matched by the DRO filter.
-        $this->assertSame(18, $this->duck->count(FilterCriteria::fromArray(['regions' => ['DRO']])));
+        $this->assertSame(self::rowsWhere(static fn (int $n): bool => $n % 4 === 2), $this->duck->count(FilterCriteria::fromArray(['regions' => ['DRO']])));
+
+        // One active status selected: only it (n % 6 == 2).
+        $this->assertSame(12, $this->duck->count(FilterCriteria::fromArray(['statuses' => ['SUSPENDED (DELINQUENT ACCOUNT)']])));
 
         // Date bounds inclusive at day level; unreadable dates (31/02, 1/4/2024, '') never match a date filter.
         $readable = static fn (int $n): bool => in_array($n % 9, [0, 1, 2, 5, 7, 8], true);
         $this->assertSame(
-            count(array_filter(range(1, 72), static fn (int $n): bool => $readable($n) && in_array($n % 9, [0, 1, 2], true))),
+            self::rowsWhere(static fn (int $n): bool => $readable($n) && in_array($n % 9, [0, 1, 2], true)),
             $this->duck->count(FilterCriteria::fromArray(['dateFrom' => '2019-12-31', 'dateTo' => '2020-01-15'])),
         );
-        $this->assertSame(8, $this->duck->count(FilterCriteria::fromArray(['dateTo' => '1990-01-01'])), 'the 0980 garbage year is a real (old) date');
+        $this->assertSame(self::rowsWhere(static fn (int $n): bool => $n % 9 === 5), $this->duck->count(FilterCriteria::fromArray(['dateTo' => '1990-01-01'])), 'the 0980 garbage year is a real (old) date');
 
         // Default table order = CONTRACT numerically, not as text.
         $contracts = array_column($this->duck->page($none, '', null, 'asc', 0, 72), 'CONTRACT');
+        $this->assertCount(48, $contracts);
         $sorted    = $contracts;
         sort($sorted, SORT_NUMERIC);
         $this->assertSame($sorted, $contracts);
@@ -265,7 +323,7 @@ final class SnapshotDashboardParityTest extends CIUnitTestCase
             ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'],
             array_values(array_intersect(['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'], array_keys($seg))),
         );
-        $this->assertSame(18, array_sum($seg));
+        $this->assertSame(self::rowsWhere(static fn (int $n): bool => $n % 4 === 0), array_sum($seg));
     }
 
     public function testDuplicateOrNonNumericContractsKeepTheExactDistinctCounts(): void
@@ -288,9 +346,9 @@ final class SnapshotDashboardParityTest extends CIUnitTestCase
             $duck = $index->engine($snapshot);
             $scan = new SnapshotScanEngine($snapshot);
             $none = FilterCriteria::none();
-            $this->assertSame($scan->kpis($none, self::ACTIVE, self::METERED), $duck->kpis($none, self::ACTIVE, self::METERED));
-            $this->assertSame(4, $duck->kpis($none, self::ACTIVE, self::METERED)['total'], 'C1, 42, 7, X-9');
-            $this->assertSame(6, $duck->count($none), 'the table still has 6 rows');
+            $this->assertSame($scan->kpis($none, self::METERED), $duck->kpis($none, self::METERED));
+            $this->assertSame(3, $duck->kpis($none, self::METERED)['total'], 'C1, 42, 7 — X-9 (blank status) is out; C1 counted once');
+            $this->assertSame(4, $duck->count($none), 'the table has the 4 in-perimeter rows (C1 ×2, 42, 7)');
             foreach (['CONTRACT', 'STATUS'] as $sort) {
                 foreach (['asc', 'desc'] as $dir) {
                     $this->assertSame($scan->page($none, '', $sort, $dir, 0, 10), $duck->page($none, '', $sort, $dir, 0, 10), "{$sort} {$dir}");

@@ -24,8 +24,10 @@ use Config\Snapshot as SnapshotConfig;
  * Results are cached per (version, filters): a version never changes, so a
  * new version simply starts new keys.
  *
- * The KPI / "active" / "metered" business rules are unchanged and still live
- * in Config\Oracle (activeStatuses, meteredMeterValues).
+ * Perimeter: ActiveCustomers only — every engine query restricts STATUS
+ * (FilterCriteria::effectiveStatuses()), the reference denominators and the
+ * filter options included. The "metered" rule lives in Config\Oracle
+ * (meteredMeterValues).
  */
 class DashboardService
 {
@@ -90,7 +92,7 @@ class DashboardService
      *
      * @return array{
      *   totalRows:int,
-     *   kpis:array{total:int, totalPct:float, reference:array{totalClients:int, totalNui:int}, nuiCorrects:array{value:int,pct:float}, actifs:array{value:int,pct:float}, inactifs:array{value:int,pct:float}, avecCompteur:array{value:int,pct:float}, contacts:array{value:int,pct:float}},
+     *   kpis:array{total:int, totalPct:float, reference:array{totalClients:int, totalNui:int}, nuiCorrects:array{value:int,pct:float}, actifs:array{value:int,pct:float}, avecCompteur:array{value:int,pct:float}, contacts:array{value:int,pct:float}},
      *   charts:array{region:list<array{value:string,count:int}>, status:list<array{value:string,count:int}>, segmentation:list<array{value:string,count:int}>, meterType:list<array{value:string,count:int}>}
      * }
      */
@@ -101,7 +103,7 @@ class DashboardService
             // taken against the unfiltered reference, not the filtered total.
             // Contacts (and the non-displayed cards) keep the filtered total.
             $ref     = $this->reference($fresh);
-            $summary = $this->engine()->summary($criteria, array_values($this->config->activeStatuses), array_values($this->config->meteredMeterValues));
+            $summary = $this->engine()->summary($criteria, array_values($this->config->meteredMeterValues));
             $k       = $summary['kpis'];
             $dist    = $summary['distributions'];
             $total   = $k['total'];
@@ -114,7 +116,6 @@ class DashboardService
                     'reference'    => $ref,
                     'nuiCorrects'  => $this->ratio($k['nuiCorrect'], $ref['totalNui']),
                     'actifs'       => $this->ratio($k['actifs'], $ref['totalClients']),
-                    'inactifs'     => $this->ratio($k['inactifs'], $total),
                     'avecCompteur' => $this->ratio($k['avecCompteur'], $total),
                     'contacts'     => $this->ratio($k['contactOk'], $total),
                 ],
@@ -166,9 +167,7 @@ class DashboardService
         $offset  = ($page - 1) * $perPage;
 
         if ($offset > $this->config->tableMaxOffset) {
-            throw new InvalidFilterException(
-                'Page trop profonde : affinez vos filtres ou votre recherche pour atteindre ces lignes.'
-            );
+            throw new InvalidFilterException(lang('Dashboard.validation.pageTooDeep'));
         }
 
         $sort  = in_array($sort, QueryBuilder::SORTABLE, true) ? $sort : null;
@@ -211,14 +210,16 @@ class DashboardService
 
     /**
      * The filter UI's options (value lists with counts, region -> division ->
-     * agence tree, DATE_AB bounds) — computed from this version when it was
-     * installed (SnapshotFilterOptions), so instant.
+     * agence tree, DATE_AB bounds) over the in-perimeter rows of this
+     * version — computed by the engine (not read from the install-time meta,
+     * which versions installed before the perimeter computed over every
+     * row), cached per version.
      *
      * @return array<string, mixed>
      */
-    public function filterOptions(): array
+    public function filterOptions(bool $fresh = false): array
     {
-        return $this->snapshot()->filterOptions();
+        return $this->remember('filter_options', $fresh, fn (): array => $this->engine()->filterOptions());
     }
 
     /** The values a filter may take: exactly those present in this version. */
@@ -293,7 +294,7 @@ class DashboardService
      */
     private function remember(string $key, bool $fresh, callable $compute): mixed
     {
-        $cacheKey = 'cl_snap_' . $this->engine()->version() . '_' . $key;
+        $cacheKey = 'cl_snap_' . $this->engine()->version() . '_' . ActiveCustomers::SCOPE . '_' . $key;
 
         if (! $fresh && $this->cacheTtl > 0) {
             $cached = $this->cache->get($cacheKey);

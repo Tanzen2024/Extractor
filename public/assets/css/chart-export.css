@@ -1,0 +1,99 @@
+/* Per-chart export menu ("⋮" on each dashboard chart card) and its toast —
+   public/assets/js/chart-export.js. Same tokens as custom.css chart cards. */
+
+.bscd-chart-card__header { position: relative; padding-right: 2.25rem; }
+
+.bscd-cx { position: absolute; top: -.35rem; right: -.45rem; }
+
+.bscd-cx__toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 2rem; height: 2rem; padding: 0;
+    border: 1px solid transparent; border-radius: 6px; background: transparent;
+    color: #9ca3af; font-size: .9rem; line-height: 1; cursor: pointer;
+    transition: background-color .15s, color .15s, border-color .15s;
+}
+.bscd-cx__toggle:hover,
+.bscd-cx__toggle:focus-visible,
+.bscd-cx.show .bscd-cx__toggle { background: #f3f4f6; border-color: #e3e6ec; color: #1f2937; outline: none; }
+.bscd-cx__toggle:focus-visible { box-shadow: 0 0 0 .2rem rgba(31, 111, 178, .25); }
+
+/* Busy (PNG rendering): the dots become a spinner. */
+.bscd-cx.is-busy .bscd-cx__toggle { pointer-events: none; }
+.bscd-cx.is-busy .bscd-cx__toggle i::before { content: "\f110"; }
+.bscd-cx.is-busy .bscd-cx__toggle i { animation: bscd-cx-spin 1s linear infinite; }
+@keyframes bscd-cx-spin { to { transform: rotate(360deg); } }
+
+.bscd-cx__menu {
+    min-width: 14.5rem; padding: .35rem; margin-top: .25rem;
+    border: 1px solid #e3e6ec; border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(17, 24, 39, .12);
+    font-size: .82rem;
+}
+.bscd-cx__menu .dropdown-header {
+    display: flex; align-items: center; gap: .45rem;
+    padding: .4rem .6rem .25rem; font-size: .66rem; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase; color: #6b7280;
+}
+.bscd-cx__menu .dropdown-header i { color: #9ca3af; width: 1rem; text-align: center; }
+.bscd-cx__menu .dropdown-item {
+    display: flex; align-items: center; gap: .55rem;
+    padding: .45rem .6rem .45rem 2.05rem; border-radius: 6px; color: #1f2937;
+}
+.bscd-cx__menu .dropdown-item i { color: #1f6fb2; width: 1rem; text-align: center; margin-left: -1.5rem; }
+.bscd-cx__menu .dropdown-item[data-cx-format="xlsx"] i { color: #1a7f4d; }
+.bscd-cx__menu .dropdown-item[data-cx-format="png"] i { color: #7c3aed; }
+.bscd-cx__menu .dropdown-item:hover,
+.bscd-cx__menu .dropdown-item:focus { background: #f3f6fb; }
+.bscd-cx__menu .dropdown-item:disabled { color: #b8bec9; background: transparent; cursor: not-allowed; }
+.bscd-cx__menu .dropdown-item:disabled i { color: #c7ccd6; }
+.bscd-cx__ext { margin-left: auto; font-size: .68rem; color: #9ca3af; font-variant-numeric: tabular-nums; }
+.bscd-cx__menu .dropdown-divider { margin: .3rem .2rem; }
+.bscd-cx__note {
+    margin: .3rem .2rem 0; padding: .45rem .6rem; border-radius: 6px;
+    background: #f7f8fa; color: #6b7280; font-size: .74rem; line-height: 1.35;
+}
+.bscd-cx__note[hidden] { display: none; }
+
+/* Touch screens: bigger targets, menu never wider than the viewport. */
+@media (max-width: 575.98px) {
+    .bscd-cx__toggle { width: 2.4rem; height: 2.4rem; }
+    .bscd-cx__menu { min-width: 0; width: min(16rem, calc(100vw - 2rem)); }
+    .bscd-cx__menu .dropdown-item { padding-top: .65rem; padding-bottom: .65rem; }
+}
+
+/* Result toast */
+.bscd-cx-toast {
+    position: fixed; left: 50%; bottom: 1.25rem; z-index: 1080;
+    display: flex; align-items: center; gap: .5rem;
+    max-width: calc(100vw - 2rem); padding: .6rem .95rem;
+    border-radius: 8px; background: #1f2937; color: #fff;
+    font-size: .82rem; box-shadow: 0 10px 28px rgba(17, 24, 39, .25);
+    transform: translate(-50%, 1rem); opacity: 0; pointer-events: none;
+    transition: opacity .2s, transform .2s;
+}
+.bscd-cx-toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
+.bscd-cx-toast i { color: #4ade80; }
+.bscd-cx-toast--error i { color: #f87171; }
+@media (prefers-reduced-motion: reduce) {
+    .bscd-cx-toast, .bscd-cx__toggle { transition: none; }
+    .bscd-cx.is-busy .bscd-cx__toggle i { animation: none; }
+}
+
+/* Dark theme (body.dark-mode, assets/js/theme.js). "PNG (fond clair)" is
+   offered only there — in light mode the regular PNG already is light. */
+.bscd-cx__menu [data-cx-variant="light"] { display: none; }
+.dark-mode .bscd-cx__menu [data-cx-variant="light"] { display: flex; }
+.dark-mode .bscd-cx__toggle:hover,
+.dark-mode .bscd-cx__toggle:focus-visible,
+.dark-mode .bscd-cx.show .bscd-cx__toggle { background: #262f3e; border-color: #2f3a4c; color: #f3f4f6; }
+.dark-mode .bscd-cx__menu { background: #1f2633; border-color: #2f3a4c; box-shadow: 0 10px 28px rgba(0, 0, 0, .45); }
+.dark-mode .bscd-cx__menu .dropdown-header { color: #9ca3af; }
+.dark-mode .bscd-cx__menu .dropdown-item { color: #e5e7eb; }
+.dark-mode .bscd-cx__menu .dropdown-item:hover, .dark-mode .bscd-cx__menu .dropdown-item:focus { background: #262f3e; }
+.dark-mode .bscd-cx__menu .dropdown-item i { color: #7fb8ec; }
+.dark-mode .bscd-cx__menu .dropdown-item[data-cx-format="xlsx"] i { color: #5fd3a2; }
+.dark-mode .bscd-cx__menu .dropdown-item[data-cx-format="png"] i { color: #b4a2fb; }
+.dark-mode .bscd-cx__menu .dropdown-item[data-cx-format="png-light"] i { color: #fbbf24; }
+.dark-mode .bscd-cx__menu .dropdown-item:disabled, .dark-mode .bscd-cx__menu .dropdown-item:disabled i { color: #4b5563; }
+.dark-mode .bscd-cx__note { background: #262f3e; color: #9ca3af; }
+.dark-mode .bscd-cx-toast { background: #f3f4f6; color: #111827; }

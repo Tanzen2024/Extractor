@@ -2,6 +2,7 @@
 
 namespace App\Services\Snapshot;
 
+use App\Services\CustomersList\ActiveCustomers;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\QueryBuilder;
 
@@ -42,19 +43,16 @@ final class SnapshotScanEngine implements SnapshotQueryEngine
         return $n;
     }
 
-    public function kpis(FilterCriteria $criteria, array $activeStatuses, array $meteredMeters): array
+    public function kpis(FilterCriteria $criteria, array $meteredMeters): array
     {
-        $active  = array_fill_keys($activeStatuses, true);
         $metered = array_fill_keys($meteredMeters, true);
-        $k       = ['total' => [], 'actifs' => [], 'inactifs' => [], 'avecCompteur' => [], 'nuiCorrect' => [], 'contactOk' => 0];
+        $k       = ['total' => [], 'actifs' => [], 'avecCompteur' => [], 'nuiCorrect' => [], 'contactOk' => 0];
 
-        $this->scan($criteria, '', static function (array $r) use ($active, $metered, &$k): void {
+        $this->scan($criteria, '', static function (array $r) use ($metered, &$k): void {
             $contract = $r['CONTRACT'];
             $k['total'][$contract] = true;
-            if (isset($active[$r['STATUS']])) {
+            if (ActiveCustomers::isActive($r['STATUS'])) {
                 $k['actifs'][$contract] = true;
-            } else {
-                $k['inactifs'][$contract] = true;
             }
             if (isset($metered[$r['METER']])) {
                 $k['avecCompteur'][$contract] = true;
@@ -70,16 +68,15 @@ final class SnapshotScanEngine implements SnapshotQueryEngine
         return [
             'total'        => count($k['total']),
             'actifs'       => count($k['actifs']),
-            'inactifs'     => count($k['inactifs']),
             'avecCompteur' => count($k['avecCompteur']),
             'nuiCorrect'   => count($k['nuiCorrect']),
             'contactOk'    => $k['contactOk'],
         ];
     }
 
-    public function summary(FilterCriteria $criteria, array $activeStatuses, array $meteredMeters): array
+    public function summary(FilterCriteria $criteria, array $meteredMeters): array
     {
-        return ['kpis' => $this->kpis($criteria, $activeStatuses, $meteredMeters), 'distributions' => $this->distributions($criteria)];
+        return ['kpis' => $this->kpis($criteria, $meteredMeters), 'distributions' => $this->distributions($criteria)];
     }
 
     public function reference(): array
@@ -111,6 +108,26 @@ final class SnapshotScanEngine implements SnapshotQueryEngine
     public function segmentationCounts(FilterCriteria $criteria): array
     {
         return $this->distributions($criteria)['segmentation'];
+    }
+
+    /** The install-time builder (SnapshotFilterOptions) over every row: it keeps the in-perimeter ones. */
+    public function filterOptions(): array
+    {
+        $reader  = $this->snapshot->reader();
+        $index   = $reader->index();
+        $date    = $this->snapshot->dateFormat() !== null ? new SnapshotDate($this->snapshot->dateFormat()) : null;
+        $options = new SnapshotFilterOptions($index);
+        $dateIdx = $index[FilterCriteria::DATE_COLUMN];
+
+        try {
+            $reader->each(static function (array $fields) use ($options, $date, $dateIdx): void {
+                $options->add($fields, $date !== null ? $date->toYmd($fields[$dateIdx]) : false);
+            });
+        } finally {
+            $reader->close();
+        }
+
+        return $options->result();
     }
 
     public function page(FilterCriteria $criteria, string $search, ?string $sort, string $dir, int $offset, int $limit): array

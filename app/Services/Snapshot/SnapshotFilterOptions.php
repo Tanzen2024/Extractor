@@ -2,6 +2,8 @@
 
 namespace App\Services\Snapshot;
 
+use App\Services\CustomersList\ActiveCustomers;
+
 /**
  * Builds, in the install's single validation pass, the same structure
  * DashboardService::filterOptions() computes from Oracle (value lists with
@@ -9,8 +11,14 @@ namespace App\Services\Snapshot;
  * filter validation (AllowedValues::fromFilterOptions) needs no Oracle.
  *
  * Same rules as DashboardService: flat values trimmed, blanks not offered;
- * geo levels labelled "Non renseigné" when blank; lists by count desc; the
- * date-picker minimum floored at 1990-01-01.
+ * geo levels labelled "Non renseigné" when blank; lists by count desc (ties
+ * by value), geo tree by label; the date-picker minimum floored at
+ * 1990-01-01.
+ *
+ * Only in-perimeter rows (ActiveCustomers) are counted: an excluded status,
+ * or a region / agence / segment / date held only by excluded customers, is
+ * never offered. build() is shared with SnapshotDuckDbEngine::filterOptions()
+ * so both produce the very same payload from the same counts.
  */
 final class SnapshotFilterOptions
 {
@@ -55,6 +63,10 @@ final class SnapshotFilterOptions
      */
     public function add(array $fields, string|false $dateYmd): void
     {
+        if (! ActiveCustomers::isActive($fields[$this->index[ActiveCustomers::STATUS_COLUMN]])) {
+            return;
+        }
+
         foreach ($this->flatIdx as $key => $i) {
             $value = trim($fields[$i]);
             if ($value !== '') {
@@ -82,22 +94,36 @@ final class SnapshotFilterOptions
      */
     public function result(): array
     {
+        return self::build($this->flat, $this->geo, $this->minDate, $this->maxDate);
+    }
+
+    /**
+     * The payload from aggregated counts.
+     *
+     * @param array<string, array<string|int, int>> $flat FLAT key => trimmed non-blank value => rows
+     * @param array<string, int> $geo "region\0division\0agence" (labelled) => rows
+     *
+     * @return array<string, mixed>
+     */
+    public static function build(array $flat, array $geo, ?string $minDate, ?string $maxDate): array
+    {
         $out = [];
-        foreach ($this->flat as $key => $counts) {
-            $out[$key] = self::pairs($counts);
+        foreach (array_keys(self::FLAT) as $key) {
+            $out[$key] = self::pairs($flat[$key] ?? []);
         }
 
+        ksort($geo, SORT_STRING);
         $tree      = [];
         $divisions = [];
         $agences   = [];
-        foreach ($this->geo as $key => $n) {
+        foreach ($geo as $key => $n) {
             [$region, $division, $agence] = explode("\0", (string) $key);
             $tree[$region][$division][]   = ['value' => $agence, 'count' => $n];
             $divisions[$division]         = ($divisions[$division] ?? 0) + $n;
             $agences[$agence]             = ($agences[$agence] ?? 0) + $n;
         }
 
-        $min = $this->minDate;
+        $min = $minDate;
         if ($min !== null && $min < '1990-01-01') {
             $min = '1990-01-01';
         }
@@ -113,11 +139,11 @@ final class SnapshotFilterOptions
             'voltages'       => $out['voltages'],
             'niuQualities'   => $out['niuQualities'],
             'geoTree'        => $tree,
-            'dateBounds'     => ['min' => $min, 'max' => $this->maxDate],
+            'dateBounds'     => ['min' => $min, 'max' => $maxDate],
         ];
     }
 
-    private static function label(string $value): string
+    public static function label(string $value): string
     {
         $value = trim($value);
 
@@ -135,7 +161,7 @@ final class SnapshotFilterOptions
         foreach ($counts as $value => $count) {
             $out[] = ['value' => (string) $value, 'count' => $count];
         }
-        usort($out, static fn ($a, $b) => $b['count'] <=> $a['count']);
+        usort($out, static fn ($a, $b) => ($b['count'] <=> $a['count']) ?: strcmp($a['value'], $b['value']));
 
         return $out;
     }

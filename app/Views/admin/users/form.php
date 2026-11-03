@@ -20,23 +20,23 @@
                 <?= csrf_field() ?>
                 <div class="card-body">
                     <div class="form-group">
-                        <label>Identifiant Active Directory (sAMAccountName)</label>
+                        <label><?= esc(lang('Admin.users.adField')) ?></label>
                         <input type="text" name="username" class="form-control"
                                value="<?= esc(old('username', $user['username'])) ?>" required
                                <?= $isEdit ? '' : 'autofocus' ?>>
                         <small class="form-text text-muted">
-                            Le compte doit déjà exister dans l'AD. Créer ici n'ouvre qu'un accès applicatif.
+                            <?= esc(lang('Admin.users.adHelp')) ?>
                         </small>
                     </div>
 
                     <div class="form-group">
-                        <label>Nom affiché <span class="text-muted">(optionnel — sinon récupéré de l'AD à la connexion)</span></label>
+                        <label><?= esc(lang('Admin.users.displayNameField')) ?> <span class="text-muted"><?= esc(lang('Admin.users.displayNameHint')) ?></span></label>
                         <input type="text" name="display_name" class="form-control"
                                value="<?= esc(old('display_name', $user['display_name'] ?? '')) ?>">
                     </div>
 
                     <div class="form-group">
-                        <label>Rôles</label>
+                        <label><?= esc(lang('Admin.users.roles')) ?></label>
                         <?php $current = (array) old('roles', $userRoles); ?>
                         <?php foreach ($allRoles as $r): ?>
                             <div class="custom-control custom-checkbox">
@@ -46,7 +46,7 @@
                                        <?= (int) $r['is_active'] === 1 ? '' : 'disabled' ?>>
                                 <label class="custom-control-label" for="role_<?= $r['id'] ?>">
                                     <code><?= esc($r['code']) ?></code> — <?= esc($r['name']) ?>
-                                    <?= (int) $r['is_active'] === 1 ? '' : '<span class="badge badge-secondary">inactif</span>' ?>
+                                    <?= (int) $r['is_active'] === 1 ? '' : '<span class="badge badge-secondary">' . esc(lang('Admin.users.roleInactive')) . '</span>' ?>
                                 </label>
                             </div>
                         <?php endforeach; ?>
@@ -55,12 +55,12 @@
                     <div class="custom-control custom-switch">
                         <input type="checkbox" class="custom-control-input" id="is_active" name="is_active" value="1"
                                <?= (int) old('is_active', $user['is_active']) === 1 ? 'checked' : '' ?>>
-                        <label class="custom-control-label" for="is_active">Compte actif</label>
+                        <label class="custom-control-label" for="is_active"><?= esc(lang('Admin.users.accountActive')) ?></label>
                     </div>
                 </div>
                 <div class="card-footer">
-                    <button class="btn btn-primary"><i class="fas fa-save mr-1"></i> Enregistrer</button>
-                    <a href="<?= site_url('admin/users') ?>" class="btn btn-default">Annuler</a>
+                    <button class="btn btn-primary"><i class="fas fa-save mr-1"></i> <?= esc(lang('App.actions.save')) ?></button>
+                    <a href="<?= site_url('admin/users') ?>" class="btn btn-default"><?= esc(lang('App.actions.cancel')) ?></a>
                 </div>
             </form>
         </div>

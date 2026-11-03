@@ -18,27 +18,27 @@
                 <?= csrf_field() ?>
                 <div class="card-body">
                     <div class="form-group">
-                        <label>Code <span class="text-muted">(MAJUSCULES, chiffres, _)</span></label>
+                        <label><?= esc(lang('Admin.roles.code')) ?> <span class="text-muted"><?= esc(lang('Admin.roles.codeHint')) ?></span></label>
                         <input type="text" name="code" class="form-control text-uppercase"
                                value="<?= esc(old('code', $role['code'])) ?>" required pattern="[A-Z0-9_]+">
                     </div>
                     <div class="form-group">
-                        <label>Nom</label>
+                        <label><?= esc(lang('Admin.roles.name')) ?></label>
                         <input type="text" name="name" class="form-control" value="<?= esc(old('name', $role['name'])) ?>" required>
                     </div>
                     <div class="form-group">
-                        <label>Description</label>
+                        <label><?= esc(lang('Admin.roles.description')) ?></label>
                         <textarea name="description" class="form-control" rows="2"><?= esc(old('description', $role['description'] ?? '')) ?></textarea>
                     </div>
                     <div class="custom-control custom-switch">
                         <input type="checkbox" class="custom-control-input" id="is_active" name="is_active" value="1"
                                <?= (int) old('is_active', $role['is_active']) === 1 ? 'checked' : '' ?>>
-                        <label class="custom-control-label" for="is_active">Rôle actif</label>
+                        <label class="custom-control-label" for="is_active"><?= esc(lang('Admin.roles.active')) ?></label>
                     </div>
                 </div>
                 <div class="card-footer">
-                    <button class="btn btn-primary"><i class="fas fa-save mr-1"></i> Enregistrer</button>
-                    <a href="<?= site_url('admin/users/roles') ?>" class="btn btn-default">Annuler</a>
+                    <button class="btn btn-primary"><i class="fas fa-save mr-1"></i> <?= esc(lang('App.actions.save')) ?></button>
+                    <a href="<?= site_url('admin/users/roles') ?>" class="btn btn-default"><?= esc(lang('App.actions.cancel')) ?></a>
                 </div>
             </form>
         </div>

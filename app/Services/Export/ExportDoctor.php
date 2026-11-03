@@ -2,7 +2,6 @@
 
 namespace App\Services\Export;
 
-use App\Services\CustomersList\FilterCriteria;
 use App\Services\Snapshot\DuckDb;
 use App\Services\Snapshot\SnapshotIndex;
 use App\Services\Snapshot\SnapshotStore;
@@ -406,7 +405,10 @@ final class ExportDoctor
             return;
         }
         try {
-            $rows = $index->engine($active)->count(FilterCriteria::none());
+            // Integrity of the index itself: every row of the file, not the
+            // engine's count (which only sees the active-customers perimeter).
+            $index->engine($active);
+            $rows = (int) ($duckdb->query($index->path($active), 'SELECT COUNT(*) AS n FROM ' . SnapshotIndex::TABLE)[0]['n'] ?? -1);
             $this->add($rows === $active->rows() ? self::OK : self::ERROR, 'snapshot.index', "DuckDB {$version} — index de {$active->id} : {$rows} lignes" . ($rows === $active->rows() ? '' : " ≠ {$active->rows()} (php spark snapshot:index --rebuild)"));
         } catch (Throwable $e) {
             $this->add(self::ERROR, 'snapshot.index', 'index illisible : ' . ExportJobFailure::sanitize($e->getMessage()));
