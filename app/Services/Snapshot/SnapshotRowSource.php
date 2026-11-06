@@ -78,7 +78,7 @@ final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsP
 
     public function stream(FilterCriteria $criteria, callable $onRow): int
     {
-        $reader  = $this->snapshot->reader();
+        $reader  = $this->snapshot->reader($criteria->failureSubcategories !== []);
         $index   = $reader->index();
         $matcher = new RowMatcher($criteria, $index, $this->snapshot->dateFormat());
 
@@ -182,7 +182,7 @@ final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsP
             return $cached;
         }
 
-        $reader  = $this->snapshot->reader();
+        $reader  = $this->snapshot->reader($criteria->failureSubcategories !== []);
         $matcher = new RowMatcher($criteria, $reader->index(), $this->snapshot->dateFormat());
         $n       = 0;
 

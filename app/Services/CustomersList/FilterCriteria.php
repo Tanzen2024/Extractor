@@ -48,6 +48,8 @@ final class FilterCriteria
      * @param list<string> $voltages
      * @param list<string> $niuQualities
      * @param bool|null    $hasContact true = contact filled in, false = none, null = no filter
+     * @param list<string> $failureSubcategories FailureSubcategories::VALUES — the detail list of the
+     *                     Postpaid breakdown, not one of the official filters
      */
     private function __construct(
         public readonly ?DateTimeImmutable $dateFrom,
@@ -62,6 +64,7 @@ final class FilterCriteria
         public readonly array $voltages,
         public readonly array $niuQualities,
         public readonly ?bool $hasContact = null,
+        public readonly array $failureSubcategories = [],
     ) {
         // Out-of-perimeter statuses are dropped; a selection made ONLY of
         // such statuses (e.g. an export job stored before the perimeter
@@ -132,7 +135,12 @@ final class FilterCriteria
         }
         $hasContact = count($contact) === 1 ? $contact[0] === self::CONTACT_YES : null;
 
-        // Type compteur = PREPAID only and the 8 PREPAID categories ticked =
+        $failure = array_values(array_unique($list('failure_subcategory')));
+        if (array_diff($failure, FailureSubcategories::VALUES) !== []) {
+            throw new InvalidFilterException(lang('Dashboard.validation.invalidValue', ['label' => lang('Dashboard.failure.filter')]));
+        }
+
+        // Type compteur = PREPAID only and the 6 PREPAID segments ticked =
         // the whole PREPAID universe, i.e. no segmentation restriction.
         if (PrepaidSegmentations::coversPrepaidScope($segmentations, $meters)) {
             $segmentations = [];
@@ -151,6 +159,7 @@ final class FilterCriteria
             voltages: $pick(lang('Glossary.voltage'), $allowed->voltages, 'voltage'),
             niuQualities: $pick(lang('Glossary.niuQuality'), $allowed->niuQualities, 'niu_qc'),
             hasContact: $hasContact,
+            failureSubcategories: $failure,
         );
     }
 
@@ -176,6 +185,7 @@ final class FilterCriteria
             voltages: $data['voltages'] ?? [],
             niuQualities: $data['niuQualities'] ?? [],
             hasContact: isset($data['hasContact']) ? (bool) $data['hasContact'] : null,
+            failureSubcategories: $data['failureSubcategories'] ?? [],
         );
     }
 
@@ -197,6 +207,7 @@ final class FilterCriteria
             'voltages'       => $this->voltages,
             'niuQualities'   => $this->niuQualities,
             'hasContact'     => $this->hasContact,
+            'failureSubcategories' => $this->failureSubcategories,
         ], static fn ($v) => $v !== null && $v !== []);
     }
 
@@ -210,7 +221,7 @@ final class FilterCriteria
     {
         return new self(
             $this->dateFrom, $this->dateTo, $this->regions, $this->divisions, $this->agences, $this->statuses,
-            [], $this->segmentsTresor, $this->meters, $this->voltages, $this->niuQualities, $this->hasContact,
+            [], $this->segmentsTresor, $this->meters, $this->voltages, $this->niuQualities, $this->hasContact, $this->failureSubcategories,
         );
     }
 
@@ -255,6 +266,9 @@ final class FilterCriteria
         if ($this->voltages !== [])       { $out[lang('Glossary.voltage')] = $join($this->voltages); }
         if ($this->niuQualities !== [])   { $out[lang('Glossary.niuQuality')] = $join($this->niuQualities); }
         if ($this->hasContact !== null)   { $out[lang('Glossary.contactFilled')] = lang($this->hasContact ? 'App.yes' : 'App.no'); }
+        if ($this->failureSubcategories !== []) {
+            $out[lang('Dashboard.failure.filter')] = $join(array_map(FailureSubcategories::label(...), $this->failureSubcategories));
+        }
 
         return $out;
     }

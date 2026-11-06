@@ -33,7 +33,7 @@ final class ExportFilterParityTest extends TestCase
             divisions: ['DVC DOUALA NORD'],
             agences: ['CSC_LOGPOM'],
             statuses: ['ACTIVE', 'SUSPENDED (DELINQUENT ACCOUNT)'],
-            segmentations: ['1 PERFECT', '8 Autre'],
+            segmentations: ['1 PERFECT', '6 Défaillant'],
             segmentsTresor: ['PRIVATE'],
             meters: ['PREPAID', 'POSTPAID', 'Compteurs Communicants'],
             voltages: ['LV', 'MV'],
@@ -56,7 +56,7 @@ final class ExportFilterParityTest extends TestCase
             'date_from' => '2023-01-01', 'date_to' => '2026-01-01',
             'region' => ['DCUD', 'DCUY'], 'division' => ['DVC DOUALA NORD'],
             'agence' => ['CSC_LOGPOM'], 'status' => ['ACTIVE'],
-            'segmentation' => ['8 Autre'], 'segment_tresor' => ['PRIVATE'],
+            'segmentation' => ['6 Défaillant'], 'segment_tresor' => ['PRIVATE'],
             'meter' => ['POSTPAID'], 'voltage' => ['LV'], 'niu_qc' => ['NUI correct'],
         ]];
     }

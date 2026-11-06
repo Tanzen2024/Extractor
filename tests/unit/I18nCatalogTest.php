@@ -22,7 +22,7 @@ final class I18nCatalogTest extends CIUnitTestCase
     private const FILES = ['App', 'Admin', 'Auth', 'Dashboard', 'Extraction', 'Glossary'];
 
     /** JS files reading the browser catalog. */
-    private const JS_FILES = ['dashboard.js', 'export-widget.js', 'export-progress.js', 'frdatepicker.js', 'app.js', 'i18n.js'];
+    private const JS_FILES = ['dashboard.js', 'export-widget.js', 'export-progress.js', 'frdatepicker.js', 'app.js', 'i18n.js', 'sync-status.js'];
 
     /**
      * Not checked for "defined but never used": keys read through a computed
@@ -31,7 +31,10 @@ final class I18nCatalogTest extends CIUnitTestCase
      */
     private const DYNAMIC_PHP = ['App.language.names.', 'Glossary.'];
 
-    private const DYNAMIC_JS = ['dashboard.columns.', 'meta.', 'glossary.'];
+    private const DYNAMIC_JS = [
+        'dashboard.columns.', 'meta.', 'glossary.',
+        'dashboard.sync.state.', 'dashboard.sync.status.', 'dashboard.sync.trigger.', 'dashboard.sync.reason.',
+    ];
 
     public function testDashboardTitleIsMadeOfTheGlossaryTerms(): void
     {

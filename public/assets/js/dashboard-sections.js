@@ -69,20 +69,65 @@
     }
 
     /**
-     * Rows of the page filters that belong to no section (blank METER — no
-     * option can select it): page count minus both section totals. null while
-     * a figure is missing; never negative.
+     * Postpaid + Prepaid: the sum of the section totals already received (a
+     * row has one METER, so the sections never overlap). null while a figure
+     * is missing — a partial sum is never shown as the total.
      */
-    function unassigned(pageTotal, sectionTotals) {
-        if (typeof pageTotal !== 'number') return null;
+    function sectionsTotal(sectionTotals) {
         var sum = 0;
         for (var i = 0; i < SECTIONS.length; i++) {
             var n = sectionTotals[SECTIONS[i].key];
             if (typeof n !== 'number') return null;
             sum += n;
         }
-        return Math.max(0, pageTotal - sum);
+        return sum;
     }
 
-    return { SECTIONS: SECTIONS, universeOf: universeOf, sectionCriteria: sectionCriteria, unassigned: unassigned };
+    /**
+     * Rows of the page filters that belong to no section (blank METER — no
+     * option can select it): page count minus both section totals. null while
+     * a figure is missing; never negative.
+     */
+    function unassigned(pageTotal, sectionTotals) {
+        if (typeof pageTotal !== 'number') return null;
+        var sum = sectionsTotal(sectionTotals);
+        return sum === null ? null : Math.max(0, pageTotal - sum);
+    }
+
+    /**
+     * The /dashboard/stats breakdown of the 6 Défaillant profile, each
+     * component with its share of the Défaillant total.
+     *
+     * @param {?{total:number, components:Array<{value:string,count:number}>, unassigned:number}} data
+     * @return {{total:number, unassigned:number, rows:Array<{value:string,count:number,share:number}>}}
+     */
+    function failureBreakdown(data) {
+        var total = (data && Number(data.total)) || 0;
+        return {
+            total: total,
+            unassigned: (data && Number(data.unassigned)) || 0,
+            rows: ((data && data.components) || []).map(function (c) {
+                var count = Number(c.count) || 0;
+                return { value: c.value, count: count, share: total ? count / total * 100 : 0 };
+            })
+        };
+    }
+
+    /**
+     * Criteria of the detail table with one component of the breakdown
+     * selected: an extra narrowing of the table and its export, kept out of
+     * the page filters. criteria null (no possible row) stays null.
+     */
+    function withFailureFilter(criteria, value) {
+        if (!criteria || !value) return criteria;
+        var c = {};
+        Object.keys(criteria).forEach(function (k) { c[k] = criteria[k]; });
+        c.failure_subcategory = [value];
+        return c;
+    }
+
+    return {
+        SECTIONS: SECTIONS, universeOf: universeOf, sectionCriteria: sectionCriteria, sectionsTotal: sectionsTotal, unassigned: unassigned,
+        failureBreakdown: failureBreakdown, withFailureFilter: withFailureFilter
+    };
 }));

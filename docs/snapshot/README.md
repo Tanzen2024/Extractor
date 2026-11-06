@@ -38,13 +38,19 @@ dashboard:warm : pré-calcul du tableau de bord de la nouvelle version
 | Source | Oracle `CMS_RFC.TB_CUSTOMERS_LIST` |
 | Projet (prod Linux) | `/var/www/extractor` |
 | Lancement manuel | `cd /var/www/extractor && php spark customers:refresh` (`--force` : accepter une forte baisse de volume) |
-| Fréquence / heure | quotidienne, **05:00** heure serveur (= Africa/Douala, UTC+1), rattrapage **06:00** |
+| Fréquence / heure | quotidienne, **05:00** heure serveur (= Africa/Douala, UTC+1), rattrapage horaire de **06:00** à 12:00 (`--catch-up-until`) |
 | Pourquoi 05:00 | besoin métier ; mesuré le 2026-09-29 dans Oracle : `UPDATED_AT` 04:32:48, truncate (`LAST_DDL_TIME`) 04:40:46, 3 303 512 insertions enregistrées à 04:41:44 (`ALL_TAB_MODIFICATIONS`) → ~18 min de marge. Un chargement amont pas fini à 05:00 ne peut pas devenir le snapshot : lignes extraites ≠ `COUNT(*)` initial (`row_count_mismatch`) ou < 90 % de la version active (`volume_drop`) → refus, version active conservée. Le rattrapage de 06:00 (`--skip-if-fresh`) relance alors ; il ne fait rien si 05:00 a réussi (version du jour déjà active) |
 | Installation du cron (root, prod) | `sh docs/snapshot/extractor/install_customers_refresh_cron.sh --user <utilisateur web>` (vérifie `command -v php`, PHP ≥ 8.2 + oci8, `duckdb`, droits sur `writable/`, fuseau +0100, puis écrit `/etc/cron.d/extractor-customers-refresh`) ; `--dry-run` pour voir les lignes sans les écrire ; `--time HH:MM`, `--catch-up HH:MM\|none`, `--duckdb <chemin>` |
 | Lignes cron écrites | `0 5 * * * <utilisateur> cd /var/www/extractor && <php> spark customers:refresh >> …/customers_refresh.log 2>&1 && <php> spark dashboard:warm >> …` puis la même à `0 6` avec `customers:refresh --skip-if-fresh` |
-| Dev Windows | pas de planification : lancement manuel si besoin |
+| Poste Windows (XAMPP) | tâche « Extractor - Customers refresh » : `powershell -NoProfile -ExecutionPolicy Bypass -File docs\snapshot\extractor\install_customers_refresh_task.ps1 [-At 05:00] [-RetryHours 17] [-DryRun] [-Uninstall]`. Exige une session ouverte : un poste n'a pas la fiabilité d'un serveur |
+| Fréquence de contrôle | chaque tentative compare `MAX(UPDATED_AT)` et `COUNT(*)` Oracle à la version active : sans changement, rien n'est extrait (`skipped`, jamais `success`) ; `--force` extrait quand même |
+| Historique | table `customers_sync_runs` (une ligne par tentative réelle) ; `php spark customers:sync-status [--limit N]` (code 0 à jour, 1 en retard ou échec) ; bouton « Historique » du tableau de bord |
+| Fraîcheur affichée | date de validation de la version active (`validated_at`), jamais une date client : **À jour** (succès depuis moins de `snapshot.syncMaxAgeHours`, 26 h) · **En retard** · **Échec** (dernière tentative échouée, sans version plus récente) |
+| Purge | une nouvelle version entraîne la purge au-delà de `snapshot.keepVersions` ; un dossier de version contenant `.retain` n'est jamais purgé (supprimer ce fichier pour l'autoriser) |
+| Espace disque | refus (`disk_space`) sous `snapshot.refreshMinFreeBytes` (3 Gio) avant toute extraction |
 | Log | `writable/logs/customers_refresh.log` (écrit par la commande, même en manuel ; le `>>` du cron n'ajoute que les erreurs fatales PHP) |
-| Codes retour | `0` nouvelle version active (ou, avec `--skip-if-fresh`, version du jour déjà active) · `1` échec (version précédente conservée) · `3` déjà en cours |
+| Codes retour | `0` nouvelle version active, version du jour déjà active (`--skip-if-fresh`) ou source inchangée · `1` échec (version précédente conservée) · `3` déjà en cours |
+| Synchronisation complète | la table est tronquée puis rechargée chaque nuit et `UPDATED_AT` est identique sur toutes les lignes : aucun incrémental possible depuis Oracle. Ajoutés, modifiés, retirés et devenus inactifs sont calculés après coup en comparant les deux index (`SnapshotDiff`, clé `CONTRACT`, `UPDATED_AT` exclu) |
 | Verrou | `writable/data/customers_refresh.lock` (`flock` noyau pris par la commande — cron **et** manuel ; libéré par l'OS si le process meurt ; 2e instance → code 3 `SKIPPED`, sans requête Oracle). Pas de `flock(1)` en plus dans le cron |
 | En cas d'échec | code 1, `FAILED raison=…` dans le log, fichier temporaire supprimé, **version active conservée** (dashboard, filtres et exports continuent sur l'ancien snapshot — jamais sur Oracle). Nouvel essai automatique au rattrapage de 06:00 ; sinon relancer à la main après correction |
 | Fichier de travail | version active = `writable/data/snapshots/customers/versions/<id>/customers_list.csv` (via `current.json`) ; lien pratique `writable/data/customers_list.csv` |
@@ -113,6 +119,94 @@ truncate + SQL*Loader (inchangés,                       │ UTF-8, nb de lignes
 indépendants du snapshot)                               ├─ OK : versions/<id> + current.json
                                                         └─ KO : rejected/<id>, snapshot actif conservé
 ```
+
+## 0 ter. Profils POSTPAID et Compteurs Communicants
+
+La règle est définie une seule fois : CTE `profile_calculation` de
+`docs/snapshot/source/customers_list.sql`, à partir de `RATE` et `BILL_NUMBER`
+de la dernière ligne du contrat dans `CMS_RFC.POSTPAID_PROFILE_P`. Extractor ne
+classe personne : il lit `SEGMENTATION`, et la liste affichée vient de
+`App\Services\CustomersList\PostpaidSegmentations`.
+
+| Profil | Condition |
+|---|---|
+| `1 PERFECT` | `rate = 1` |
+| `2 RELIABLE` | `0.75 ≤ rate < 1` |
+| `3 Occasionnal` | `0.50 ≤ rate < 0.75` |
+| `4 At-Risk` | `0.25 ≤ rate < 0.50` |
+| `5 Delinquant` | `0 < rate < 0.25` |
+| `6 Défaillant` | tous les autres cas (dont les anciens Always Late, sometime Paid, Never Paid, Other) |
+| vide (NULL) | `bill_number = 0` sur la dernière ligne, ou contrat sans historique de facturation |
+
+`8 Autre` n'est pas une composante de `6 Défaillant` : c'était le `ELSE` final de
+`SEGMENTATION`, soit les contrats POSTPAID et Compteurs Communicants sans ligne
+de profil. Il ne concerne pas PREPAID, dont la catégorie `Other` est distincte.
+Ces contrats restent non classés. Une dernière ligne à `bill_number = 0` reste
+non classée même si une ligne plus ancienne avait un profil.
+
+Les clients sans profil apparaissent comme « Non classé » dans le graphique et
+restent vides dans le tableau et les exports. Les règles PREPAID ne passent pas
+par ce calcul.
+
+Ordre de mise en production : déployer `customers_list.sql` sur le serveur
+source, laisser le rechargement nocturne de `TB_CUSTOMERS_LIST` s'exécuter,
+vérifier les profils dans la table. Un snapshot produit avant la règle garde
+les anciennes valeurs dans son CSV, jamais réécrit : à la lecture, l'application
+les remplace par `PostpaidSegmentations::LEGACY` (Always Late, sometime Paid,
+Never Paid, Other → `6 Défaillant` ; `8 Autre` → non classé) pour le tableau de
+bord, les filtres et les exports. Cette équivalence ne vérifie pas `bill_number` :
+seul le SQL déployé donne les effectifs définitifs. Retour arrière : restaurer le fichier SQL précédent ; côté
+Extractor, `php spark snapshot:rollback`.
+
+### Décomposition du profil Défaillant (analyse)
+
+La section Postpaid décompose `6 Défaillant` en quatre composantes. Ce ne sont
+pas des profils : `SEGMENTATION` ne les contient jamais, le filtre Segmentation
+ne les propose pas, les exports n'ont pas de colonne pour elles.
+
+La règle est dans la colonne `FAILURE_SUBCATEGORY` de `customers_list.sql`,
+calculée sur la même dernière ligne que le profil. L'ordre est une priorité,
+car les conditions se chevauchent :
+
+| Ordre | Code | Condition (clients `6 Défaillant`) |
+|---|---|---|
+| 1 | `ALWAYS_LATE` | `rate = 0`, `bad_count = bill_number`, `bill_number > 0` |
+| 2 | `NEVER_PAID` | `rate = 0`, `no_paid_count = bill_number`, `bill_number > 0` |
+| 3 | `SOMETIME_PAID` | `rate = 0`, `no_paid_count < bill_number`, `bill_number > 0` |
+| 4 | `OTHER` | tout le reste du profil |
+
+Mise en production, dans cet ordre, sur le serveur source :
+
+0. contrôle à blanc, sans écriture : `./validate_customers_list.sh customers_list.sql CMS_RFC@cmsprod` ;
+1. `ALTER TABLE CMS_RFC.TB_CUSTOMERS_LIST ADD (FAILURE_SUBCATEGORY VARCHAR2(20));`
+2. ajouter le champ à la fin du fichier de contrôle SQL*Loader ;
+3. déployer `customers_list.sql`, puis laisser le rechargement nocturne s'exécuter.
+
+`customers:refresh` lit la colonne dès qu'elle existe dans la table, sans autre
+changement. Les snapshots antérieurs restent décomposés à partir des anciens
+libellés (`FailureSubcategories::LEGACY`). Sur un index DuckDB construit sans
+l'information, l'écran affiche une note au lieu d'une répartition inexacte :
+`php spark snapshot:index --rebuild` la rétablit, tant que le CSV porte les
+anciens libellés ou la colonne.
+
+## 0 quater. Segments PREPAID
+
+La règle est définie une seule fois : CTE `prepaid_rfm` et colonne `SEGMENTATION`
+de `docs/snapshot/source/customers_list.sql`, à partir de `RECENSE` et
+`SEGMENT_RFM_2` de `CMS_RFC.PREPAID_PROFILE_P`. La liste affichée vient de
+`App\Services\CustomersList\PrepaidSegmentations`.
+
+| Segment | Condition |
+|---|---|
+| `1-Stable`, `2-InStable`, `3-At Risk` | `RECENSE < 30` : segment comportemental calculé en amont |
+| `4-Suspect Dormant` | `30 ≤ RECENSE < 60` |
+| `5-Dormant` | `RECENSE ≥ 60`, ou compteur sans profil présent dans `ORDER_MASTER` |
+| `6-Never Vending` | `RECENSE` vide, ou compteur sans profil absent de `ORDER_MASTER` |
+
+`RECENSE` est mesurée à la fin du mois de dernier achat connu. Un snapshot
+produit avant la règle ne contient pas `RECENSE` : l'application renomme ses
+anciennes valeurs à la lecture (`PrepaidSegmentations::LEGACY`), et
+`4-Suspect Dormant` reste à 0 jusqu'au premier chargement issu du SQL déployé.
 
 ## 1. Protocole de livraison
 

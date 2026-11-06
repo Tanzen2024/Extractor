@@ -22,7 +22,7 @@ final class FilterCriteriaTest extends TestCase
             divisions: ['DVC DOUALA NORD', 'DVC DOUALA EST'],
             agences: ['CSC_LOGPOM', 'CSC_PK21'],
             statuses: ['ACTIVE', 'INACTIVE.'],
-            segmentations: ['1 PERFECT', '8 Autre'],
+            segmentations: ['1 PERFECT', '6 Défaillant'],
             segmentsTresor: ['PRIVATE', 'ADMINISTRATION'],
             meters: ['PREPAID', 'POSTPAID', 'Compteurs Communicants'],
             voltages: ['LV', 'MV'],

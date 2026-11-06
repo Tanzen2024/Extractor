@@ -16,10 +16,10 @@ const js = fs.readFileSync(path.join(ROOT, 'public/assets/js/dashboard.js'), 'ut
 // A Chart.js-like instance: what the chart actually plots.
 const chart = (labels, data) => ({ data: { labels, datasets: [{ data }] } });
 
-test('rows come from the chart itself: plotted labels, plotted values, shares on the plotted total', () => {
+test('rows come from the chart itself: plotted labels, plotted values, plotted total', () => {
     const t = cx.tableFromSpec({ chart: chart(['LITTORAL', 'CENTRE', 'Autres'], [600, 300, 100]) });
     assert.equal(t.total, 1000);
-    assert.deepEqual(t.rows.map((r) => [r.label, r.count, r.share]), [['LITTORAL', 600, 0.6], ['CENTRE', 300, 0.3], ['Autres', 100, 0.1]]);
+    assert.deepEqual(t.rows.map((r) => [r.label, r.count]), [['LITTORAL', 600], ['CENTRE', 300], ['Autres', 100]]);
     assert.equal(t.withValue, false);
 });
 
@@ -27,21 +27,21 @@ test('a display label differing from its technical value adds a "Valeur source" 
     const t = cx.tableFromSpec({ chart: chart(['Suspect Dormant', '1 Gros payeur'], [5, 7]), values: ['4-Suspect Dormant', '1 Gros payeur'] });
     assert.equal(t.withValue, true);
     const csv = cx.toCsv(t, 'fr').split('\r\n');
-    assert.equal(csv[0], 'Catégorie;Valeur source;Nombre de clients;Part (%)');
-    assert.equal(csv[1], 'Suspect Dormant;4-Suspect Dormant;5;41,7');
+    assert.equal(csv[0], 'Catégorie;Valeur source;Nombre de clients');
+    assert.equal(csv[1], 'Suspect Dormant;4-Suspect Dormant;5');
 });
 
-test('CSV fr = ";" + decimal comma, en = "," + decimal point; translated headers', () => {
+test('CSV fr = ";", en = ","; translated headers; counts only', () => {
     const t = cx.tableFromSpec({ chart: chart(['A', 'B'], [1, 2]) });
-    assert.equal(cx.toCsv(t, 'fr'), 'Catégorie;Nombre de clients;Part (%)\r\nA;1;33,3\r\nB;2;66,7\r\n');
-    assert.equal(cx.toCsv(t, 'en'), 'Category,Number of customers,Share (%)\r\nA,1,33.3\r\nB,2,66.7\r\n');
+    assert.equal(cx.toCsv(t, 'fr'), 'Catégorie;Nombre de clients\r\nA;1\r\nB;2\r\n');
+    assert.equal(cx.toCsv(t, 'en'), 'Category,Number of customers\r\nA,1\r\nB,2\r\n');
 });
 
 test('CSV quoting and formula neutralisation', () => {
     const t = cx.tableFromSpec({ rows: [{ label: 'X;"Y"', count: 1 }, { label: '=HYPERLINK("x")', count: 1 }] });
     const lines = cx.toCsv(t, 'fr').split('\r\n');
-    assert.equal(lines[1], '"X;""Y""";1;50,0');
-    assert.equal(lines[2], '"\'=HYPERLINK(""x"")";1;50,0');
+    assert.equal(lines[1], '"X;""Y""";1');
+    assert.equal(lines[2], '"\'=HYPERLINK(""x"")";1');
 });
 
 test('empty dataset = no rows (the UI refuses to build a file)', () => {
@@ -81,7 +81,7 @@ function unzip(buf) {
     return files;
 }
 
-test('XLSX: valid package, numeric counts, 0.0% shares, Contexte sheet with filters', () => {
+test('XLSX: valid package, numeric counts only, Contexte sheet with filters', () => {
     const t = cx.tableFromSpec({ chart: chart(['LITTORAL', 'Autres'], [3, 1]) });
     const bytes = cx.toXlsx(t, {
         title: 'Répartition par région', filters: [{ label: 'Région', text: 'LITTORAL & <SUD>' }],
@@ -91,17 +91,17 @@ test('XLSX: valid package, numeric counts, 0.0% shares, Contexte sheet with filt
     assert.deepEqual(Object.keys(f).sort(), ['[Content_Types].xml', '_rels/.rels', 'xl/_rels/workbook.xml.rels',
         'xl/styles.xml', 'xl/workbook.xml', 'xl/worksheets/sheet1.xml', 'xl/worksheets/sheet2.xml']);
     assert.match(f['xl/workbook.xml'], /<sheet name="Données" sheetId="1" r:id="rId1"\/><sheet name="Contexte"/);
-    assert.match(f['xl/worksheets/sheet1.xml'], /<c r="B2" s="2"><v>3<\/v><\/c><c r="C2" s="3"><v>0.75<\/v><\/c>/);
+    assert.match(f['xl/worksheets/sheet1.xml'], /<c r="B2" s="2"><v>3<\/v><\/c><\/row>/);
     assert.match(f['xl/worksheets/sheet2.xml'], /LITTORAL &amp; &lt;SUD&gt;/);
     assert.match(f['xl/worksheets/sheet2.xml'], /23\/10\/2026 14:05/);
-    assert.match(f['xl/styles.xml'], /formatCode="0.0%"/);
+    assert.doesNotMatch(f['xl/styles.xml'], /%/);
 });
 
 test('XLSX in English: English sheet names and headers', () => {
     const t = cx.tableFromSpec({ chart: chart(['A'], [1]) });
     const f = unzip(cx.toXlsx(t, { title: 'T', filters: [], date: new Date(2026, 0, 1) }, 'en'));
     assert.match(f['xl/workbook.xml'], /name="Data".*name="Context"/);
-    assert.match(f['xl/worksheets/sheet1.xml'], />Category<.*>Number of customers<.*>Share \(%\)</);
+    assert.match(f['xl/worksheets/sheet1.xml'], />Category<.*>Number of customers</);
     assert.match(f['xl/worksheets/sheet2.xml'], /None \(whole base\)/);
 });
 

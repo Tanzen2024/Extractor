@@ -53,7 +53,7 @@ interface SnapshotQueryEngine
      *
      * @param list<string> $meteredMeters
      *
-     * @return array{kpis: array{total:int, actifs:int, avecCompteur:int, nuiCorrect:int, contactOk:int}, distributions: array{region: array<string,int>, status: array<string,int>, segmentation: array<string,int>, meterType: array<string,int>}}
+     * @return array{kpis: array{total:int, actifs:int, avecCompteur:int, nuiCorrect:int, contactOk:int}, distributions: array{region: array<string,int>, status: array<string,int>, segmentation: array<string,int>, meterType: array<string,int>, failure: array<string,int>}}
      */
     public function summary(FilterCriteria $criteria, array $meteredMeters): array;
 
@@ -66,9 +66,11 @@ interface SnapshotQueryEngine
     public function reference(): array;
 
     /**
-     * Row counts per raw value of REGION, STATUS, SEGMENTATION and METER.
+     * Row counts per raw value of REGION, STATUS, SEGMENTATION and METER,
+     * and per component of the 6 Défaillant profile (FailureSubcategories;
+     * rows without one are not listed).
      *
-     * @return array{region: array<string,int>, status: array<string,int>, segmentation: array<string,int>, meterType: array<string,int>}
+     * @return array{region: array<string,int>, status: array<string,int>, segmentation: array<string,int>, meterType: array<string,int>, failure: array<string,int>}
      */
     public function distributions(FilterCriteria $criteria): array;
 

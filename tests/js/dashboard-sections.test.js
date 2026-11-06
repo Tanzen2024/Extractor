@@ -8,7 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { SECTIONS, universeOf, sectionCriteria, unassigned } = require('../../public/assets/js/dashboard-sections.js');
+const { SECTIONS, universeOf, sectionCriteria, sectionsTotal, unassigned, failureBreakdown, withFailureFilter } = require('../../public/assets/js/dashboard-sections.js');
 
 const ROOT = path.join(__dirname, '../..');
 
@@ -19,11 +19,30 @@ const meterUniverse = (v) => {
     if (n === 'PREPAID') return 'PREPAID';
     return null;
 };
-const POSTPAID_SEGS = ['1 PERFECT', '8 Autre'];
-const PREPAID_SEGS = ['5-Dormant', 'Other'];
+const POSTPAID_SEGS = ['1 PERFECT', '6 Défaillant'];
+const PREPAID_SEGS = ['5-Dormant', '6-Never Vending'];
 const segUniverse = (v) => (POSTPAID_SEGS.includes(v) ? 'POSTPAID' : PREPAID_SEGS.includes(v) ? 'PREPAID' : null);
 const OFFERED = ['POSTPAID', 'PREPAID', 'Compteurs Communicants'];
 const crit = (applied, key) => sectionCriteria(applied, universeOf(key), OFFERED, meterUniverse, segUniverse);
+
+test('Défaillant breakdown: shares of the Défaillant total, 100 % together; no answer = empty', () => {
+    const view = failureBreakdown({ total: 8, unassigned: 0, components: [
+        { value: 'ALWAYS_LATE', count: 1 }, { value: 'SOMETIME_PAID', count: 3 }, { value: 'NEVER_PAID', count: 4 }, { value: 'OTHER', count: 0 },
+    ] });
+    assert.deepEqual(view.rows.map((r) => r.share), [12.5, 37.5, 50, 0]);
+    assert.equal(view.rows.reduce((s, r) => s + r.count, 0), view.total);
+    assert.equal(view.rows.reduce((s, r) => s + r.share, 0), 100);
+    assert.deepEqual(failureBreakdown(undefined), { total: 0, unassigned: 0, rows: [] });
+    assert.deepEqual(failureBreakdown({ total: 0, components: [{ value: 'OTHER', count: 0 }] }).rows[0].share, 0);
+});
+
+test('component selected: added to a copy of the criteria; nothing selected or no possible row: unchanged', () => {
+    const c = { meter: ['POSTPAID'] };
+    assert.deepEqual(withFailureFilter(c, 'NEVER_PAID'), { meter: ['POSTPAID'], failure_subcategory: ['NEVER_PAID'] });
+    assert.deepEqual(c, { meter: ['POSTPAID'] }, 'page filters untouched');
+    assert.equal(withFailureFilter(c, null), c);
+    assert.equal(withFailureFilter(null, 'NEVER_PAID'), null);
+});
 
 test('two sections, Postpaid first', () => {
     assert.deepEqual(SECTIONS.map((s) => s.key), ['postpaid', 'prepaid']);
@@ -50,13 +69,28 @@ test('segmentation filter: split by universe; ticked segments all of the other u
     const applied = { segmentation: ['1 PERFECT', '5-Dormant'] };
     assert.deepEqual(crit(applied, 'postpaid').segmentation, ['1 PERFECT']);
     assert.deepEqual(crit(applied, 'prepaid').segmentation, ['5-Dormant']);
-    assert.equal(crit({ segmentation: ['Other'] }, 'postpaid'), null);
+    assert.equal(crit({ segmentation: ['6-Never Vending'] }, 'postpaid'), null);
     // A value in no known list is left to the server, in both sections.
     assert.deepEqual(crit({ segmentation: ['X'] }, 'prepaid').segmentation, ['X']);
 });
 
 test('the snapshot offers no meter of a universe -> that section is null', () => {
     assert.equal(sectionCriteria({}, 'PREPAID', ['POSTPAID'], meterUniverse, segUniverse), null);
+});
+
+test('total clients: Postpaid + Prepaid, null until both figures are known, an empty section counts 0', () => {
+    assert.equal(sectionsTotal({ postpaid: 1339542, prepaid: 1093744 }), 2433286);
+    assert.equal(sectionsTotal({ postpaid: 1339542 }), null);
+    assert.equal(sectionsTotal({}), null);
+    assert.equal(sectionsTotal({ postpaid: 0, prepaid: 1093744 }), 1093744);
+});
+
+test('view: "Total clients" comes after the views and is the only link to the table, opened on "Tous"', () => {
+    const view = fs.readFileSync(path.join(ROOT, 'app/Views/dashboard/index.php'), 'utf8');
+    assert.ok(view.indexOf('data-section-count="<?= $sk ?>"') < view.indexOf('data-sections-total'));
+    assert.match(view, /href="#bscdSection-detail" data-table-scope-link="all"/);
+    assert.equal(view.match(/href="#bscdSection-detail"/g).length, 1);
+    assert.ok(view.includes('id="bscdSection-detail"'), 'the detail section itself stays');
 });
 
 test('unassigned rows: page count minus both sections, null while a figure is missing, never negative', () => {

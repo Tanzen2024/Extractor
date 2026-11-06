@@ -38,9 +38,9 @@ final class QueryBuilderSnapshotParityTest extends CIUnitTestCase
         $statuses = ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'INACTIVATION IN PROCESS.', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVE.'];
         $meters   = ['PREPAID', 'POSTPAID', 'Compteurs Communicants'];
         $segments = [
-            'PREPAID'                => ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'],
-            'POSTPAID'               => ['1 PERFECT', '2 RELIABLE', '3 Occasional', '4 At-Risk', '5 Delinquant', '6 Always Late', '7 Never Paid', '8 Sometimes Paid', '9 Others'],
-            'Compteurs Communicants' => ['1 PERFECT', '2 RELIABLE', '4 At-Risk', '9 Others'],
+            'PREPAID'                => ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6-Never Vending'],
+            'POSTPAID'               => ['1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk', '5 Delinquant', '6 Défaillant'],
+            'Compteurs Communicants' => ['1 PERFECT', '2 RELIABLE', '4 At-Risk', '6 Défaillant'],
         ];
         $dates = ['15/01/2020', '31/12/2019', '01/01/2020', '29/02/2024', '01/07/0980', '31/12/2024', '01/01/2025'];
 
@@ -102,9 +102,9 @@ final class QueryBuilderSnapshotParityTest extends CIUnitTestCase
             'division'              => FilterCriteria::fromArray(['divisions' => ['DVC 1', 'DVC 3']]),
             'agence'                => FilterCriteria::fromArray(['agences' => ['CSC 2']]),
             'statut'                => FilterCriteria::fromArray(['statuses' => $active]),
-            'POSTPAID'              => FilterCriteria::fromArray(['meters' => ['POSTPAID'], 'segmentations' => ['1 PERFECT', '4 At-Risk', '8 Sometimes Paid']]),
-            'PREPAID'               => FilterCriteria::fromArray(['meters' => ['PREPAID'], 'segmentations' => ['1-Stable', '3-At Risk', '6 Old_Dormant', 'Other']]),
-            'COMPTEURS COMMUNICANTS' => FilterCriteria::fromArray(['meters' => ['Compteurs Communicants'], 'segmentations' => ['1 PERFECT', '9 Others']]),
+            'POSTPAID'              => FilterCriteria::fromArray(['meters' => ['POSTPAID'], 'segmentations' => ['1 PERFECT', '4 At-Risk', '3 Occasionnal']]),
+            'PREPAID'               => FilterCriteria::fromArray(['meters' => ['PREPAID'], 'segmentations' => ['1-Stable', '3-At Risk', '5-Dormant', '6-Never Vending']]),
+            'COMPTEURS COMMUNICANTS' => FilterCriteria::fromArray(['meters' => ['Compteurs Communicants'], 'segmentations' => ['1 PERFECT', '6 Défaillant']]),
             'Segment Trésorerie'        => FilterCriteria::fromArray(['segmentsTresor' => ['PUBLIC']]),
             'compteur'              => FilterCriteria::fromArray(['meters' => ['PREPAID', 'Compteurs Communicants']]),
             'tension'               => FilterCriteria::fromArray(['voltages' => ['MV']]),

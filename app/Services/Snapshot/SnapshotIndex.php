@@ -68,6 +68,7 @@ final class SnapshotIndex
             $this->path($snapshot),
             // Only a fact verified for THIS version at build time; absent = the exact (slower) SQL.
             is_array($info) && ($info['version'] ?? null) === $snapshot->id && ($info['contract_unique_numeric'] ?? false) === true,
+            is_array($info) && ($info['version'] ?? null) === $snapshot->id && ($info['failure_subcategory'] ?? false) === true,
         );
     }
 
@@ -114,6 +115,7 @@ final class SnapshotIndex
                 'version'                 => $snapshot->id,
                 'rows'                    => $rows,
                 'contract_unique_numeric' => (int) ($facts['distinct_contracts'] ?? -1) === $rows && (int) ($facts['non_numeric'] ?? -1) === 0,
+                'failure_subcategory'     => true,
                 'duckdb'                  => $this->duckdb->version(),
                 'built_at'                => date(DATE_ATOM),
             ];
@@ -144,7 +146,9 @@ final class SnapshotIndex
      */
     private function normalise(ActiveSnapshot $snapshot, string $target): array
     {
-        $reader  = $snapshot->reader();
+        // With the analytic column: the read folds SEGMENTATION, and an index
+        // holding only the folded value could no longer break the profile down.
+        $reader  = $snapshot->reader(true);
         $index   = $reader->index();
         $date    = $snapshot->dateFormat() !== null ? new SnapshotDate($snapshot->dateFormat()) : null;
         $d       = $snapshot->delimiter();

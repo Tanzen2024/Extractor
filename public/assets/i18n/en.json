@@ -1,8 +1,7 @@
 {
     "meta": {
         "numberLocale": "en-GB",
-        "decimalSeparator": ".",
-        "percent": "{value}%"
+        "decimalSeparator": "."
     },
     "glossary": {
         "payerProfile": "Payer Profile",
@@ -35,6 +34,46 @@
         "no": "No"
     },
     "dashboard": {
+        "sync": {
+            "state": {
+                "fresh": "Up to date",
+                "late": "Late",
+                "failed": "Failed"
+            },
+            "status": {
+                "running": "In progress",
+                "success": "Succeeded",
+                "failed": "Failed",
+                "skipped": "No new data"
+            },
+            "trigger": {
+                "scheduled": "Scheduled",
+                "manual": "Manual"
+            },
+            "reason": {
+                "oracle_or_internal_error": "Oracle read error",
+                "source_unchanged": "Oracle was not reloaded",
+                "row_count_mismatch": "Oracle changed during the read",
+                "volume_drop": "Abnormally low volume",
+                "no_data": "No data received",
+                "disk_space": "Not enough disk space",
+                "interrupted": "Run interrupted",
+                "write_failed": "Could not write the file",
+                "index_failed": "Could not build the index",
+                "duckdb_failed": "Could not build the index",
+                "other": "See the synchronisation log"
+            },
+            "lastSuccess": "Last successful synchronisation",
+            "lastRun": "Last attempt",
+            "clients": "Customers synchronised",
+            "source": "Oracle load",
+            "nextRun": "Next synchronisation",
+            "none": "None",
+            "notScheduled": "Not scheduled",
+            "running": "Synchronisation in progress…",
+            "unavailable": "Status unavailable",
+            "historyEmpty": "No synchronisation recorded."
+        },
         "sections": {
             "clients": {
                 "one": "{count} customer",
@@ -81,16 +120,13 @@
             "niuCorrect": "CORRECT NIU",
             "niuToReclass": "NIU TO RECLASSIFY",
             "smartMeters": "SMART METERS",
-            "unstable": "Unstable",
-            "atRisk": "At risk",
-            "other": "Other"
+            "unclassified": "Unclassified"
         },
         "filters": {
             "date_from": "From",
             "date_to": "Until"
         },
         "kpi": {
-            "ofTotal": "{pct} of total",
             "nuiCorrectsNote": "Correct NIUs matching the filters"
         },
         "table": {
@@ -126,6 +162,15 @@
             "launchFailedHttp": "The export could not be started (HTTP {status}). Please try again.",
             "unexpected": "Unexpected server response. Reload the page and try again.",
             "network": "Network error. Please try again."
+        },
+        "failure": {
+            "total": "TOTAL DÉFAILLANT",
+            "filter": "Défaillant component",
+            "unassigned": "{n} Défaillant customers without a component: this snapshot does not carry the information.",
+            "alwaysLate": "Always Late",
+            "sometimePaid": "Sometime Paid",
+            "neverPaid": "Never Paid",
+            "other": "Other"
         }
     },
     "export": {

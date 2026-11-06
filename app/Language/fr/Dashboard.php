@@ -34,6 +34,8 @@ return [
             'title'    => 'Vue Prepaid',
             'subtitle' => 'Rapports et analyses Prepaid',
         ],
+        'total'     => 'Total clients :',
+        'totalHint' => 'Afficher tous les clients dans le tableau',
         'detail'   => [
             'title'    => 'Détail des clients',
             'subtitle' => 'Liste et export des clients actifs selon les filtres appliqués',
@@ -44,6 +46,36 @@ return [
             'postpaid' => 'Postpaid',
             'prepaid'  => 'Prepaid',
         ],
+    ],
+
+    // Freshness indicator; its state and figures are drawn by sync-status.js.
+    'sync' => [
+        'label'        => 'Fraîcheur des données',
+        'history'      => 'Historique',
+        'historyTitle' => 'Historique des synchronisations',
+        'columns'      => [
+            'start'    => 'Début',
+            'duration' => 'Durée',
+            'trigger'  => 'Origine',
+            'status'   => 'Statut',
+            'read'     => 'Lus',
+            'added'    => 'Ajoutés',
+            'modified' => 'Modifiés',
+            'ignored'  => 'Inchangés',
+            'removed'  => 'Retirés',
+            'error'    => 'Erreur',
+        ],
+    ],
+
+    // Analysis of the 6 Défaillant profile (Postpaid section): not profiles.
+    'failure' => [
+        'title'        => 'Décomposition du profil Défaillant',
+        'subtitle'     => 'Répartition des clients défaillants selon leur comportement de paiement.',
+        'filter'       => 'Composante Défaillant',
+        'alwaysLate'   => 'Always Late',
+        'sometimePaid' => 'Sometime Paid',
+        'neverPaid'    => 'Never Paid',
+        'other'        => 'Other',
     ],
 
     'charts' => [

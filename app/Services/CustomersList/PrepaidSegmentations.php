@@ -3,30 +3,42 @@
 namespace App\Services\CustomersList;
 
 /**
- * The 8 PREPAID segmentation categories produced upstream by
- * prepaid_profile_p.sql — exact SQL values (never rewritten here), their
- * display label, in the STRICT business display order.
+ * The 6 official PREPAID segments — exact SQL values, in the STRICT business
+ * display order.
  *
- * Only some of them exist in TB_CUSTOMERS_LIST at a given time (2026-09-30:
- * 5-Dormant, 6 Old_Dormant, 7 Never Vending, Other), so the filter options
- * are completed with the missing ones (count 0): every category can always
- * be selected and validated, and keeps its slot in the chart.
+ * Extractor does not classify anyone: the rule lives once, in the prepaid_rfm
+ * CTE and the SEGMENTATION column of docs/snapshot/source/customers_list.sql,
+ * and reaches the application through SEGMENTATION and SEGMENT_RFM_2.
  *
- * Mirrored by PREPAID_SEGMENTATIONS / SEGMENTATION_LABELS in
- * public/assets/js/dashboard.js (kept in sync by a test).
+ * A segment may be absent from a snapshot, so the filter options are
+ * completed with the missing ones (count 0): every segment can always be
+ * selected and validated, and keeps its slot in the chart.
+ *
+ * Mirrored by PREPAID_SEGMENTATIONS in public/assets/js/dashboard.js (kept in
+ * sync by a test).
  */
 final class PrepaidSegmentations
 {
-    /** SQL value => display label, in display order. */
-    public const LABELS = [
-        '1-Stable'          => 'Stable',
-        '2-InStable'        => 'Instable',
-        '3-At Risk'         => 'À risque',
-        '4-Suspect Dormant' => 'Suspect Dormant',
-        '5-Dormant'         => 'Dormant',
-        '6 Old_Dormant'     => 'Old Dormant',
-        '7 Never Vending'   => 'Never Vending',
-        'Other'             => 'Other',
+    /** @var list<string> */
+    public const VALUES = [
+        '1-Stable',
+        '2-InStable',
+        '3-At Risk',
+        '4-Suspect Dormant',
+        '5-Dormant',
+        '6-Never Vending',
+    ];
+
+    /**
+     * Former values => what they are now ('' = unclassified), applied on
+     * every read: a snapshot produced before the rule keeps them in its CSV,
+     * which is never rewritten. It holds no RECENSE, so its customers keep
+     * their former segment under the new name until the next load.
+     */
+    public const LEGACY = [
+        '6 Old_Dormant'   => '5-Dormant',
+        '7 Never Vending' => '6-Never Vending',
+        'Other'           => '',
     ];
 
     public const METER = 'PREPAID';
@@ -34,11 +46,11 @@ final class PrepaidSegmentations
     /** @return list<string> */
     public static function values(): array
     {
-        return array_keys(self::LABELS);
+        return self::VALUES;
     }
 
     /**
-     * Appends the PREPAID categories missing from a filter-options payload's
+     * Appends the PREPAID segments missing from a filter-options payload's
      * segmentation list, at count 0 (existing entries untouched).
      *
      * @param array<string, mixed> $options
@@ -61,7 +73,7 @@ final class PrepaidSegmentations
     }
 
     /**
-     * True when the meter filter is PREPAID only and every PREPAID category
+     * True when the meter filter is PREPAID only and every PREPAID segment
      * is selected: the segmentation filter then restricts nothing and must
      * behave exactly like no selection (an IN list would also drop the
      * PREPAID rows whose SEGMENTATION is blank).

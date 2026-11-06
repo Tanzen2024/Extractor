@@ -3,8 +3,10 @@
 use App\Controllers\DashboardController;
 use App\Database\Migrations\AddProgressToExportJobs;
 use App\Database\Migrations\AddSnapshotVersionToExportJobs;
+use App\Database\Migrations\CreateCustomersSyncRunsTable;
 use App\Database\Migrations\CreateExportJobsTable;
 use App\Database\Migrations\EnsureExportJobsSchema;
+use App\Models\CustomersSyncRunModel;
 use App\Models\ExportJobModel;
 use App\Services\Export\ExportJobRunner;
 use App\Services\OracleExtractionService;
@@ -145,6 +147,42 @@ final class SnapshotUserFlowTest extends CIUnitTestCase
             ->controller(DashboardController::class)->execute($method)->response();
 
         return [$response->getStatusCode(), (array) json_decode((string) $response->getBody(), true)];
+    }
+
+    public function testSyncEndpointsTouchNoOracleAndKeepTechnicalErrorsForAuditors(): void
+    {
+        require_once APPPATH . 'Database/Migrations/2026-11-06-090000_CreateCustomersSyncRunsTable.php';
+        $forge = Config\Database::forge();
+        $forge->dropTable('customers_sync_runs', true);
+        (new CreateCustomersSyncRunsTable($forge))->up();
+
+        try {
+            $version = $this->installVersion(6, 'DRC');
+            (new CustomersSyncRunModel())->insert([
+                'trigger_type' => 'scheduled', 'status' => 'failed', 'started_at' => date('Y-m-d H:i:s', time() + 60),
+                'finished_at' => date('Y-m-d H:i:s', time() + 120), 'error_count' => 1,
+                'error_reason' => 'oracle_or_internal_error', 'error_message' => 'ORA-03113 sur /chemin/serveur',
+            ]);
+
+            [$code, $status] = $this->call('syncStatus');
+            $this->assertSame(200, $code);
+            $this->assertSame('failed', $status['state']);
+            $this->assertSame($version, $status['version']);
+            $this->assertSame(4, $status['clients'], 'the same count as the table: active perimeter only');
+
+            [, $history] = $this->call('syncHistory');
+            $this->assertSame('oracle_or_internal_error', $history['runs'][0]['errorReason']);
+            $this->assertNull($history['runs'][0]['errorMessage'], 'no technical detail without AUDIT_VIEW');
+
+            session()->set('permissions', ['AUDIT_VIEW']);
+            [, $history] = $this->call('syncHistory');
+            $this->assertSame('ORA-03113 sur /chemin/serveur', $history['runs'][0]['errorMessage']);
+
+            $this->assertSame(0, OracleExtractionService::$connectionAttempts);
+        } finally {
+            session()->remove('permissions');
+            $forge->dropTable('customers_sync_runs', true);
+        }
     }
 
     public function testTheWholeUserFlowNeverTouchesOracle(): void

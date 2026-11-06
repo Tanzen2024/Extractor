@@ -93,7 +93,7 @@ class DashboardService
      * @return array{
      *   totalRows:int,
      *   kpis:array{total:int, totalPct:float, reference:array{totalClients:int, totalNui:int}, nuiCorrects:array{value:int,pct:float}, actifs:array{value:int,pct:float}, avecCompteur:array{value:int,pct:float}, contacts:array{value:int,pct:float}},
-     *   charts:array{region:list<array{value:string,count:int}>, status:list<array{value:string,count:int}>, segmentation:list<array{value:string,count:int}>, meterType:list<array{value:string,count:int}>}
+     *   charts:array{region:list<array{value:string,count:int}>, status:list<array{value:string,count:int}>, segmentation:list<array{value:string,count:int}>, meterType:list<array{value:string,count:int}>, failureBreakdown:array{total:int, components:list<array{value:string,count:int}>, unassigned:int}}
      * }
      */
     public function stats(FilterCriteria $criteria, bool $fresh = false): array
@@ -129,6 +129,9 @@ class DashboardService
                     // Every row falls in exactly one METER bucket (blank ->
                     // "Non renseigné"), so the counts sum to totalRows.
                     'meterType'    => $this->distribution($dist['meterType']),
+                    // Analysis of the 6 Défaillant profile, same query: the
+                    // profile list above stays the only official one.
+                    'failureBreakdown' => FailureSubcategories::breakdown($dist['segmentation'], $dist['failure']),
                 ],
             ];
         });
@@ -294,7 +297,7 @@ class DashboardService
      */
     private function remember(string $key, bool $fresh, callable $compute): mixed
     {
-        $cacheKey = 'cl_snap_' . $this->engine()->version() . '_' . ActiveCustomers::SCOPE . '_' . $key;
+        $cacheKey = 'cl_snap_' . $this->engine()->version() . '_' . ActiveCustomers::SCOPE . '_' . PostpaidSegmentations::CACHE_TAG . '_' . $key;
 
         if (! $fresh && $this->cacheTtl > 0) {
             $cached = $this->cache->get($cacheKey);

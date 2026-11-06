@@ -26,6 +26,9 @@ final class CustomersRefresher
     public const RESULT_FAILED    = 'failed';
     public const RESULT_BUSY      = 'busy';
 
+    /** Oracle still holds the load the active version was extracted from. */
+    public const RESULT_UNCHANGED = 'unchanged';
+
     private SnapshotStore $store;
 
     /** @var callable(string, string): void */
@@ -34,12 +37,15 @@ final class CustomersRefresher
     /**
      * @param callable(string, string): void|null $log        Receives (level, message).
      * @param callable(): bool|null               $shouldStop See OracleSnapshotExtractor.
+     * @param callable(): void|null               $onStart    Called once the lock is held: a run that
+     *                                                        finds another in progress never reaches it.
      */
     public function __construct(
         ?SnapshotStore $store = null,
         private readonly ?OracleSnapshotExtractor $extractor = null,
         ?callable $log = null,
         private readonly mixed $shouldStop = null,
+        private readonly mixed $onStart = null,
     ) {
         $this->store = $store ?? new SnapshotStore();
         $this->log   = $log ?? static function (): void {};
@@ -74,11 +80,21 @@ final class CustomersRefresher
             @unlink($tmp);
             @unlink($manifest);
 
+            if (is_callable($this->onStart)) {
+                ($this->onStart)();
+            }
+
             $extractor = $this->extractor ?? new OracleSnapshotExtractor(
                 log: $this->log,
                 shouldStop: is_callable($this->shouldStop) ? $this->shouldStop : null,
                 progressEvery: $config->refreshProgressEvery,
             );
+
+            if (! $force && ($unchanged = $this->sourceUnchanged($extractor)) !== null) {
+                return $this->result(self::RESULT_UNCHANGED, 'source_unchanged', $unchanged, null, $previous);
+            }
+
+            $this->guardDiskSpace(dirname($tmp));
 
             $facts = $extractor->extract($tmp);
 
@@ -107,6 +123,42 @@ final class CustomersRefresher
             @unlink($manifest);
             flock($lock, LOCK_UN);
             fclose($lock);
+        }
+    }
+
+    /**
+     * The nightly reload stamps one UPDATED_AT on every row: same stamp and
+     * same row count as the active version means the reload has not happened
+     * yet (or failed). Extracting again would take up to an hour to produce
+     * the same data, and would report it as new.
+     *
+     * @return string|null Why nothing needs extracting, or null to go on.
+     */
+    private function sourceUnchanged(OracleSnapshotExtractor $extractor): ?string
+    {
+        try {
+            $active = $this->store->active();
+        } catch (SnapshotException) {
+            return null; // first install
+        }
+
+        $known  = (string) ($active->meta['manifest']['source_updated_at'] ?? '');
+        $source = $extractor->sourceState();
+
+        if ($known === '' || $source['updated_at'] !== $known || $source['rows'] !== $active->rows()) {
+            return null;
+        }
+
+        return "Source Oracle inchangée depuis la version active {$active->id} (UPDATED_AT {$known}, {$source['rows']} lignes) : rechargement amont non effectué ?";
+    }
+
+    private function guardDiskSpace(string $dir): void
+    {
+        $minimum = $this->store->config()->refreshMinFreeBytes;
+        $free    = @disk_free_space(is_dir($dir) ? $dir : $this->store->baseDir());
+
+        if ($free !== false && $free < $minimum) {
+            throw new SnapshotException('disk_space', sprintf('Espace disque insuffisant : %.1f Go libres, %.1f Go requis.', $free / 1073741824, $minimum / 1073741824));
         }
     }
 

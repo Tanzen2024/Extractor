@@ -188,4 +188,19 @@ final class SnapshotVersioningTest extends CIUnitTestCase
         $this->assertSame($id, CustomersRefresh::activeExtractedToday($this->fx->config, '2026-09-25'));
         $this->assertNull(CustomersRefresh::activeExtractedToday($this->fx->config, '2026-09-26'), "yesterday's version: refresh");
     }
+
+    public function testCatchUpRunJudgesTheOracleLoadNotTheExtractionTime(): void
+    {
+        $this->install(3);
+        $active = $this->fx->store->active();
+        $meta   = $active->meta;
+
+        // Extracted at 03:00 on the 26th, before that night's reload: still the 25th's data.
+        $meta['generated_at']                  = '2026-09-26T03:00:00+01:00';
+        $meta['manifest']['source_updated_at'] = '2026-09-25 04:32:26';
+        $this->fx->store->writeJsonAtomic($this->fx->store->versionDir($active->id) . DIRECTORY_SEPARATOR . 'customers_list.meta.json', $meta);
+
+        $this->assertNull(CustomersRefresh::activeExtractedToday($this->fx->config, '2026-09-26'));
+        $this->assertSame($active->id, CustomersRefresh::activeExtractedToday($this->fx->config, '2026-09-25'));
+    }
 }

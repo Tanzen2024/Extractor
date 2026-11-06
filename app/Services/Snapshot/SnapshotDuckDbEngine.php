@@ -3,7 +3,10 @@
 namespace App\Services\Snapshot;
 
 use App\Services\CustomersList\ActiveCustomers;
+use App\Services\CustomersList\FailureSubcategories;
 use App\Services\CustomersList\FilterCriteria;
+use App\Services\CustomersList\PostpaidSegmentations;
+use App\Services\CustomersList\PrepaidSegmentations;
 use App\Services\CustomersList\QueryBuilder;
 
 /**
@@ -23,7 +26,6 @@ use App\Services\CustomersList\QueryBuilder;
  */
 final class SnapshotDuckDbEngine implements SnapshotQueryEngine
 {
-    private const T = SnapshotIndex::TABLE;
 
     /** @var array<string, true> columns the version's index holds */
     private array $columns;
@@ -34,12 +36,15 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
      *        number. Then "distinct contracts" are simply rows and CONTRACT
      *        alone orders rows totally — same answers, ~6× cheaper KPIs.
      *        False (or unknown): the exact COUNT(DISTINCT) / text tie-break SQL.
+     * @param bool $indexHasFailure the index was built with FailureSubcategories::COLUMN.
+     *        False: an older index, whose SEGMENTATION still holds the former labels.
      */
     public function __construct(
         private readonly ActiveSnapshot $snapshot,
         private readonly DuckDb $duckdb,
         private readonly string $database,
         private readonly bool $contractUniqueNumeric = false,
+        private readonly bool $indexHasFailure = false,
     ) {
         $header        = (string) ($snapshot->meta['header'] ?? '');
         $this->columns = array_fill_keys($header !== '' ? explode($snapshot->delimiter(), $header) : [], true);
@@ -55,9 +60,42 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
         return $this->snapshot;
     }
 
+    /**
+     * The index, as every query must see it: the former segment values
+     * translated, and FailureSubcategories::COLUMN on every row whatever the index.
+     */
+    private function table(): string
+    {
+        $translated = self::translated('SEGMENTATION', PostpaidSegmentations::ALL_LEGACY)
+            . ', ' . self::translated('SEGMENT_RFM_2', PrepaidSegmentations::LEGACY);
+
+        if ($this->indexHasFailure) {
+            return "(SELECT * REPLACE ({$translated}) FROM " . SnapshotIndex::TABLE . ')';
+        }
+
+        $failure = '';
+        foreach (FailureSubcategories::LEGACY as $from => $to) {
+            $failure .= ' WHEN ' . DuckDb::literal($from) . ' THEN ' . DuckDb::literal($to);
+        }
+
+        return "(SELECT * REPLACE ({$translated}), CASE SEGMENTATION{$failure} ELSE '' END AS " . FailureSubcategories::COLUMN
+            . ' FROM ' . SnapshotIndex::TABLE . ')';
+    }
+
+    /** @param array<string, string> $map */
+    private static function translated(string $column, array $map): string
+    {
+        $case = '';
+        foreach ($map as $from => $to) {
+            $case .= ' WHEN ' . DuckDb::literal($from) . ' THEN ' . DuckDb::literal($to);
+        }
+
+        return "CASE {$column}{$case} ELSE {$column} END AS {$column}";
+    }
+
     public function count(FilterCriteria $criteria, string $search = ''): int
     {
-        $rows = $this->run('SELECT COUNT(*) AS n FROM ' . self::T . $this->where($criteria, $search));
+        $rows = $this->run('SELECT COUNT(*) AS n FROM ' . $this->table() . $this->where($criteria, $search));
 
         return (int) ($rows[0]['n'] ?? 0);
     }
@@ -98,7 +136,7 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
                 ' . $this->contracts('METER IN (' . $metered . ')') . ' AS avec_compteur,
                 ' . $this->contracts('contains(upper(NUI_QC), \'CORRECT\')') . ' AS nui_correct,
                 COALESCE(SUM(CASE WHEN trim(PHONE_NUMBERS) <> \'\' OR trim(E_MAIL) <> \'\' THEN 1 ELSE 0 END), 0) AS contact_ok
-            FROM ' . self::T . $this->where($criteria);
+            FROM ' . $this->table() . $this->where($criteria);
     }
 
     /** COUNT(DISTINCT CONTRACT) of the rows meeting $condition. */
@@ -125,7 +163,7 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
     {
         $row = $this->run('SELECT ' . $this->contracts('TRUE') . ' AS total,
                 ' . $this->contracts('trim(NUI_QC) <> \'\'') . ' AS nui
-            FROM ' . self::T . $this->where(FilterCriteria::none()))[0] ?? [];
+            FROM ' . $this->table() . $this->where(FilterCriteria::none()))[0] ?? [];
 
         return ['totalClients' => (int) ($row['total'] ?? 0), 'totalNui' => (int) ($row['nui'] ?? 0)];
     }
@@ -142,20 +180,22 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
                 CASE WHEN GROUPING(REGION) = 0 THEN \'region\'
                      WHEN GROUPING(STATUS) = 0 THEN \'status\'
                      WHEN GROUPING(SEGMENTATION) = 0 THEN \'segmentation\'
-                     ELSE \'meterType\' END AS dim,
-                COALESCE(REGION, STATUS, SEGMENTATION, METER) AS val,
+                     WHEN GROUPING(METER) = 0 THEN \'meterType\'
+                     ELSE \'failure\' END AS dim,
+                COALESCE(REGION, STATUS, SEGMENTATION, METER, ' . FailureSubcategories::COLUMN . ') AS val,
                 COUNT(*) AS n
-            FROM ' . self::T . $this->where($criteria) . '
-            GROUP BY GROUPING SETS ((REGION), (STATUS), (SEGMENTATION), (METER))';
+            FROM ' . $this->table() . $this->where($criteria) . '
+            GROUP BY GROUPING SETS ((REGION), (STATUS), (SEGMENTATION), (METER), (' . FailureSubcategories::COLUMN . '))';
     }
 
     /** @param list<array<string, mixed>> $rows */
     private static function distributionRows(array $rows): array
     {
-        $out = ['region' => [], 'status' => [], 'segmentation' => [], 'meterType' => []];
+        $out = ['region' => [], 'status' => [], 'segmentation' => [], 'meterType' => [], 'failure' => []];
         foreach ($rows as $r) {
             $out[$r['dim']][(string) $r['val']] = (int) $r['n'];
         }
+        unset($out['failure']['']); // every row outside the 6 Défaillant profile
 
         return $out;
     }
@@ -163,7 +203,7 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
     public function segmentationCounts(FilterCriteria $criteria): array
     {
         $out = [];
-        foreach ($this->run('SELECT SEGMENTATION AS val, COUNT(*) AS n FROM ' . self::T . $this->where($criteria) . ' GROUP BY SEGMENTATION') as $r) {
+        foreach ($this->run('SELECT SEGMENTATION AS val, COUNT(*) AS n FROM ' . $this->table() . $this->where($criteria) . ' GROUP BY SEGMENTATION') as $r) {
             $out[(string) $r['val']] = (int) $r['n'];
         }
 
@@ -175,13 +215,13 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
         $scope = $this->where(FilterCriteria::none());
         $flat  = [];
         foreach (SnapshotFilterOptions::FLAT as $key => $column) {
-            $flat[] = "SELECT 'flat' AS q, " . DuckDb::literal($key) . " AS k, \"{$column}\" AS val, COUNT(*) AS n FROM " . self::T
+            $flat[] = "SELECT 'flat' AS q, " . DuckDb::literal($key) . " AS k, \"{$column}\" AS val, COUNT(*) AS n FROM " . $this->table()
                 . $scope . " AND \"{$column}\" <> '' GROUP BY \"{$column}\"";
         }
 
         $rows = $this->run(implode("\nUNION ALL\n", $flat) . ";\n"
-            . "SELECT 'geo' AS q, REGION AS r, DIVISION AS d, AGENCE AS a, COUNT(*) AS n FROM " . self::T . $scope . " GROUP BY REGION, DIVISION, AGENCE;\n"
-            . "SELECT 'dates' AS q, strftime(MIN(DATE_AB), '%Y-%m-%d') AS mn, strftime(MAX(DATE_AB), '%Y-%m-%d') AS mx FROM " . self::T . $scope);
+            . "SELECT 'geo' AS q, REGION AS r, DIVISION AS d, AGENCE AS a, COUNT(*) AS n FROM " . $this->table() . $scope . " GROUP BY REGION, DIVISION, AGENCE;\n"
+            . "SELECT 'dates' AS q, strftime(MIN(DATE_AB), '%Y-%m-%d') AS mn, strftime(MAX(DATE_AB), '%Y-%m-%d') AS mx FROM " . $this->table() . $scope);
 
         $values = [];
         $geo    = [];
@@ -219,7 +259,7 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
             }
         }
 
-        $rows = $this->run('SELECT ' . implode(', ', $select) . ' FROM ' . self::T . $this->where($criteria, $search)
+        $rows = $this->run('SELECT ' . implode(', ', $select) . ' FROM ' . $this->table() . $this->where($criteria, $search)
             . ' ORDER BY ' . $this->orderBy($sort, $desc)
             . ' LIMIT ' . max(0, $limit) . ' OFFSET ' . max(0, $offset));
 
@@ -264,6 +304,9 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
         }
         if ($c->hasContact !== null) {
             $conds[] = QueryBuilder::contactCondition($c->hasContact);
+        }
+        if ($c->failureSubcategories !== []) {
+            $conds[] = FailureSubcategories::COLUMN . ' IN (' . $this->list($c->failureSubcategories) . ')';
         }
         if ($c->dateFrom !== null) {
             $conds[] = 'DATE_AB >= DATE ' . DuckDb::literal($c->dateFrom->format('Y-m-d'));

@@ -69,7 +69,7 @@ final class SnapshotExportTest extends TestCase
     {
         return [
             SnapshotFixture::row(1, ['REGION' => 'DRC', 'STATUS' => 'ACTIVE', 'METER' => 'PREPAID', 'DATE_AB' => '2020-01-01', 'SEGMENTATION' => '1 PERFECT']),
-            SnapshotFixture::row(2, ['REGION' => 'DRC', 'STATUS' => 'SUSPENDED (DELINQUENT ACCOUNT)', 'METER' => 'POSTPAID', 'DATE_AB' => '2020-01-31', 'SEGMENTATION' => '8 Autre']),
+            SnapshotFixture::row(2, ['REGION' => 'DRC', 'STATUS' => 'SUSPENDED (DELINQUENT ACCOUNT)', 'METER' => 'POSTPAID', 'DATE_AB' => '2020-01-31', 'SEGMENTATION' => '6 Défaillant']),
             SnapshotFixture::row(3, ['REGION' => 'DRE', 'STATUS' => 'ACTIVE', 'METER' => 'Compteurs Communicants', 'DATE_AB' => '2020-02-01', 'NUI_QC' => 'NUI a RECLASSER']),
             SnapshotFixture::row(4, ['REGION' => 'DRE', 'STATUS' => 'ACTIVE (PENDING BILLING)', 'METER' => 'PREPAID', 'DATE_AB' => '2019-12-31', 'VOLTAGE' => 'MV']),
             SnapshotFixture::row(5, ['REGION' => 'DRO', 'STATUS' => 'ACTIVE', 'METER' => ' ', 'DATE_AB' => 'n/a', 'SEGMENT_TRESOR' => 'PUBLIC']),
@@ -212,7 +212,7 @@ final class SnapshotExportTest extends TestCase
         $this->assertSame(['900003'], $this->contracts($c(['niu_qc' => ['NUI a RECLASSER']])));
         $this->assertSame(['900004'], $this->contracts($c(['voltage' => ['MV']])));
         $this->assertSame(['900005'], $this->contracts($c(['segment_tresor' => ['PUBLIC']])));
-        $this->assertSame(['900002'], $this->contracts($c(['segmentation' => ['8 Autre']])));
+        $this->assertSame(['900002'], $this->contracts($c(['segmentation' => ['6 Défaillant']])));
         $this->assertSame([], $this->contracts($c(['region' => ['DRC'], 'status' => ['ACTIVE'], 'meter' => ['POSTPAID']])), 'dimensions are ANDed');
     }
 

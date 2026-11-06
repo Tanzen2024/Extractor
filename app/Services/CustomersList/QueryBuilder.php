@@ -116,6 +116,7 @@ final class QueryBuilder
             // never a guessed/normalised string — the column holds free text
             // ('NUI correct' / 'NUI ... RECLASSER') with no numeric flag.
             'NUI_QC'         => $c->niuQualities,
+            FailureSubcategories::COLUMN => $c->failureSubcategories,
         ] as $column => $values) {
             if ($values === []) {
                 continue;

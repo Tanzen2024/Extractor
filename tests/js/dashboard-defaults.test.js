@@ -166,6 +166,46 @@ test('first load: STATUT offers the 4 active statuses, none pre-checked, no "Con
     assert.ok(!/Contrats inactifs|Contrats actifs/.test(statusList.innerHTML));
 });
 
+test('Défaillant breakdown: Postpaid only, doughnut and cards from one answer, a component opens its customers', async () => {
+    const failureBreakdown = { total: 8, unassigned: 0, components: [
+        { value: 'ALWAYS_LATE', count: 2 }, { value: 'SOMETIME_PAID', count: 2 }, { value: 'NEVER_PAID', count: 4 }, { value: 'OTHER', count: 0 },
+    ] };
+    const ctx = bootDashboard({
+        '/dashboard/stats': { totalRows: 10, kpis: { total: 10 }, charts: { region: [], status: [], segmentation: [], meterType: [], failureBreakdown } },
+    });
+    await settle();
+    const id = 'bscdChart_postpaid_failure';
+    const chart = ctx.charts[id];
+    assert.equal(chart.type, 'doughnut');
+    const plain = (v) => JSON.parse(JSON.stringify(v)); // built in the page's own realm
+    assert.deepEqual(plain(chart.data.datasets[0].data), [2, 2, 4, 0]);
+    assert.deepEqual(plain(chart.data.labels), ['Always Late', 'Sometime Paid', 'Never Paid', 'Other']);
+    assert.deepEqual(plain(chart.options.plugins.bscdValueLabels.center), { label: 'TOTAL DÉFAILLANT', value: '8' });
+    assert.equal(ctx.charts.bscdChart_prepaid_failure, undefined);
+
+    const html = inSection(ctx.document, 'postpaid', '[data-failure-stats]').innerHTML;
+    ['Always Late', 'Sometime Paid', 'Never Paid', 'Other'].forEach((name) => assert.ok(html.includes(name), name));
+    assert.ok(html.includes('>4<') && html.includes('>2<'), 'cards carry the counts');
+    assert.doesNotMatch(html, /%|50,0|25,0/);
+    assert.equal(chart.options.plugins.tooltip.callbacks.label({ label: 'Never Paid', parsed: 1234, dataIndex: 2 }), 'Never Paid: ' + (1234).toLocaleString('fr-FR'));
+
+    const before = ctx.requests.length;
+    chart.options.onClick(null, [{ index: 2 }]);
+    await settle();
+    const added = ctx.requests.slice(before);
+    assert.equal(added.length, 1, 'only the table reloads');
+    const q = new URLSearchParams(added[0].split('?')[1]);
+    assert.ok(added[0].startsWith('/dashboard/rows'));
+    assert.deepEqual(q.getAll('failure_subcategory[]'), ['NEVER_PAID']);
+    assert.deepEqual(q.getAll('segmentation[]'), [], 'no official filter involved');
+    assert.equal(q.get('page'), '1');
+    assert.ok(q.getAll('meter[]').length > 0, 'Postpaid scope of the table');
+
+    chart.options.onClick(null, [{ index: 2 }]); // same component again: back to the whole scope
+    await settle();
+    assert.deepEqual(new URLSearchParams(ctx.requests[ctx.requests.length - 1].split('?')[1]).getAll('failure_subcategory[]'), []);
+});
+
 test('first load: stats (one per section), count and rows carry no STATUT filter (= the whole active perimeter, server-side)', async () => {
     const { requests } = bootDashboard();
     await settle();
@@ -181,11 +221,30 @@ test('first load: stats (one per section), count and rows carry no STATUT filter
     assert.deepEqual(stats.map((u) => new URLSearchParams(u.split('?')[1]).getAll('meter[]')), [['POSTPAID'], ['PREPAID']]);
 });
 
+test('Total clients: sum of the two section answers, no extra request, never a partial sum', async () => {
+    const { document, requests } = bootDashboard();
+    await settle();
+    assert.equal(document.querySelector('[data-sections-total]').textContent, '20'); // 10 + 10
+    assert.equal(requests.filter((u) => u.startsWith('/dashboard/stats')).length, 2);
+
+    let release = null;
+    const slow = bootDashboard({
+        '/dashboard/stats': (url) => (url.includes('PREPAID')
+            ? new Promise((res) => { release = () => res({ totalRows: 5, kpis: { total: 5 }, charts: { region: [], status: [], segmentation: [], meterType: [] } }); })
+            : { totalRows: 7, kpis: { total: 7 }, charts: { region: [], status: [], segmentation: [], meterType: [] } }),
+    });
+    await settle();
+    assert.equal(slow.document.querySelector('[data-section-count="postpaid"]').textContent, '7 clients');
+    assert.equal(slow.document.querySelector('[data-sections-total]').textContent, '', 'waits for Prepaid');
+    release(); await settle();
+    assert.equal(slow.document.querySelector('[data-sections-total]').textContent, '12');
+});
+
 test('first load: the NUI card shows the stats figure', async () => {
     const { document } = bootDashboard();
     await settle();
     assert.equal(inSection(document, 'postpaid', '[data-kpi="nuiCorrects"]').textContent, '7');
-    assert.equal(inSection(document, 'postpaid', '[data-kpi-sub="nuiCorrects"]').textContent, '70,0 % du total'); // NUI corrects / all NUI (backend pct)
+    assert.doesNotMatch(String(inSection(document, 'postpaid', '[data-kpi-sub="nuiCorrects"]').textContent), /%/); // NUI corrects / all NUI (backend pct)
 });
 
 test('the user can narrow STATUT inside the perimeter: the next apply sends exactly the new selection', async () => {
@@ -207,11 +266,11 @@ test('the user can narrow STATUT inside the perimeter: the next apply sends exac
 
 // ── KPI row: "Clients actifs" is the section's total (no separate "Total clients") ──
 
-test('KPI row: "Clients actifs" shows the stats figure and its share of every active contract', async () => {
+test('KPI row: "Clients actifs" shows the stats figure, no percentage', async () => {
     const { document } = bootDashboard();
     await settle();
     assert.equal(inSection(document, 'postpaid', '[data-kpi="actifs"]').textContent, '10');
-    assert.equal(inSection(document, 'postpaid', '[data-kpi-sub="actifs"]').textContent, '100,0 % du total'); // backend actifs.pct
+    assert.doesNotMatch(String(inSection(document, 'postpaid', '[data-kpi-sub="actifs"]').textContent), /%/); // backend actifs.pct
 });
 
 test('a parked STATUT value that is no longer offered (an excluded status) is dropped, never sent', async () => {
@@ -225,8 +284,8 @@ test('a parked STATUT value that is no longer offered (an excluded status) is dr
 
 const METER_OPTIONS = [{ value: 'POSTPAID', count: 2 }, { value: 'PREPAID', count: 2 }, { value: 'Compteurs Communicants', count: 1 }];
 const SEG_OPTIONS = [
-    { value: '1 PERFECT', count: 5 }, { value: '2 RELIABLE', count: 4 }, { value: '8 Autre', count: 3 },
-    { value: '5-Dormant', count: 2 }, { value: 'Other', count: 1 },
+    { value: '1 PERFECT', count: 5 }, { value: '2 RELIABLE', count: 4 }, { value: '6 Défaillant', count: 3 },
+    { value: '5-Dormant', count: 2 }, { value: '6-Never Vending', count: 1 },
 ];
 
 async function bootWithMeters(selectedMeters) {
@@ -243,38 +302,38 @@ async function bootWithMeters(selectedMeters) {
     };
 }
 
-// The 8 PREPAID categories, business order — always offered by the dropdown.
-const PREPAID_8 = ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'];
+// The 6 PREPAID categories, business order — always offered by the dropdown.
+const PREPAID_6 = ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6-Never Vending'];
 
-test('segmentation group, Type de compteur = Toutes: "Postpaid | Compteurs communicants", Prepaid, every option + the 8 PREPAID', async () => {
+test('segmentation group, Type de compteur = Toutes: "Postpaid | Compteurs communicants", Prepaid, every option + the 6 PREPAID', async () => {
     const r = await bootWithMeters([]);
     assert.deepEqual(r.groups, ['Postpaid | Compteurs communicants', 'Prepaid']);
-    const expected = new Set(SEG_OPTIONS.map((o) => o.value).concat(PREPAID_8));
+    const expected = new Set(SEG_OPTIONS.map((o) => o.value).concat(PREPAID_6));
     assert.deepEqual([...r.options].sort(), [...expected].sort());
 });
 
-test('segmentation group, PREPAID only: "Prepaid", the 8 PREPAID categories in business order (backend sent 2)', async () => {
+test('segmentation group, PREPAID only: "Prepaid", the 6 PREPAID categories in business order (backend sent 2)', async () => {
     const r = await bootWithMeters(['PREPAID']);
     assert.deepEqual(r.groups, ['Prepaid']);
-    assert.deepEqual(r.options, PREPAID_8);
+    assert.deepEqual(r.options, PREPAID_6);
 });
 
 test('segmentation group, POSTPAID only: "Postpaid", POSTPAID segmentations only', async () => {
     const r = await bootWithMeters(['POSTPAID']);
     assert.deepEqual(r.groups, ['Postpaid']);
-    assert.deepEqual(r.options, ['1 PERFECT', '2 RELIABLE', '8 Autre']);
+    assert.deepEqual(r.options, ['1 PERFECT', '2 RELIABLE', '6 Défaillant']);
 });
 
 test('segmentation group, communicants only: "Compteurs communicants", still the POSTPAID segmentation', async () => {
     const r = await bootWithMeters(['Compteurs Communicants']);
     assert.deepEqual(r.groups, ['Compteurs communicants']);
-    assert.deepEqual(r.options, ['1 PERFECT', '2 RELIABLE', '8 Autre']);
+    assert.deepEqual(r.options, ['1 PERFECT', '2 RELIABLE', '6 Défaillant']);
 });
 
 test('segmentation group, POSTPAID + communicants: "Postpaid | Compteurs communicants"', async () => {
     const r = await bootWithMeters(['POSTPAID', 'Compteurs Communicants']);
     assert.deepEqual(r.groups, ['Postpaid | Compteurs communicants']);
-    assert.deepEqual(r.options, ['1 PERFECT', '2 RELIABLE', '8 Autre']);
+    assert.deepEqual(r.options, ['1 PERFECT', '2 RELIABLE', '6 Défaillant']);
 });
 
 test('segmentation group, PREPAID + communicants: Prepaid group untouched, communicants label on the POSTPAID group', async () => {
@@ -286,11 +345,11 @@ test('segmentation group, PREPAID + communicants: Prepaid group untouched, commu
 // Real Oracle proportions (30/09): PERFECT = 28 795 POSTPAID + 1 248 communicants.
 
 const SCOPED = {
-    '':                                                    { '1 PERFECT': 30043, '2 RELIABLE': 159220, '8 Autre': 817910, '5-Dormant': 1091001, Other: 3890 },
-    'POSTPAID':                                            { '1 PERFECT': 28795, '2 RELIABLE': 152163, '8 Autre': 816038 },
-    'Compteurs Communicants':                              { '1 PERFECT': 1248, '2 RELIABLE': 7057, '8 Autre': 1872 },
-    'POSTPAID|Compteurs Communicants':                     { '1 PERFECT': 30043, '2 RELIABLE': 159220, '8 Autre': 817910 },
-    'PREPAID':                                             { '5-Dormant': 1091001, Other: 3890 },
+    '':                                                    { '1 PERFECT': 30043, '2 RELIABLE': 159220, '6 Défaillant': 817910, '5-Dormant': 1091001, '6-Never Vending': 3890 },
+    'POSTPAID':                                            { '1 PERFECT': 28795, '2 RELIABLE': 152163, '6 Défaillant': 816038 },
+    'Compteurs Communicants':                              { '1 PERFECT': 1248, '2 RELIABLE': 7057, '6 Défaillant': 1872 },
+    'POSTPAID|Compteurs Communicants':                     { '1 PERFECT': 30043, '2 RELIABLE': 159220, '6 Défaillant': 817910 },
+    'PREPAID':                                             { '5-Dormant': 1091001, '6-Never Vending': 3890 },
 };
 
 async function bootScoped(selectedMeters, extra = () => {}) {
@@ -326,19 +385,19 @@ const n = (v) => v.toLocaleString('fr-FR');
 test('segment counts, Type = POSTPAID: POSTPAID numbers, not the global ones', async () => {
     const r = await bootScoped(['POSTPAID']);
     assert.deepEqual(r.groups, ['Postpaid']);
-    assert.deepEqual(r.counts, { '1 PERFECT': n(28795), '2 RELIABLE': n(152163), '8 Autre': n(816038) });
+    assert.deepEqual(r.counts, { '1 PERFECT': n(28795), '2 RELIABLE': n(152163), '6 Défaillant': n(816038) });
 });
 
 test('segment counts, Type = Compteurs communicants: smart-meter numbers under the POSTPAID segmentation', async () => {
     const r = await bootScoped(['Compteurs Communicants']);
     assert.deepEqual(r.groups, ['Compteurs communicants']);
-    assert.deepEqual(r.counts, { '1 PERFECT': n(1248), '2 RELIABLE': n(7057), '8 Autre': n(1872) });
+    assert.deepEqual(r.counts, { '1 PERFECT': n(1248), '2 RELIABLE': n(7057), '6 Défaillant': n(1872) });
 });
 
 test('segment counts, POSTPAID + communicants: the combined meter scope (same rule as the filter)', async () => {
     const r = await bootScoped(['POSTPAID', 'Compteurs Communicants']);
     assert.deepEqual(r.groups, ['Postpaid | Compteurs communicants']);
-    assert.deepEqual(r.counts, { '1 PERFECT': n(30043), '2 RELIABLE': n(159220), '8 Autre': n(817910) });
+    assert.deepEqual(r.counts, { '1 PERFECT': n(30043), '2 RELIABLE': n(159220), '6 Défaillant': n(817910) });
 });
 
 test('segment counts, Type = Toutes: scope of every meter, group "Postpaid | Compteurs communicants"', async () => {
@@ -348,11 +407,11 @@ test('segment counts, Type = Toutes: scope of every meter, group "Postpaid | Com
     assert.equal(r.counts['5-Dormant'], n(1091001));
 });
 
-test('segment counts, PREPAID: real numbers for the returned values, 0 for the 6 others, all 8 listed', async () => {
+test('segment counts, PREPAID: real numbers for the returned values, 0 for the 4 others, all 6 listed', async () => {
     const r = await bootScoped(['PREPAID']);
     assert.deepEqual(r.counts, {
         '1-Stable': '0', '2-InStable': '0', '3-At Risk': '0', '4-Suspect Dormant': '0',
-        '5-Dormant': n(1091001), '6 Old_Dormant': '0', '7 Never Vending': '0', Other: n(3890),
+        '5-Dormant': n(1091001), '6-Never Vending': n(3890),
     });
 });
 
@@ -373,20 +432,19 @@ test('segment counts follow the other form filters (region), and never send the 
 
 // Every value of the data (Oracle 30/09), in volume order as the API sends it.
 const ALL_SEGS = [
-    ['5-Dormant', 1091001], ['8 Autre', 817910], ['4 At-Risk', 234045], ['5 Delinquant', 229204], ['3 Occasionnal', 206345],
-    ['8 Never Paid', 196876], ['2 RELIABLE', 159220], ['7 sometime Paid', 141863], ['6 Old_Dormant', 131112],
-    ['6 Always Late', 52889], ['1 PERFECT', 30043], ['7 Never Vending', 9888], ['Other', 3890],
+    ['5-Dormant', 1091001], ['6 Défaillant', 817910], ['4 At-Risk', 234045], ['5 Delinquant', 229204], ['3 Occasionnal', 206345],
+    ['2 RELIABLE', 159220], ['1 PERFECT', 30043], ['6-Never Vending', 9888],
 ].map(([value, count]) => ({ value, count }));
-// The 8 PREPAID SQL values (App\Services\CustomersList\PrepaidSegmentations),
-// business order; only the last 4 exist in the data today.
-const PREPAID_VALUES = ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'];
-const POSTPAID_ORDER = ['1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk', '5 Delinquant', '6 Always Late', '8 Never Paid', '7 sometime Paid', '8 Autre'];
-// Chart labels of the PREPAID bars: display labels, no numeric prefix.
-const PREPAID_ORDER = ['Stable', 'Instable', 'À risque', 'Suspect Dormant', 'Dormant', 'Old Dormant', 'Never Vending', 'Other'];
+// The 6 PREPAID segments (App\Services\CustomersList\PrepaidSegmentations),
+// business order.
+const PREPAID_VALUES = ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6-Never Vending'];
+const POSTPAID_ORDER = ['1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk', '5 Delinquant', '6 Défaillant'];
+// Chart labels of the PREPAID bars: the official segments, exactly.
+const PREPAID_ORDER = PREPAID_VALUES;
 
 // stats answer for a query: segmentation = the values of the requested
 // meters / segmentations, in VOLUME order (what the API really returns).
-function statsFor(url, { zero = [], empty = false } = {}) {
+function statsFor(url, { zero = [], empty = false, extra = [] } = {}) {
     const q = new URLSearchParams(url.split('?')[1] || '');
     const meters = q.getAll('meter[]');
     const segs = q.getAll('segmentation[]');
@@ -395,7 +453,8 @@ function statsFor(url, { zero = [], empty = false } = {}) {
     const seg = empty ? [] : ALL_SEGS
         .filter((p) => (PREPAID_VALUES.includes(p.value) ? withPrepaid : withPostpaid))
         .filter((p) => !segs.length || segs.includes(p.value))
-        .filter((p) => !zero.includes(p.value));
+        .filter((p) => !zero.includes(p.value))
+        .concat(extra);
     const total = seg.reduce((a, p) => a + p.count, 0);
     return {
         totalRows: total,
@@ -435,12 +494,27 @@ async function applyScope(meters, segs = [], statsOpts = {}) {
     };
 }
 
-test('segmentation chart, POSTPAID: the 9 POSTPAID segments in the business order, not by volume', async () => {
+test('segmentation chart, POSTPAID: the 6 profiles in the business order, not by volume', async () => {
     const r = await applyScope(['POSTPAID']);
     assert.deepEqual(r.labels, POSTPAID_ORDER);
-    assert.notDeepEqual(r.labels.slice(0, 3), ['8 Autre', '4 At-Risk', '5 Delinquant']); // volume order is forbidden
+    assert.notDeepEqual(r.labels.slice(0, 3), ['6 Défaillant', '4 At-Risk', '5 Delinquant']); // volume order is forbidden
     assert.equal(r.counts[0], 30043);
     assert.equal(r.message, undefined);
+});
+
+test('segmentation chart: unclassified customers (blank SEGMENTATION) get their own last bar, in no profile', async () => {
+    const r = await applyScope(['POSTPAID'], [], { extra: [{ value: 'Non renseigné', count: 42 }] });
+    assert.deepEqual(r.labels, [...POSTPAID_ORDER, 'Non classé']);
+    assert.equal(r.counts.at(-1), 42);
+    assert.equal(r.counts.reduce((a, n) => a + n, 0), 30043 + 159220 + 206345 + 234045 + 229204 + 817910 + 42);
+});
+
+test('chart tooltips and the meter type list give the count only, never a percentage', async () => {
+    const r = await applyScope(['POSTPAID']);
+    const config = r.ctx.charts.bscdChart_postpaid_segmentation;
+    const label = config.options.plugins.tooltip.callbacks.label({ label: 'A', parsed: { x: 1234, y: 1234 }, dataIndex: 0 });
+    assert.equal(label, (1234).toLocaleString('fr-FR'));
+    assert.doesNotMatch(inSection(r.ctx.document, 'postpaid', '[data-metertype="list"]').innerHTML, /%|metertype__pct/);
 });
 
 test('segmentation chart, Compteurs communicants: the POSTPAID segmentation and order', async () => {
@@ -448,24 +522,22 @@ test('segmentation chart, Compteurs communicants: the POSTPAID segmentation and 
     assert.deepEqual(r.labels, POSTPAID_ORDER);
 });
 
-test('segmentation chart, PREPAID: the 8 categories, business order, display labels, absent ones at 0', async () => {
+test('segmentation chart, PREPAID: the 6 segments, business order, display labels, absent ones at 0', async () => {
     const r = await applyScope(['PREPAID']);
     assert.deepEqual(r.labels, PREPAID_ORDER);
-    assert.deepEqual(r.counts, [0, 0, 0, 0, 1091001, 131112, 9888, 3890]); // never by volume
+    assert.deepEqual(r.counts, [0, 0, 0, 0, 1091001, 9888]); // never by volume
 });
 
-test('segmentation chart, PREPAID, Dormant + Old Dormant ticked: only those two, in order', async () => {
-    const r = await applyScope(['PREPAID'], ['6 Old_Dormant', '5-Dormant']);
-    assert.deepEqual(r.labels, ['Dormant', 'Old Dormant']);
-    assert.deepEqual(r.counts, [1091001, 131112]);
+test('segmentation chart, PREPAID, Dormant + Never Vending ticked: only those two, in order', async () => {
+    const r = await applyScope(['PREPAID'], ['6-Never Vending', '5-Dormant']);
+    assert.deepEqual(r.labels, ['5-Dormant', '6-Never Vending']);
+    assert.deepEqual(r.counts, [1091001, 9888]);
 });
 
-test('PREPAID values and labels match PrepaidSegmentations.php, in the same order', () => {
+test('PREPAID values match PrepaidSegmentations.php, in the same order', () => {
     const php = fs.readFileSync(path.join(ROOT, 'app/Services/CustomersList/PrepaidSegmentations.php'), 'utf8');
-    const block = /const LABELS = \[([\s\S]*?)\];/.exec(php)[1];
-    const pairs = [...block.matchAll(/'([^']+)'\s*=>\s*'([^']+)'/g)].map((m) => [m[1], m[2]]);
-    assert.deepEqual(pairs.map((p) => p[0]), PREPAID_VALUES);
-    assert.deepEqual(pairs.map((p) => p[1]), PREPAID_ORDER);
+    const block = /const VALUES = \[([\s\S]*?)\];/.exec(php)[1];
+    assert.deepEqual([...block.matchAll(/'([^']+)'/g)].map((m) => m[1]), PREPAID_VALUES);
 });
 
 test('Segmentation filter, PREPAID: the 8 options in the business order, labelled, technical values kept', async () => {
@@ -483,12 +555,12 @@ test('Segmentation filter, PREPAID: the 8 options in the business order, labelle
     assert.deepEqual(opts.map((o) => o[1]), PREPAID_ORDER);
 });
 
-// ── Segmentation filter, PREPAID: the 8 categories are guaranteed by the
+// ── Segmentation filter, PREPAID: the 6 segments are guaranteed by the
 // frontend, even when the backend only lists the values present in the data.
 
 // Figures of the validated customers_list fix (PREPAID, 4 active statuses);
-// 4-Suspect Dormant, 5-Dormant and Other are absent from the data.
-const CURRENT_PREPAID = { '1-Stable': 252345, '2-InStable': 251888, '3-At Risk': 425372, '6 Old_Dormant': 151490, '7 Never Vending': 11192 };
+// 4-Suspect Dormant is absent from the data.
+const CURRENT_PREPAID = { '1-Stable': 252345, '2-InStable': 251888, '3-At Risk': 425372, '5-Dormant': 151490, '6-Never Vending': 11192 };
 const CURRENT_POSTPAID = { '1 PERFECT': 28570, '4 At-Risk': 223375 };
 
 async function bootCurrent() {
@@ -531,21 +603,19 @@ async function bootCurrent() {
     return { ctx, seen, tick, read, statsParams, apply };
 }
 
-test('PREPAID filter, current data: exactly the 8 categories, business order, labels, real counts and 0 for the absent ones', async () => {
+test('PREPAID filter, current data: exactly the 6 segments, business order, labels, real counts and 0 for the absent ones', async () => {
     const r = await bootCurrent();
     r.tick('meter', 'PREPAID');
     await settle();
     const s = r.read();
     assert.deepEqual(s.groups, ['Prepaid']);
-    assert.equal(s.values.length, 8);
+    assert.equal(s.values.length, 6);
     assert.deepEqual(s.values, PREPAID_VALUES);
     assert.deepEqual(s.labels, PREPAID_ORDER);
-    assert.deepEqual(s.counts, [n(252345), n(251888), n(425372), '0', '0', n(151490), n(11192), '0']);
-    // No technical value shown to the user (numeric prefixes, underscores).
-    assert.ok(s.labels.every((l) => !/^\d/.test(l) && !l.includes('_')));
+    assert.deepEqual(s.counts, [n(252345), n(251888), n(425372), '0', n(151490), n(11192)]);
 });
 
-test('PREPAID filter + a segment ticked: the 8 options stay, the technical value is sent, counts ignore the segmentation filter', async () => {
+test('PREPAID filter + a segment ticked: the 6 options stay, the technical value is sent, counts ignore the segmentation filter', async () => {
     const r = await bootCurrent();
     r.tick('meter', 'PREPAID');
     await settle();
@@ -578,7 +648,7 @@ test('Type de compteur POSTPAID -> PREPAID -> POSTPAID: each switch reloads the 
     await settle();
     s = r.read();
     assert.deepEqual(s.values, PREPAID_VALUES);
-    assert.deepEqual(s.counts, [n(252345), n(251888), n(425372), '0', '0', n(151490), n(11192), '0']);
+    assert.deepEqual(s.counts, [n(252345), n(251888), n(425372), '0', n(151490), n(11192)]);
 
     r.tick('meter', 'PREPAID', false);
     r.tick('meter', 'POSTPAID');
@@ -588,7 +658,7 @@ test('Type de compteur POSTPAID -> PREPAID -> POSTPAID: each switch reloads the 
     assert.deepEqual(s.values, ['1 PERFECT', '4 At-Risk']);
 });
 
-test('PREPAID filter + another filter (region): counts follow the region, the 8 categories stay', async () => {
+test('PREPAID filter + another filter (region): counts follow the region, the 6 segments stay', async () => {
     const r = await bootCurrent();
     r.tick('region', 'DCUD');
     r.tick('meter', 'PREPAID');

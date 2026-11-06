@@ -41,7 +41,7 @@ final class DashboardServiceTest extends TestCase
             distributions: [
                 'region'       => ['DCUD' => 600, 'DCUY' => 400],
                 'status'       => ['ACTIVE' => 660, 'SUSPENDED (DELINQUENT ACCOUNT)' => 340],
-                'segmentation' => ['' => 10, '8 Autre' => 990],
+                'segmentation' => ['' => 10, '6 Défaillant' => 990],
                 'meterType'    => ['PREPAID' => 620, 'POSTPAID' => 300, 'Compteurs Communicants' => 80],
             ],
         );
@@ -296,6 +296,21 @@ final class DashboardServiceTest extends TestCase
             $this->assertStringStartsWith('cl_snap_20261002T050000_aaaaaaaa_active4_', $key, 'a new version (or the former all-statuses rules) never reads older figures');
         }
     }
+
+    public function testStatsCarryTheDefaillantBreakdownNextToTheOfficialProfiles(): void
+    {
+        $engine = new FakeEngine(kpis: self::kpis(100), distributions: [
+            'region' => [], 'status' => [], 'meterType' => [],
+            'segmentation' => ['6 Défaillant' => 10, '1 PERFECT' => 90],
+            'failure'      => ['NEVER_PAID' => 7, 'ALWAYS_LATE' => 3],
+        ]);
+        $charts = $this->service($engine)->stats(FilterCriteria::none())['charts'];
+
+        $this->assertSame(10, $charts['failureBreakdown']['total']);
+        $this->assertSame(0, $charts['failureBreakdown']['unassigned']);
+        $this->assertSame([3, 0, 7, 0], array_column($charts['failureBreakdown']['components'], 'count'));
+        $this->assertEqualsCanonicalizing(['1 PERFECT', '6 Défaillant'], array_column($charts['segmentation'], 'value'));
+    }
 }
 
 /**
@@ -363,7 +378,7 @@ final class FakeEngine implements SnapshotQueryEngine
     {
         $this->lastDistributionCriteria = $criteria;
 
-        return $this->distributions;
+        return $this->distributions + ['failure' => []];
     }
 
     public function segmentationCounts(FilterCriteria $criteria): array

@@ -2,6 +2,10 @@
 
 namespace App\Services\Snapshot;
 
+use App\Services\CustomersList\FailureSubcategories;
+use App\Services\CustomersList\PostpaidSegmentations;
+use App\Services\CustomersList\PrepaidSegmentations;
+
 /**
  * One validated, immutable snapshot version, resolved once by an export and
  * kept for its whole duration: a newer version activated meanwhile never
@@ -39,11 +43,21 @@ final class ActiveSnapshot
     /** @return array<string, mixed> Same shape as DashboardService::filterOptions(). */
     public function filterOptions(): array
     {
-        return (array) ($this->meta['filter_options'] ?? []);
+        return PostpaidSegmentations::foldOptions((array) ($this->meta['filter_options'] ?? []));
     }
 
-    public function reader(): SnapshotReader
+    /**
+     * @param bool $withFailure records also carry FailureSubcategories::COLUMN
+     *        (off by default: the export keeps its one-to-one record layout).
+     */
+    public function reader(bool $withFailure = false): SnapshotReader
     {
-        return new SnapshotReader($this->csvPath, $this->delimiter());
+        $reader = new SnapshotReader($this->csvPath, $this->delimiter());
+        if ($withFailure) {
+            $reader->derive(FailureSubcategories::COLUMN, 'SEGMENTATION', FailureSubcategories::LEGACY);
+        }
+
+        return $reader->translate('SEGMENTATION', PostpaidSegmentations::ALL_LEGACY)
+            ->translate('SEGMENT_RFM_2', PrepaidSegmentations::LEGACY);
     }
 }

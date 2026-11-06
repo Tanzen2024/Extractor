@@ -3,6 +3,7 @@
 namespace App\Services\Snapshot;
 
 use App\Services\CustomersList\ActiveCustomers;
+use App\Services\CustomersList\FailureSubcategories;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\QueryBuilder;
 
@@ -95,10 +96,14 @@ final class SnapshotScanEngine implements SnapshotQueryEngine
 
     public function distributions(FilterCriteria $criteria): array
     {
-        $d = ['region' => [], 'status' => [], 'segmentation' => [], 'meterType' => []];
+        $d = ['region' => [], 'status' => [], 'segmentation' => [], 'meterType' => [], 'failure' => []];
         $this->scan($criteria, '', static function (array $r) use (&$d): void {
             foreach (['region' => 'REGION', 'status' => 'STATUS', 'segmentation' => 'SEGMENTATION', 'meterType' => 'METER'] as $key => $column) {
                 $d[$key][$r[$column]] = ($d[$key][$r[$column]] ?? 0) + 1;
+            }
+            $failure = trim($r[FailureSubcategories::COLUMN]);
+            if ($failure !== '') {
+                $d['failure'][$failure] = ($d['failure'][$failure] ?? 0) + 1;
             }
         });
 
@@ -158,7 +163,7 @@ final class SnapshotScanEngine implements SnapshotQueryEngine
      */
     private function scan(FilterCriteria $criteria, string $search, callable $onRow): void
     {
-        $reader  = $this->snapshot->reader();
+        $reader  = $this->snapshot->reader(true);
         $index   = $reader->index();
         $matcher = new RowMatcher($criteria, $index, $this->snapshot->dateFormat());
         $date    = $this->snapshot->dateFormat() !== null ? new SnapshotDate($this->snapshot->dateFormat()) : null;

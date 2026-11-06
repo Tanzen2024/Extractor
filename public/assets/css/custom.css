@@ -597,13 +597,20 @@ body {
     transition: border-color .15s ease, color .15s ease;
 }
 .bscd-section-nav__link--prepaid { --bscd-sec-accent: #7c3aed; }
-.bscd-section-nav__link--detail  { --bscd-sec-accent: #475569; }
 .bscd-section-nav__link i { color: var(--bscd-sec-accent); }
 .bscd-section-nav__link:hover, .bscd-section-nav__link:focus-visible {
     border-color: var(--bscd-sec-accent); color: var(--bscd-sec-accent); text-decoration: none; outline: none;
 }
 .bscd-section-nav__count { font-weight: 500; color: #9ca3af; font-variant-numeric: tabular-nums; }
 .bscd-section-nav__count:empty { display: none; }
+/* Total clients: same pill, a soft navy tint and a stronger figure */
+.bscd-section-nav__link--total {
+    --bscd-sec-accent: var(--bscd-navy);
+    background: #f0f4f9; border-color: #d5dde8; color: var(--bscd-navy);
+}
+.bscd-section-nav__total-label { font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.bscd-section-nav__total-value { font-size: .86rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bscd-section-nav__total-value:empty { display: none; }
 .bscd-section-nav__note { font-size: .74rem; color: #9ca3af; }
 .bscd-section-nav__note[hidden] { display: none; }
 
@@ -675,7 +682,7 @@ body.dark-mode {
 .dark-mode .bscd-xw__download-text, .dark-mode .bscd-xw__status, .dark-mode .bscd-xw, .dark-mode .bscd-xw__pct,
 .dark-mode .bscd-kpi-scope { color: #cbd5e1; }
 .dark-mode .bscd-kpi-sub, .dark-mode .bscd-chart-card__subtitle, .dark-mode .bscd-cache-note,
-.dark-mode .bscd-metertype__total-label, .dark-mode .bscd-metertype__pct, .dark-mode .bscd-metertype__empty,
+.dark-mode .bscd-metertype__total-label, .dark-mode .bscd-metertype__empty,
 .dark-mode .bscd-page-info, .dark-mode .bscd-page-gap, .dark-mode .bscd-ms__opt em, .dark-mode .bscd-ms__none,
 .dark-mode .bscd-chart-card__body[data-chart-msg]::after, .dark-mode .frdate__cal-dow span,
 .dark-mode .bscd-section-nav__count, .dark-mode .bscd-section-nav__note { color: var(--bscd-muted); }
@@ -708,6 +715,10 @@ body.dark-mode {
 /* chips, alerts, table */
 .dark-mode .bscd-chip { background: var(--bscd-surface-2); border-color: var(--bscd-border); color: var(--bscd-text); }
 .dark-mode .bscd-chip button { color: var(--bscd-muted); }
+.dark-mode .bscd-failure__stat { background: var(--bscd-surface-2); border-color: var(--bscd-border); border-left-color: var(--bscd-failure-color, #94a3b8); color: var(--bscd-text-strong); }
+.dark-mode .bscd-failure__stat:hover { border-color: var(--bscd-failure-color, #94a3b8); }
+.dark-mode .bscd-failure__stat.is-active { background: var(--bscd-surface); border-color: var(--bscd-failure-color, #94a3b8); }
+.dark-mode .bscd-failure__name { color: var(--bscd-muted); }
 .dark-mode .bscd-alert--error { background: rgba(220, 38, 38, .12); border-color: rgba(248, 113, 113, .35); color: #fca5a5; }
 .dark-mode .bscd-table-toolbar { border-bottom-color: var(--bscd-border); }
 .dark-mode .bscd-datatable thead th { background: var(--bscd-surface-2); color: #cbd5e1; border-bottom-color: var(--bscd-border); }
@@ -730,7 +741,7 @@ body.dark-mode {
 .dark-mode .bscd-section-nav__link { color: var(--bscd-text); }
 .dark-mode .bscd-section-nav__link--postpaid { --bscd-sec-accent: #4c9be0; }
 .dark-mode .bscd-section-nav__link--prepaid  { --bscd-sec-accent: #a78bfa; }
-.dark-mode .bscd-section-nav__link--detail   { --bscd-sec-accent: #94a3b8; }
+.dark-mode .bscd-section-nav__link--total    { --bscd-sec-accent: #8cc4f2; background: var(--bscd-surface-2); border-color: #3b4960; color: var(--bscd-text-strong); }
 .dark-mode .bscd-scope { background: var(--bscd-bg); border-color: var(--bscd-border); }
 .dark-mode .bscd-scope__btn { color: #cbd5e1; }
 .dark-mode .bscd-scope__btn.is-active { background: var(--bscd-surface-2); color: #8cc4f2; box-shadow: none; }
@@ -789,6 +800,22 @@ body.dark-mode {
 .bscd-donut-wrap { position: relative; }
 
 /* ── "Type de compteurs" summary (replaces the old data-quality chart) ── */
+/* Défaillant breakdown (Postpaid): 4 compact cards under the doughnut */
+.bscd-failure__stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .6rem; margin-top: .75rem; }
+.bscd-failure__stats:empty { display: none; }
+.bscd-failure__stat {
+    display: flex; flex-direction: column; gap: .05rem; min-width: 0; padding: .5rem .7rem; text-align: left;
+    background: #fff; color: #1f2937; cursor: pointer; border: 1px solid #e3e6ec;
+    border-left: 3px solid var(--bscd-failure-color, #94a3b8); border-radius: 8px;
+}
+.bscd-failure__stat:hover { border-color: var(--bscd-failure-color, #94a3b8); }
+.bscd-failure__stat.is-active { background: #f2f8fd; border-color: var(--bscd-failure-color, #94a3b8); }
+.bscd-failure__name { font-size: .72rem; font-weight: 600; color: #6b7280; }
+.bscd-failure__count { font-size: 1.05rem; font-weight: 700; line-height: 1.25; }
+.bscd-failure__note { margin: .6rem 0 0; font-size: .75rem; color: #b45309; }
+.bscd-failure-filter { flex-basis: 100%; margin-bottom: 0; }
+@media (max-width: 767.98px) { .bscd-failure__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 .bscd-metertype { display: flex; flex-direction: column; gap: .9rem; padding-top: .25rem; }
 .bscd-metertype__total {
     display: flex; flex-direction: column; gap: .15rem;
@@ -801,14 +828,13 @@ body.dark-mode {
 .bscd-metertype__total-value { font-size: 1.6rem; font-weight: 700; color: #1f2937; line-height: 1.1; }
 .bscd-metertype__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .55rem; }
 .bscd-metertype__row {
-    display: grid; grid-template-columns: 12px 1fr auto auto;
+    display: grid; grid-template-columns: 12px 1fr auto;
     align-items: center; column-gap: .6rem;
     font-size: .82rem; color: #1f2937;
 }
 .bscd-metertype__swatch { width: 12px; height: 12px; border-radius: 3px; }
 .bscd-metertype__name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bscd-metertype__count { font-variant-numeric: tabular-nums; font-weight: 700; }
-.bscd-metertype__pct { font-variant-numeric: tabular-nums; color: #9ca3af; min-width: 3.5rem; text-align: right; }
 .bscd-metertype__empty { list-style: none; color: #9ca3af; font-size: .82rem; }
 
 /* ── Data table ──────────────────────────────────────────── */

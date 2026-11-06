@@ -13,8 +13,9 @@
 # vers 04:42 (mesuré le 2026-09-29). Un rechargement encore en cours à 05:00
 # est refusé par la commande (lignes extraites ≠ COUNT(*) initial, ou chute de
 # volume) et l'ancienne version reste active ; le rattrapage de 06:00
-# (--skip-if-fresh) relance alors le refresh, et ne fait rien si celui de
-# 05:00 a réussi. Après un refresh réussi, dashboard:warm pré-calcule le
+# (--skip-if-fresh) relance alors le refresh, puis toutes les heures jusqu'à
+# --catch-up-until ; ces passages ne font rien si la version active contient
+# déjà le chargement Oracle du jour. Après un refresh réussi, dashboard:warm pré-calcule le
 # tableau de bord de la nouvelle version.
 #
 # Chaque refresh construit aussi l'index DuckDB de la nouvelle version : le
@@ -22,7 +23,7 @@
 #
 # Usage (root) :
 #   sh install_customers_refresh_cron.sh [--app-dir /var/www/extractor] [--user www-data]
-#                                        [--time 05:00] [--catch-up 06:00|none]
+#                                        [--time 05:00] [--catch-up 06:00|none] [--catch-up-until 12]
 #                                        [--php /usr/bin/php] [--duckdb /usr/local/bin/duckdb] [--dry-run]
 set -eu
 
@@ -30,6 +31,7 @@ APP_DIR=/var/www/extractor
 RUN_USER=www-data
 AT=05:00
 CATCH_UP=06:00
+CATCH_UP_UNTIL=12
 PHP_BIN=
 DUCKDB_BIN=
 DRY_RUN=0
@@ -43,6 +45,7 @@ while [ $# -gt 0 ]; do
         --user)    RUN_USER=$2; shift 2 ;;
         --time)    AT=$2; shift 2 ;;
         --catch-up) CATCH_UP=$2; shift 2 ;;
+        --catch-up-until) CATCH_UP_UNTIL=$2; shift 2 ;;
         --duckdb)  DUCKDB_BIN=$2; shift 2 ;;
         --php)     PHP_BIN=$2; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
@@ -89,19 +92,26 @@ OFFSET=$(date +%z)
 
 LOG="$APP_DIR/writable/logs/customers_refresh.log"
 WARM="$PHP_BIN spark dashboard:warm >> $LOG 2>&1"
-LINE="$MINUTE $HOUR * * * $RUN_USER cd $APP_DIR && $PHP_BIN spark customers:refresh >> $LOG 2>&1 && $WARM"
+LINE="$MINUTE $HOUR * * * $RUN_USER cd $APP_DIR && $PHP_BIN spark customers:refresh --scheduled >> $LOG 2>&1 && $WARM"
 CATCH_LINE=
 if [ "$CATCH_UP" != none ]; then
     CH=$(echo "$CATCH_UP" | cut -d: -f1 | sed 's/^0\(.\)$/\1/')
     CM=$(echo "$CATCH_UP" | cut -d: -f2 | sed 's/^0\(.\)$/\1/')
-    CATCH_LINE="$CM $CH * * * $RUN_USER cd $APP_DIR && $PHP_BIN spark customers:refresh --skip-if-fresh >> $LOG 2>&1 && $WARM"
+    case "$CATCH_UP_UNTIL" in
+        [0-9]|1[0-9]|2[0-3]) ;;
+        *) die "--catch-up-until attend une heure de 0 à 23 (reçu : $CATCH_UP_UNTIL)" ;;
+    esac
+    [ "$CATCH_UP_UNTIL" -ge "$CH" ] || die "--catch-up-until ($CATCH_UP_UNTIL) doit être après --catch-up ($CATCH_UP)"
+    HOURS=$CH
+    [ "$CATCH_UP_UNTIL" -eq "$CH" ] || HOURS="$CH-$CATCH_UP_UNTIL"
+    CATCH_LINE="$CM $HOURS * * * $RUN_USER cd $APP_DIR && $PHP_BIN spark customers:refresh --scheduled --skip-if-fresh >> $LOG 2>&1 && $WARM"
 fi
 
 echo "PHP        : $PHP_BIN ($("$PHP_BIN" -r 'echo PHP_VERSION;'), oci8 OK)"
 echo "Projet     : $APP_DIR"
 echo "Utilisateur: $RUN_USER"
 echo "DuckDB     : $DUCKDB_BIN ($("$DUCKDB_BIN" -version 2>/dev/null))"
-echo "Heure      : $AT ($OFFSET), rattrapage : $CATCH_UP"
+echo "Heure      : $AT ($OFFSET), rattrapage : $CATCH_UP jusqu'à ${CATCH_UP_UNTIL}h"
 echo "Log        : $LOG"
 echo "Cron       : $LINE"
 [ -z "$CATCH_LINE" ] || echo "Rattrapage : $CATCH_LINE"
@@ -126,4 +136,10 @@ TMP=$(mktemp)
 chmod 0644 "$TMP"
 mv "$TMP" "$CRON_FILE"
 echo "Installé : $CRON_FILE"
+
+# Déclare l'heure au tableau de bord : sans ce fichier, il affiche « Non programmée ».
+SCHEDULE="$APP_DIR/writable/data/customers_sync_schedule.json"
+printf '{"daily_at":"%s","scheduler":"cron","installed_at":"%s"}
+' "$AT" "$(date '+%Y-%m-%dT%H:%M:%S%:z')" > "$SCHEDULE"
+chmod 0644 "$SCHEDULE"
 echo "Test immédiat conseillé : su -s /bin/sh $RUN_USER -c 'cd $APP_DIR && $PHP_BIN spark customers:refresh'; echo \$?"

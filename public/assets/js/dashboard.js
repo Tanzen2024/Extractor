@@ -38,26 +38,25 @@
     // all 4 of them. The dropdown just narrows inside that perimeter; nothing
     // here decides it.
 
-    // SEGMENTATION values per Type de compteur — exact technical values, as
-    // observed in TB_CUSTOMERS_LIST (METER x SEGMENTATION, 2026-09-24):
+    // SEGMENTATION values per Type de compteur — exact technical values:
     // every POSTPAID value below occurs only on POSTPAID (and Compteurs
     // Communicants) contracts, every PREPAID value only on PREPAID ones.
-    // "8 Autre" (Postpaid) and "Other" (Prepaid) are two distinct values that
-    // merely share the "Other" display label. Both lists are in the STRICT
-    // business display order (dropdown and "Répartition par segmentation"
-    // chart — never by volume, alphabet or arrival order). PREPAID = the 8
-    // exact SQL values of prepaid_profile_p.sql, mirrored from
+    // POSTPAID = the 6 profiles of the single rule (profile_calculation in
+    // docs/snapshot/source/customers_list.sql), mirrored from
+    // App\Services\CustomersList\PostpaidSegmentations; a customer the rule
+    // leaves unclassified has a blank SEGMENTATION and no profile here. Both
+    // lists are in the STRICT business display order (dropdown and "Répartition par segmentation"
+    // chart — never by volume, alphabet or arrival order). PREPAID = the 6
+    // official segments, shown exactly as they are, mirrored from
     // App\Services\CustomersList\PrepaidSegmentations (the backend adds the
-    // ones absent from the data at count 0, so all 8 are always offered).
+    // ones absent from the data at count 0, so all 6 are always offered).
     // Drives the dropdown groups/order, the chart order and the Type compteur
     // -> Segmentation cascade only — never used to build a filter or a query.
     var POSTPAID_SEGMENTATIONS = [
-        '1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk', '5 Delinquant',
-        '6 Always Late', '8 Never Paid', '7 sometime Paid', '8 Autre'
+        '1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk', '5 Delinquant', '6 Défaillant'
     ];
     var PREPAID_SEGMENTATIONS = [
-        '1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant',
-        '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'
+        '1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6-Never Vending'
     ];
 
     // Technical value -> friendly display label, for dimensions where the raw
@@ -67,16 +66,19 @@
     // untouched technical one (see MultiSelect#renderList / getValues) — this
     // only changes what the user sees.
     var SEGMENTATION_LABELS = {
-        '1 PERFECT': 'PERFECT', '2 RELIABLE': 'RELIABLE', '3 Occasionnal': 'Occasional',
-        '4 At-Risk': 'At-Risk', '5 Delinquant': 'Delinquant', '6 Always Late': 'Always Late',
-        '8 Never Paid': 'Never Paid', '7 sometime Paid': 'sometime Paid', '8 Autre': t('dashboard.values.other')
+        '1 PERFECT': 'PERFECT', '2 RELIABLE': 'RELIABLE', '3 Occasionnal': 'Occasionnal',
+        '4 At-Risk': 'At-Risk', '5 Delinquant': 'Delinquant', '6 Défaillant': 'Défaillant'
     };
-    var PREPAID_SEGMENTATION_LABELS = {
-        '1-Stable': 'Stable', '2-InStable': t('dashboard.values.unstable'), '3-At Risk': t('dashboard.values.atRisk'),
-        '4-Suspect Dormant': 'Suspect Dormant', '5-Dormant': 'Dormant',
-        '6 Old_Dormant': 'Old Dormant', '7 Never Vending': 'Never Vending', 'Other': t('dashboard.values.other')
+    // Components of the 6 Défaillant profile — analysis only, never a profile:
+    // not in POSTPAID_SEGMENTATIONS, not in the Segmentation filter.
+    var FAILURE_LABELS = {
+        ALWAYS_LATE: function () { return t('dashboard.failure.alwaysLate'); },
+        SOMETIME_PAID: function () { return t('dashboard.failure.sometimePaid'); },
+        NEVER_PAID: function () { return t('dashboard.failure.neverPaid'); },
+        OTHER: function () { return t('dashboard.failure.other'); }
     };
-    Object.keys(PREPAID_SEGMENTATION_LABELS).forEach(function (v) { SEGMENTATION_LABELS[v] = PREPAID_SEGMENTATION_LABELS[v]; });
+    var FAILURE_COLORS = { ALWAYS_LATE: '#d97706', SOMETIME_PAID: '#1f6fb2', NEVER_PAID: '#c0392b', OTHER: '#94a3b8' };
+
     var DIM_LABELS = {
         // Only two real NUI_QC values exist (see QueryBuilder::TABLE_COLUMNS
         // comment). The "reclasser" one carries an upstream encoding
@@ -95,13 +97,15 @@
         },
         segmentation: function (v) { return SEGMENTATION_LABELS[v] || v; },
         // "Contact renseigné": wire values yes / no (FilterCriteria::CONTACT_YES / _NO).
-        contact: function (v) { return v === 'yes' ? t('common.yes') : t('common.no'); }
+        contact: function (v) { return v === 'yes' ? t('common.yes') : t('common.no'); },
+        failure_subcategory: function (v) { return FAILURE_LABELS[v] ? FAILURE_LABELS[v]() : v; }
     };
     function dimLabel(dim, value) { return DIM_LABELS[dim] ? DIM_LABELS[dim](value) : displayValue(value); }
 
     // Server-side bucket names ("Non renseigné" for a blank value, "Autres"
     // for a folded tail) are DATA — sent back as filter values, never
     // translated on the wire; only what the user reads is.
+    var BLANK_BUCKET = 'Non renseigné';
     var BUCKET_LABELS = { 'Non renseigné': 'glossary.notProvided', 'Autres': 'dashboard.groups.others' };
     function displayValue(value) { return BUCKET_LABELS[value] ? t(BUCKET_LABELS[value]) : value; }
 
@@ -119,6 +123,8 @@
         exporting: false,
         filterTotal: null,           // snapshot count for state.applied (GET /dashboard/count)
         tableScope: 'all',           // 'all' | 'postpaid' | 'prepaid' — table + export (tableCriteria())
+        failureFilter: null,         // component of the Défaillant breakdown narrowing the table + export
+        failureView: null,           // last breakdown received (SECTIONS.failureBreakdown())
         sectionCriteria: {},         // section -> criteria of its KPIs/charts (null = no possible row)
         sectionTotals: {},           // section -> rows of that criteria (stats totalRows)
         sectionData: {}              // section -> last stats answer, re-drawn on a theme change
@@ -144,14 +150,13 @@
 
     // ── helpers ────────────────────────────────────────────────────────
     function fmt(n) { return I18N.number(n); }
-    function pct(v) { return I18N.percent(v, 1); }
 
     // Values always visible on every chart (public/assets/js/chart-value-labels.js),
-    // with the same fmt / pct as the tooltips, KPIs and table.
+    // with the same fmt as the tooltips, KPIs and table. Statistics are shown
+    // as counts only: no percentage anywhere.
     if (window.Chart && window.bscdChartValueLabels) {
         Chart.register(window.bscdChartValueLabels.plugin);
         Chart.defaults.plugins.bscdValueLabels.formatValue = fmt;
-        Chart.defaults.plugins.bscdValueLabels.formatPercent = pct;
     }
 
     // "2026-09-03" or "2026-09-03 14:30:00" -> "03/09/2026". Empty/invalid ->
@@ -364,9 +369,7 @@
     // ── type de compteur <-> segmentation cascade ──────────────────────
     // Each Type compteur restricts Segmentation to its own list
     // (POSTPAID_SEGMENTATIONS / PREPAID_SEGMENTATIONS, top of file); both
-    // selected -> union of the two. The previous single shared RFM list
-    // offered the PREPAID-only "5-Dormant" under POSTPAID and hid the
-    // POSTPAID "5 Delinquant" / "8 Autre". Matching always compares the FULL
+    // selected -> union of the two. Matching always compares the FULL
     // normalised value, never a substring or the numeric prefix.
     // "Compteurs Communicants" uses the POSTPAID segmentation (business rule),
     // even when POSTPAID itself is not selected. Any other METER value is
@@ -457,7 +460,7 @@
         });
     }
 
-    // The 8 PREPAID categories are always offered, whatever the backend
+    // The 6 PREPAID segments are always offered, whatever the backend
     // lists (it may send only the values present in the data): a missing
     // one is added at count 0 — its real scoped count, if any, still comes
     // from withScopedCounts(). Same completion as
@@ -545,7 +548,8 @@
         region: t('glossary.region'), division: t('glossary.division'), agence: t('glossary.agency'),
         status: t('glossary.status'), segmentation: t('glossary.segmentation'),
         segment_tresor: t('glossary.treasurySegment'), meter: t('glossary.meter'),
-        voltage: t('glossary.voltage'), niu_qc: t('glossary.niuQuality'), contact: t('glossary.contactFilled')
+        voltage: t('glossary.voltage'), niu_qc: t('glossary.niuQuality'), contact: t('glossary.contactFilled'),
+        failure_subcategory: t('dashboard.failure.filter')
     };
 
     function filterText(k, v) {
@@ -603,7 +607,7 @@
     // universe (dashboard-sections.js, same meterUniverse() rule as the
     // segmentation dropdown). The server validates it like any meter filter.
     var SECTIONS = window.bscdDashboardSections;
-    var CHART_KINDS = ['region', 'status', 'segmentation'];
+    var CHART_KINDS = ['region', 'status', 'segmentation', 'failure'];
 
     function sectionRoot(key) { return document.querySelector('[data-section="' + key + '"]'); }
     function eachSection(fn) { SECTIONS.SECTIONS.forEach(function (sec) { fn(sec.key, sectionRoot(sec.key)); }); }
@@ -617,9 +621,14 @@
     // "Détail des clients": the page filters, or one section's criteria.
     // null = that scope has no possible row (nothing is requested).
     function tableCriteria() {
-        return state.tableScope === 'all' ? state.applied : criteriaFor(state.tableScope);
+        var c = state.tableScope === 'all' ? state.applied : criteriaFor(state.tableScope);
+        return SECTIONS.withFailureFilter(c, state.failureFilter);
     }
     function exportCount() {
+        if (state.failureFilter) {
+            var row = ((state.failureView && state.failureView.rows) || []).filter(function (r) { return r.value === state.failureFilter; })[0];
+            return row ? row.count : null;
+        }
         if (state.tableScope === 'all') return state.filterTotal;
         if (!tableCriteria()) return 0;
         var n = state.sectionTotals[state.tableScope];
@@ -637,6 +646,9 @@
             var badge = root && root.querySelector('[data-section-total]');
             if (badge) badge.textContent = text;
         });
+        var totalEl = document.querySelector('[data-sections-total]');
+        var total = SECTIONS.sectionsTotal(state.sectionTotals);
+        if (totalEl) totalEl.textContent = total === null ? '' : fmt(total);
         var note = document.querySelector('[data-section-unassigned]');
         if (!note) return;
         var rest = SECTIONS.unassigned(state.filterTotal, state.sectionTotals);
@@ -778,27 +790,22 @@
         var root = sectionRoot(key);
         var k = stats.kpis;
         // Same filters and same query as the other cards (QueryBuilder::kpiStatement() NUI_CORRECT).
-        // "% du total" = NUI corrects (filtered) / all NUI of the unfiltered reference.
         root.querySelector('[data-kpi="nuiCorrects"]').textContent = k.nuiCorrects ? fmt(k.nuiCorrects.value) : '—';
-        setKpiSub(root, 'nuiCorrects', k.nuiCorrects ? ofTotal(k.nuiCorrects.pct) : '', t('dashboard.kpi.nuiCorrectsNote'));
-        // "Clients actifs" = the section's contracts (all in-perimeter);
-        // "% du total" = of every active contract without user filter.
+        setKpiNote(root, 'nuiCorrects', t('dashboard.kpi.nuiCorrectsNote'));
+        // "Clients actifs" = the section's contracts (all in-perimeter).
         [['actifs', k.actifs], ['contacts', k.contacts]].forEach(function (pair) {
             if (!pair[1]) { // stats cached before this card existed
                 root.querySelector('[data-kpi="' + pair[0] + '"]').textContent = '—';
                 return;
             }
             root.querySelector('[data-kpi="' + pair[0] + '"]').textContent = fmt(pair[1].value);
-            root.querySelector('[data-kpi-sub="' + pair[0] + '"]').textContent = ofTotal(pair[1].pct);
         });
     }
 
-    function ofTotal(value) { return t('dashboard.kpi.ofTotal', { pct: pct(value) }); }
-
-    // Percentage line + the card's descriptive note underneath (both text only).
-    function setKpiSub(root, key, pctText, note) {
+    // The card's descriptive note (text only).
+    function setKpiNote(root, key, note) {
         var s = root.querySelector('[data-kpi-sub="' + key + '"]');
-        s.textContent = pctText;
+        s.textContent = '';
         var n = document.createElement('span');
         n.className = 'bscd-kpi-note';
         n.textContent = note;
@@ -837,6 +844,7 @@
         donut(canvasIdOf(key, 'status'), ch.status);
         bar(canvasIdOf(key, 'segmentation'), segmentationChartPairs(ch.segmentation, criteria || {}), false);
         meterTypeSummary(sectionRoot(key), key, ch.meterType);
+        if (key === 'postpaid') failureBreakdown(sectionRoot(key), canvasIdOf(key, 'failure'), ch.failureBreakdown);
         CHART_KINDS.forEach(function (kind) {
             var id = canvasIdOf(key, kind);
             if (!state.charts[id]) return;
@@ -897,7 +905,7 @@
         pairs.forEach(function (p) { if (known.indexOf(p.value) === -1) known.push(p.value); });
 
         var postpaid = universes.POSTPAID ? POSTPAID_SEGMENTATIONS.filter(function (v) { return known.indexOf(v) !== -1; }) : [];
-        // All 8 PREPAID categories, always, in PREPAID_SEGMENTATIONS order.
+        // All 6 PREPAID segments, always, in PREPAID_SEGMENTATIONS order.
         var prepaid = universes.PREPAID ? PREPAID_SEGMENTATIONS.slice() : [];
         var order = postpaid.concat(prepaid);
 
@@ -905,9 +913,11 @@
         if (selected.length) order = order.filter(function (v) { return selected.indexOf(v) !== -1; });
 
         pairs.forEach(function (p) { if (order.indexOf(p.value) === -1 && p.count > 0) order.push(p.value); });
-        // PREPAID bars carry their display label (no numeric prefix).
+        // Blank rows of the POSTPAID universe are the customers the profile rule
+        // leaves unclassified: their own bar, in no profile.
         return order.map(function (v) {
-            return { value: v, count: counts[v] || 0, label: PREPAID_SEGMENTATION_LABELS[v] || v };
+            var unclassified = universes.POSTPAID && v === BLANK_BUCKET;
+            return { value: v, count: counts[v] || 0, label: unclassified ? t('dashboard.values.unclassified') : v };
         });
     }
 
@@ -936,6 +946,8 @@
             if (totalEl) totalEl.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>';
             if (listEl) listEl.innerHTML = '<li class="bscd-metertype__empty">' + escapeHtml(text) + '</li>';
             chartExport(key + '-meterType', null);
+            var failureStats = root.querySelector('[data-failure-stats]');
+            if (failureStats) failureStats.innerHTML = '';
         });
     }
 
@@ -963,8 +975,7 @@
                 plugins: {
                     legend: { display: false },
                     tooltip: { callbacks: { label: function (ctx) {
-                        var val = horizontal ? ctx.parsed.x : ctx.parsed.y;
-                        return fmt(val) + (total ? ' (' + pct(val / total * 100) + ')' : '');
+                        return fmt(horizontal ? ctx.parsed.x : ctx.parsed.y);
                     } } }
                 },
                 scales: (function () {
@@ -996,14 +1007,89 @@
                 plugins: {
                     legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } },
                     tooltip: { callbacks: { label: function (ctx) {
-                        return ctx.label + ': ' + fmt(ctx.parsed) + (total ? ' (' + pct(ctx.parsed / total * 100) + ')' : '');
+                        return ctx.label + ': ' + fmt(ctx.parsed);
                     } } }
                 }
             }
         });
     }
 
-    // "Type de compteurs" — total + one row per METER value, counts and % from
+    // "Décomposition du profil Défaillant" (Postpaid only): doughnut + 4 cards,
+    // both from the same answer. Clicking a component opens its customers in
+    // "Détail des clients".
+    function failureBreakdown(root, canvasId, data) {
+        var canvas = document.getElementById(canvasId);
+        var statsEl = root.querySelector('[data-failure-stats]');
+        destroyChart(canvasId);
+
+        var view = SECTIONS.failureBreakdown(data);
+        var rows = view.rows;
+        var plotted = rows.reduce(function (s, r) { return s + r.count; }, 0);
+        state.failureView = view;
+
+        var noteEl = root.querySelector('[data-failure-note]');
+        if (noteEl) {
+            noteEl.hidden = !view.unassigned;
+            noteEl.textContent = view.unassigned ? t('dashboard.failure.unassigned', { n: fmt(view.unassigned) }) : '';
+        }
+        statsEl.innerHTML = plotted ? rows.map(function (r) {
+            return '<button type="button" class="bscd-failure__stat" data-failure-value="' + escapeAttr(r.value) + '" style="--bscd-failure-color:' + FAILURE_COLORS[r.value] + '">' +
+                '<span class="bscd-failure__name">' + escapeHtml(dimLabel('failure_subcategory', r.value)) + '</span>' +
+                '<span class="bscd-failure__count">' + fmt(r.count) + '</span></button>';
+        }).join('') : '';
+        renderFailureFilter();
+
+        setChartMessage(canvasId, plotted ? null : CHART_EMPTY);
+        if (!plotted) return;
+        chartPairs[canvasId] = rows.map(function (r) { return { value: dimLabel('failure_subcategory', r.value), count: r.count }; });
+        state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                labels: rows.map(function (r) { return dimLabel('failure_subcategory', r.value); }),
+                datasets: [{ data: rows.map(function (r) { return r.count; }),
+                    backgroundColor: rows.map(function (r) { return FAILURE_COLORS[r.value]; }), borderWidth: 0 }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, cutout: '62%',
+                onClick: function (e, hit) { if (hit.length) selectFailure(rows[hit[0].index].value); },
+                onHover: function (e, hit) { if (e.native && e.native.target) e.native.target.style.cursor = hit.length ? 'pointer' : 'default'; },
+                plugins: {
+                    legend: { position: 'right', labels: { boxWidth: 10, font: { size: 11 } } },
+                    tooltip: { callbacks: { label: function (ctx) {
+                        return ctx.label + ': ' + fmt(ctx.parsed);
+                    } } },
+                    bscdValueLabels: { center: { label: t('dashboard.failure.total'), value: fmt(view.total) } }
+                }
+            }
+        });
+    }
+
+    // Selected component: highlighted card + a removable chip above the table.
+    function renderFailureFilter() {
+        document.querySelectorAll('[data-failure-value]').forEach(function (b) {
+            var on = b.dataset.failureValue === state.failureFilter;
+            b.classList.toggle('is-active', on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        var box = document.getElementById('bscdFailureFilter');
+        if (!box) return;
+        box.innerHTML = state.failureFilter
+            ? '<span class="bscd-chip">' + escapeHtml(FILTER_LABELS.failure_subcategory) + ' : ' + escapeHtml(dimLabel('failure_subcategory', state.failureFilter)) +
+              '<button type="button" data-failure-clear aria-label="' + escapeAttr(t('common.remove')) + '">&times;</button></span>'
+            : '';
+    }
+
+    function selectFailure(value) {
+        state.failureFilter = state.failureFilter === value ? null : value;
+        if (state.failureFilter) setTableScope('postpaid');
+        state.table.page = 1;
+        renderFailureFilter();
+        loadRows().catch(handleError);
+        var detail = document.getElementById('bscdSection-detail');
+        if (state.failureFilter && detail && detail.scrollIntoView) detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    // "Type de compteurs" — total + one row per METER value, counts from
     // Oracle (GROUP BY METER). No hardcoded type list: whatever buckets the
     // backend returns are rendered, in descending-count order, blank -> the
     // "Non renseigné" bucket the backend already labels.
@@ -1018,14 +1104,12 @@
 
         listEl.innerHTML = '';
         pairs.forEach(function (p, i) {
-            var share = total ? (Number(p.count) || 0) / total * 100 : 0;
             var li = document.createElement('li');
             li.className = 'bscd-metertype__row';
             li.innerHTML =
                 '<span class="bscd-metertype__swatch" style="background:' + colorFor(i) + '"></span>' +
                 '<span class="bscd-metertype__name">' + escapeHtml(displayValue(p.value)) + '</span>' +
-                '<span class="bscd-metertype__count">' + fmt(p.count) + '</span>' +
-                '<span class="bscd-metertype__pct">' + pct(share) + '</span>';
+                '<span class="bscd-metertype__count">' + fmt(p.count) + '</span>';
             listEl.appendChild(li);
         });
 
@@ -1329,13 +1413,24 @@
             b.setAttribute('aria-pressed', on ? 'true' : 'false');
         });
     }
+    function selectTableScope(scope) {
+        if (scope === state.tableScope) return;
+        setTableScope(scope);
+        if (scope !== 'postpaid') { state.failureFilter = null; renderFailureFilter(); } // a Postpaid-only narrowing
+        state.table.page = 1;
+        loadRows().catch(handleError);
+    }
     document.querySelectorAll('[data-table-scope]').forEach(function (b) {
-        b.addEventListener('click', function () {
-            if (b.dataset.tableScope === state.tableScope) return;
-            setTableScope(b.dataset.tableScope);
-            state.table.page = 1;
-            loadRows().catch(handleError);
-        });
+        b.addEventListener('click', function () { selectTableScope(b.dataset.tableScope); });
+    });
+    // Cards and chip of the Défaillant breakdown are redrawn with each answer.
+    document.addEventListener('click', function (e) {
+        var el = e.target && e.target.closest ? e.target.closest('[data-failure-value], [data-failure-clear]') : null;
+        if (el) selectFailure(el.hasAttribute('data-failure-clear') ? state.failureFilter : el.dataset.failureValue);
+    });
+    // "Total clients" link: its anchor scrolls to the table, here set on "Tous".
+    document.querySelectorAll('[data-table-scope-link]').forEach(function (a) {
+        a.addEventListener('click', function () { selectTableScope(a.dataset.tableScopeLink); });
     });
 
     // Language switch (layout's [data-locale-switch] links): the page is
@@ -1347,7 +1442,7 @@
             try {
                 sessionStorage.setItem(RESTORE_KEY, JSON.stringify({
                     applied: state.applied,
-                    table: { sort: state.table.sort, dir: state.table.dir, perPage: state.table.perPage, search: state.table.search, page: state.table.page, scope: state.tableScope }
+                    table: { sort: state.table.sort, dir: state.table.dir, perPage: state.table.perPage, search: state.table.search, page: state.table.page, scope: state.tableScope, failure: state.failureFilter }
                 }));
             } catch (e) { /* private mode: the defaults apply */ }
         });
@@ -1382,10 +1477,13 @@
         if (tb.perPage) { state.table.perPage = tb.perPage; els.perPage.value = String(tb.perPage); }
         if (tb.search) { state.table.search = tb.search; els.search.value = tb.search; }
         if (tb.scope) setTableScope(tb.scope);
+        if (tb.failure) { state.failureFilter = tb.failure; renderFailureFilter(); }
         return tb.page || 1;
     }
 
     function resetFilters() {
+        state.failureFilter = null;
+        renderFailureFilter();
         window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo);
         MS_DIMS.forEach(function (d) { ms[d].clear(); }); // STATUT: reset leaves it empty, like every other filter
         refreshSegmentationOptions(); // meter now empty -> all options, label "Postpaid | Compteurs communicants"

@@ -72,9 +72,9 @@ final class SnapshotDashboardParityTest extends CIUnitTestCase
         $statuses = ['ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVE.', '', 'INACTIVATION IN PROCESS.'];
         $meters   = ['PREPAID', 'POSTPAID', 'Compteurs Communicants', ' '];
         $segments = [
-            'PREPAID'                => ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'],
-            'POSTPAID'               => ['1 PERFECT', '2 RELIABLE', '3 Occasional', '4 At-Risk', '5 Delinquant', '6 Always Late', '7 Never Paid', '8 Sometimes Paid', '9 Others'],
-            'Compteurs Communicants' => ['1 PERFECT', '4 At-Risk', '9 Others'],
+            'PREPAID'                => ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6-Never Vending'],
+            'POSTPAID'               => ['1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk', '5 Delinquant', '6 Défaillant'],
+            'Compteurs Communicants' => ['1 PERFECT', '4 At-Risk', '6 Défaillant'],
             ' '                      => [''],
         ];
         $dates = ['15/01/2020', '31/12/2019', '01/01/2020', '31/02/2021', '1/4/2024', '01/07/0980', '', '15/06/2024', '29/02/2024'];
@@ -117,8 +117,8 @@ final class SnapshotDashboardParityTest extends CIUnitTestCase
             'none'               => FilterCriteria::none(),
             'statuts actifs'     => FilterCriteria::fromArray(['statuses' => self::ACTIVE]),
             'région (valeur paddée dans le fichier)' => FilterCriteria::fromArray(['regions' => ['DRO']]),
-            'PREPAID + segments' => FilterCriteria::fromArray(['meters' => ['PREPAID'], 'segmentations' => ['1-Stable', '6 Old_Dormant', 'Other']]),
-            'POSTPAID'           => FilterCriteria::fromArray(['meters' => ['POSTPAID'], 'segmentations' => ['1 PERFECT', '4 At-Risk', '9 Others']]),
+            'PREPAID + segments' => FilterCriteria::fromArray(['meters' => ['PREPAID'], 'segmentations' => ['1-Stable', '5-Dormant', '6-Never Vending']]),
+            'POSTPAID'           => FilterCriteria::fromArray(['meters' => ['POSTPAID'], 'segmentations' => ['1 PERFECT', '4 At-Risk', '6 Défaillant']]),
             'compteurs communicants' => FilterCriteria::fromArray(['meters' => ['Compteurs Communicants']]),
             'bornes de dates incluses' => FilterCriteria::fromArray(['dateFrom' => '2019-12-31', 'dateTo' => '2020-01-15']),
             'date de début seule' => FilterCriteria::fromArray(['dateFrom' => '2024-02-29']),
@@ -319,10 +319,12 @@ final class SnapshotDashboardParityTest extends CIUnitTestCase
     {
         $seg = $this->duck->segmentationCounts(FilterCriteria::fromArray(['meters' => ['PREPAID']]));
 
+        // Those the active rows of the fixture reach; none outside the official six.
         $this->assertSame(
-            ['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'],
-            array_values(array_intersect(['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6 Old_Dormant', '7 Never Vending', 'Other'], array_keys($seg))),
+            ['1-Stable', '3-At Risk', '4-Suspect Dormant', '6-Never Vending'],
+            array_values(array_intersect(['1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6-Never Vending'], array_keys($seg))),
         );
+        $this->assertCount(4, $seg);
         $this->assertSame(self::rowsWhere(static fn (int $n): bool => $n % 4 === 0), array_sum($seg));
     }
 

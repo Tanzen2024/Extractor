@@ -107,6 +107,28 @@ class Snapshot extends BaseConfig
     public int $refreshProgressEvery = 250_000;
 
     /**
+     * A refresh does not start with less free disk than this: the extraction
+     * (~0.8 GB), its normalised copy and the index all exist at the same time.
+     */
+    public int $refreshMinFreeBytes = 3_221_225_472;
+
+    /**
+     * Declares the daily time to the freshness indicator. Written by the
+     * scheduler installers (docs/snapshot/extractor/), so the page only
+     * announces a next run when one was really installed.
+     */
+    public string $refreshScheduleFile = WRITEPATH . 'data/customers_sync_schedule.json';
+
+    /**
+     * Freshness indicator. 26 h = a daily run plus the time a slow extraction
+     * may take (74 min measured on 2026-10-03) and the morning retries.
+     */
+    public int $syncMaxAgeHours = 26;
+
+    /** A run still "running" after this long is shown as interrupted. */
+    public int $syncStaleRunHours = 6;
+
+    /**
      * Query index of each version (dashboard: filters, KPIs, charts,
      * segmentation counts, table, count): versions/<id>/customers_list.duckdb,
      * a DuckDB database built FROM that version's CSV when it is installed
@@ -136,6 +158,10 @@ class Snapshot extends BaseConfig
         $this->publishedLink        = (string) env('snapshot.publishedLink', $this->publishedLink);
         $this->refreshMinRowRatio   = max(0.0, min(1.0, (float) env('snapshot.refreshMinRowRatio', $this->refreshMinRowRatio)));
         $this->refreshProgressEvery = max(1000, (int) env('snapshot.refreshProgressEvery', $this->refreshProgressEvery));
+        $this->refreshMinFreeBytes  = max(0, (int) env('snapshot.refreshMinFreeBytes', $this->refreshMinFreeBytes));
+        $this->refreshScheduleFile  = (string) env('snapshot.refreshScheduleFile', $this->refreshScheduleFile);
+        $this->syncMaxAgeHours      = max(1, (int) env('snapshot.syncMaxAgeHours', $this->syncMaxAgeHours));
+        $this->syncStaleRunHours    = max(1, (int) env('snapshot.syncStaleRunHours', $this->syncStaleRunHours));
 
         $this->exportSource  = strtolower((string) env('snapshot.exportSource', $this->exportSource));
         $this->baseDir       = rtrim((string) env('snapshot.baseDir', $this->baseDir), '/\\');

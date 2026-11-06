@@ -3,15 +3,18 @@
 namespace App\Controllers;
 
 use App\Models\ExportJobModel;
+use App\Services\AuthorizationService;
 use App\Services\CustomerListExportService;
 use App\Services\CustomersList\ActiveCustomers;
 use App\Services\CustomersList\DashboardService;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\InvalidFilterException;
+use App\Services\CustomersList\PostpaidSegmentations;
 use App\Services\CustomersList\PrepaidSegmentations;
 use App\Services\CustomersList\QueryBuilder;
 use App\Services\Snapshot\SnapshotRowSource;
 use App\Services\Snapshot\SnapshotUnavailableException;
+use App\Services\Snapshot\SyncStatusReader;
 use Config\Oracle as OracleConfig;
 use Throwable;
 
@@ -34,7 +37,9 @@ use Throwable;
  *   GET  /dashboard/rows             one server-side page of the data table
  *   GET  /dashboard/segmentation-counts  rows per segmentation for the other filters
  *   GET  /dashboard/filter-options   region→division→agence tree + value lists
- *   POST /dashboard/export           run (small) or queue (large) a filtered export
+ *   GET  /dashboard/sync-status      freshness of the active data
+ *   GET  /dashboard/sync-history     latest synchronisations
+ *   POST /dashboard/export          run (small) or queue (large) a filtered export
  *   GET  /dashboard/export/download  one-shot signed download of a sync export
  *
  * Every AJAX endpoint validates the incoming filters against the values of
@@ -70,6 +75,8 @@ class DashboardController extends BaseController
                     'filterOptions' => site_url('dashboard/filter-options'),
                     'export'        => site_url('dashboard/export'),
                     'jobStatus'     => site_url('exports'), // + /{id}
+                    'syncStatus'    => site_url('dashboard/sync-status'),
+                    'syncHistory'   => site_url('dashboard/sync-history'),
                 ],
                 'sortable'          => QueryBuilder::SORTABLE,
                 'tableColumns'      => QueryBuilder::ALL_COLUMNS,
@@ -78,6 +85,51 @@ class DashboardController extends BaseController
                 'exportSyncMaxRows' => $this->oracleConfig->exportSyncMaxRows,
             ],
         ]);
+    }
+
+    /**
+     * Freshness indicator. Reads the active version's meta and one history
+     * row; `clients` is the cached count the table shows for no filter.
+     */
+    public function syncStatus()
+    {
+        session()->close();
+
+        $status = (new SyncStatusReader())->read();
+
+        try {
+            $status['clients'] = $this->dashboard->count(FilterCriteria::none());
+        } catch (Throwable) {
+            $status['clients'] = null; // no snapshot: the state above already says so
+        }
+
+        return $this->response->setJSON($status);
+    }
+
+    /**
+     * Latest synchronisations. Raw error messages (Oracle errors, server
+     * paths) are for those who may read the audit log; others get the reason.
+     */
+    public function syncHistory()
+    {
+        $technical = AuthorizationService::fromSession()->can('AUDIT_VIEW');
+        session()->close();
+
+        $runs = array_map(static fn (array $run): array => [
+            'startedAt'       => $run['started_at'],
+            'durationSeconds' => $run['duration_seconds'] === null ? null : (int) $run['duration_seconds'],
+            'trigger'         => $run['trigger_type'],
+            'status'          => $run['status'],
+            'rowsRead'        => $run['rows_read'] === null ? null : (int) $run['rows_read'],
+            'rowsAdded'       => $run['rows_added'] === null ? null : (int) $run['rows_added'],
+            'rowsModified'    => $run['rows_modified'] === null ? null : (int) $run['rows_modified'],
+            'rowsIgnored'     => $run['rows_ignored'] === null ? null : (int) $run['rows_ignored'],
+            'rowsRemoved'     => $run['rows_removed'] === null ? null : (int) $run['rows_removed'],
+            'errorReason'     => $run['error_reason'],
+            'errorMessage'    => $technical ? $run['error_message'] : null,
+        ], (new SyncStatusReader())->history(30));
+
+        return $this->response->setJSON(['runs' => $runs]);
     }
 
     public function stats()
@@ -151,8 +203,10 @@ class DashboardController extends BaseController
 
         // The values (with counts) computed when the active version was
         // installed — instant, and exactly the values a filter may take. The
-        // 8 PREPAID categories are always offered (absent ones at 0).
-        return $this->guarded(fn () => $this->response->setJSON(PrepaidSegmentations::completeOptions($this->dashboard->filterOptions())));
+        // 6 profiles and 6 PREPAID segments are always offered (absent ones at 0).
+        return $this->guarded(fn () => $this->response->setJSON(
+            PostpaidSegmentations::completeOptions(PrepaidSegmentations::completeOptions($this->dashboard->filterOptions()))
+        ));
     }
 
     /**

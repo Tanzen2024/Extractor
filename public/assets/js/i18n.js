@@ -9,7 +9,6 @@
  *                                {count} = n formatted.
  *   bscdI18n.number(n)           integer with the locale's grouping (1 234 / 1,234)
  *   bscdI18n.decimal(n, digits)  fixed decimals with the locale's separator (70,0 / 70.0)
- *   bscdI18n.percent(n, digits)  '70,0 %' / '70.0%'
  *
  * Catalogs: public/assets/i18n/{fr,en}.json. In the browser the active one is
  * inlined by the layout (i18n_script_tag(): window.BSCD_I18N); under Node
@@ -76,9 +75,6 @@
         return t(key + (isOne(Number(n) || 0) ? '.one' : '.other'), p);
     }
 
-    function percent(n, digits) {
-        return t('meta.percent', { value: decimal(n, digits) });
-    }
 
-    return { locale: locale, t: t, tn: tn, number: number, decimal: decimal, percent: percent };
+    return { locale: locale, t: t, tn: tn, number: number, decimal: decimal };
 }));

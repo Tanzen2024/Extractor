@@ -191,14 +191,14 @@ order_master_meters AS (
    ligne par METER pour chaque mois du calendrier, y compris des mois
    futurs sans aucun achat (2026-10-01 : VC_DATE jusqu'au 2027-09-01,
    dernier achat au 2026-08-31). Seuls les mois jusqu'au mois du
-   dernier achat connu de la table sont retenus ; SEGMENT_RFM_2 est
-   repris tel quel.
+   dernier achat connu de la table sont retenus.
    ================================================================= */
 
-prepaid_rfm AS (
+prepaid_last AS (
     SELECT
         METER,
         VC_DATE,
+        RECENSE,
         SEGMENT_RFM_2
 
     FROM (
@@ -206,6 +206,7 @@ prepaid_rfm AS (
 
             METER,
             VC_DATE,
+            RECENSE,
             SEGMENT_RFM_2,
 
             ROW_NUMBER() OVER (
@@ -225,21 +226,66 @@ prepaid_rfm AS (
 ),
 
 /* ================================================================
-   DERNIER PROFIL POSTPAID
+   SEGMENT PREPAID
+
+   Regle metier unique (rapport Marketing Intelligence, juillet 2026) :
+   la recence decide d'abord ; sous 30 jours, le segment comportemental
+   calcule en amont est repris. Toute autre valeur amont reste non
+   classee plutot que d'etre affectee arbitrairement.
    ================================================================= */
 
-postpaid_profile AS (
+prepaid_rfm AS (
+    SELECT
+        r.METER,
+        r.VC_DATE,
+
+        CASE
+            WHEN r.RECENSE IS NULL
+            THEN '6-Never Vending'
+
+            WHEN r.RECENSE >= 60
+            THEN '5-Dormant'
+
+            WHEN r.RECENSE >= 30
+            THEN '4-Suspect Dormant'
+
+            WHEN r.SEGMENT_RFM_2 IN ('1-Stable', '2-InStable', '3-At Risk')
+            THEN r.SEGMENT_RFM_2
+
+            ELSE NULL
+
+        END AS SEGMENT_RFM_2
+
+    FROM prepaid_last r
+),
+
+/* ================================================================
+   DERNIER ETAT POSTPAID
+
+   Derniere ligne de chaque contrat dans postpaid_profile_p, y compris
+   une ligne sans profil : c'est bill_number de cette ligne qui decide
+   si le client est classe. La colonne PROFILE de la table (anciens
+   libelles) n'est plus lue.
+   ================================================================= */
+
+calculated AS (
     SELECT
         SERVICE_NO,
         DATE_,
-        PROFILE
+        BILL_NUMBER,
+        RATE,
+        BAD_COUNT,
+        NO_PAID_COUNT
 
     FROM (
         SELECT
 
             SERVICE_NO,
             DATE_,
-            PROFILE,
+            BILL_NUMBER,
+            RATE,
+            BAD_COUNT,
+            NO_PAID_COUNT,
 
             ROW_NUMBER() OVER (
                 PARTITION BY SERVICE_NO
@@ -247,11 +293,50 @@ postpaid_profile AS (
             ) AS RN
 
         FROM cms_rfc.postpaid_profile_p
-
-        WHERE PROFILE IS NOT NULL
     )
 
     WHERE RN = 1
+),
+
+/* ================================================================
+   PROFIL POSTPAID / COMPTEURS COMMUNICANTS
+
+   Regle metier unique des deux populations : seule definition du
+   projet. Bornes et libelles a ne pas modifier ailleurs.
+   ================================================================= */
+
+profile_calculation AS (
+    SELECT
+        c.*,
+
+        CASE
+            WHEN c.bill_number = 0
+            THEN NULL
+
+            WHEN c.rate = 1
+            THEN '1 PERFECT'
+
+            WHEN c.rate < 1
+             AND c.rate >= 0.75
+            THEN '2 RELIABLE'
+
+            WHEN c.rate < 0.75
+             AND c.rate >= 0.50
+            THEN '3 Occasionnal'
+
+            WHEN c.rate < 0.50
+             AND c.rate >= 0.25
+            THEN '4 At-Risk'
+
+            WHEN c.rate < 0.25
+             AND c.rate > 0
+            THEN '5 Delinquant'
+
+            ELSE '6 Défaillant'
+
+        END AS profile
+
+    FROM calculated c
 ),
 
 /* ================================================================
@@ -504,7 +589,7 @@ SELECT /*+ PARALLEL(8) */
         WHEN p.METER_PREP IS NOT NULL
              AND rfm.METER IS NULL
              AND om.METER_PREP IS NOT NULL
-        THEN '6 Old_Dormant'
+        THEN '5-Dormant'
 
         /*
          * PREPAID sans profil RFM
@@ -513,20 +598,21 @@ SELECT /*+ PARALLEL(8) */
         WHEN p.METER_PREP IS NOT NULL
              AND rfm.METER IS NULL
              AND om.METER_PREP IS NULL
-        THEN '7 Never Vending'
+        THEN '6-Never Vending'
 
         /*
          * POSTPAID / COMPTEURS COMMUNICANTS
-         * avec profil POSTPAID
+         * NULL si bill_number = 0 (client non classe)
          */
         WHEN p.METER_PREP IS NULL
              AND pp.SERVICE_NO IS NOT NULL
         THEN pp.PROFILE
 
         /*
-         * Autre
+         * POSTPAID / COMPTEURS COMMUNICANTS sans historique de
+         * facturation : non classe
          */
-        ELSE '8 Autre'
+        ELSE NULL
 
     END AS SEGMENTATION,
 
@@ -534,7 +620,41 @@ SELECT /*+ PARALLEL(8) */
     TO_CHAR(
         SYSDATE,
         'YYYY-MM-DD HH24:MI:SS'
-    ) AS UPDATED_AT
+    ) AS UPDATED_AT,
+
+    /* =============================================================
+       28 — FAILURE_SUBCATEGORY
+
+       Attribut d'analyse, distinct de SEGMENTATION : decompose le profil
+       6 Défaillant, NULL pour tout autre client. Ce n'est pas un profil.
+       Les conditions se chevauchent (BAD_COUNT = BILL_NUMBER implique en
+       general NO_PAID_COUNT < BILL_NUMBER) : l'ordre est la priorite. Le
+       ELSE garantit une composante a chaque client du profil.
+       ============================================================= */
+
+    CASE
+        WHEN p.METER_PREP IS NULL
+             AND pp.PROFILE = '6 Défaillant'
+        THEN
+            CASE
+                WHEN pp.RATE = 0
+                 AND pp.BAD_COUNT = pp.BILL_NUMBER
+                 AND pp.BILL_NUMBER > 0
+                THEN 'ALWAYS_LATE'
+
+                WHEN pp.RATE = 0
+                 AND pp.NO_PAID_COUNT = pp.BILL_NUMBER
+                 AND pp.BILL_NUMBER > 0
+                THEN 'NEVER_PAID'
+
+                WHEN pp.RATE = 0
+                 AND pp.NO_PAID_COUNT < pp.BILL_NUMBER
+                 AND pp.BILL_NUMBER > 0
+                THEN 'SOMETIME_PAID'
+
+                ELSE 'OTHER'
+            END
+    END AS FAILURE_SUBCATEGORY
 
 FROM lister l
 
@@ -570,7 +690,7 @@ LEFT JOIN prepaid_rfm rfm
    PROFIL POSTPAID
    ================================================================= */
 
-LEFT JOIN postpaid_profile pp
+LEFT JOIN profile_calculation pp
     ON pp.SERVICE_NO = l.CONTRACT
 
 /* ================================================================

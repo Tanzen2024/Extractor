@@ -3,6 +3,7 @@
 namespace App\Services\Refresh;
 
 use App\Services\CustomerListExportService;
+use App\Services\CustomersList\FailureSubcategories;
 use App\Services\OracleExtractionService;
 use App\Services\Snapshot\SnapshotException;
 use Config\Oracle as OracleConfig;
@@ -66,10 +67,30 @@ final class OracleSnapshotExtractor
         $this->shouldStop = $shouldStop ?? static fn (): bool => false;
     }
 
-    public static function selectSql(): string
+    /**
+     * Columns of the source table that are not exported: read when the table
+     * has them, left out otherwise, so a refresh works before and after the
+     * source side adds them.
+     *
+     * @return list<string>
+     */
+    private function optionalColumns(): array
+    {
+        $found = $this->oracle->select(
+            "SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER || '.' || TABLE_NAME = '" . CustomerListExportService::SQL_TABLE . "'"
+            . " AND COLUMN_NAME = '" . FailureSubcategories::COLUMN . "'",
+            [],
+            1,
+        )['rows'] ?? [];
+
+        return ($found[0]['COLUMN_NAME'] ?? null) === FailureSubcategories::COLUMN ? [FailureSubcategories::COLUMN] : [];
+    }
+
+    /** @param list<string> $optional what optionalColumns() found */
+    public static function selectSql(array $optional = []): string
     {
         $columns = [];
-        foreach (CustomerListExportService::COLUMNS as $column) {
+        foreach (array_merge(CustomerListExportService::COLUMNS, $optional) as $column) {
             $columns[] = in_array($column, self::DATE_COLUMNS, true)
                 ? sprintf("TO_CHAR(%s, '%s') AS %s", $column, self::DATE_SQL_FORMAT, $column)
                 : $column;
@@ -81,6 +102,18 @@ final class OracleSnapshotExtractor
     public static function countSql(): string
     {
         return 'SELECT COUNT(*) AS N, MAX(UPDATED_AT) AS SOURCE_UPDATED_AT FROM ' . CustomerListExportService::SQL_TABLE;
+    }
+
+    /**
+     * What the source table holds now: one cheap aggregate, no extraction.
+     *
+     * @return array{rows: int, updated_at: string}
+     */
+    public function sourceState(): array
+    {
+        $ref = $this->oracle->select(self::countSql(), [], 1)['rows'][0] ?? [];
+
+        return ['rows' => (int) ($ref['N'] ?? 0), 'updated_at' => (string) ($ref['SOURCE_UPDATED_AT'] ?? '')];
     }
 
     /**
@@ -118,7 +151,9 @@ final class OracleSnapshotExtractor
 
             ($this->log)('info', sprintf('Oracle connection OK — %s lignes attendues, MAX(UPDATED_AT)=%s (%.1fs)', number_format($expected, 0, '.', ' '), $sourceUpdated ?? 'n/d', $countSeconds));
 
-            $header = implode(self::DELIMITER, CustomerListExportService::COLUMNS);
+            $optional = $this->optionalColumns();
+            $columns  = array_merge(CustomerListExportService::COLUMNS, $optional);
+            $header   = implode(self::DELIMITER, $columns);
             $hash   = hash_init('sha256');
             $buffer = $header . "\n";
             $bytes  = 0;
@@ -142,9 +177,9 @@ final class OracleSnapshotExtractor
 
             ($this->log)('info', 'Requête d\'extraction démarrée');
 
-            $this->oracle->stream(self::selectSql(), function (array $row) use (&$buffer, &$rows, &$dirty, $flush, $every, $expected, $t1): void {
+            $this->oracle->stream(self::selectSql($optional), function (array $row) use (&$buffer, &$rows, &$dirty, $flush, $every, $expected, $t1, $columns): void {
                 $fields = [];
-                foreach (CustomerListExportService::COLUMNS as $column) {
+                foreach ($columns as $column) {
                     $value = (string) ($row[$column] ?? '');
                     // The format has no enclosure: a delimiter or newline
                     // inside a value would shift every following field.
@@ -214,7 +249,7 @@ final class OracleSnapshotExtractor
                 'size'              => $bytes,
                 'sha256'            => hash_final($hash),
                 'header'            => $header,
-                'columns'           => count(CustomerListExportService::COLUMNS),
+                'columns'           => count($columns),
                 'expected_rows'     => $expected,
                 'source_updated_at' => $sourceUpdated,
                 'sanitized_values'  => $dirty,

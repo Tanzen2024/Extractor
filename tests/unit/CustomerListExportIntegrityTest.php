@@ -50,7 +50,7 @@ final class CustomerListExportIntegrityTest extends TestCase
                 'DATE_AB' => '20-MAR-21', 'DATE_RESILIATION' => null, 'VOLTAGE' => '220',
                 'SEGMENT_TRESOR' => 'T3', 'METER' => 'Compteurs Communicants', 'NIU_RIGHT' => 'M987654321098Z',
                 'NIU_TO_RECLASS' => 'N', 'NUI_QC' => 0, 'LAST_VC_DATE' => null, 'SEGMENT_RFM_2' => null,
-                'POSTPAID_PROFILE_DATE' => null, 'SEGMENTATION' => '8 Autre', 'UPDATED_AT' => '15-SEP-26',
+                'POSTPAID_PROFILE_DATE' => null, 'SEGMENTATION' => '6 Défaillant', 'UPDATED_AT' => '15-SEP-26',
             ],
         ];
     }
@@ -195,6 +195,6 @@ final class CustomerListExportIntegrityTest extends TestCase
         $xlsx = array_column($this->writeAndReadXlsx($rows), 'SEGMENTATION');
 
         $this->assertSame($csv, $xlsx);
-        $this->assertSame(['RFM 1', 'Standard', '8 Autre'], $csv);
+        $this->assertSame(['RFM 1', 'Standard', '6 Défaillant'], $csv);
     }
 }

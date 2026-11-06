@@ -2,12 +2,16 @@
 
 namespace App\Commands;
 
+use App\Models\CustomersSyncRunModel;
 use App\Services\Refresh\CustomersRefresher;
+use App\Services\Refresh\SyncRunRecorder;
+use App\Services\Snapshot\SnapshotDiff;
 use App\Services\Snapshot\SnapshotException;
 use App\Services\Snapshot\SnapshotStore;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
 use Config\Snapshot as SnapshotConfig;
+use Throwable;
 
 /**
  * Daily refresh of the working file from Oracle:
@@ -25,8 +29,11 @@ use Config\Snapshot as SnapshotConfig;
  * which resolves and checks the PHP binary (oci8), user rights and timezone
  * before writing, e.g.:
  *
- *   0 5 * * * www-data cd /var/www/extractor && /usr/bin/php spark customers:refresh >> /var/www/extractor/writable/logs/customers_refresh.log 2>&1
- *   0 6 * * * www-data cd /var/www/extractor && /usr/bin/php spark customers:refresh --skip-if-fresh >> /var/www/extractor/writable/logs/customers_refresh.log 2>&1
+ *   0 5 * * * www-data cd /var/www/extractor && /usr/bin/php spark customers:refresh --scheduled >> /var/www/extractor/writable/logs/customers_refresh.log 2>&1
+ *   0 6-12 * * * www-data cd /var/www/extractor && /usr/bin/php spark customers:refresh --scheduled --skip-if-fresh >> /var/www/extractor/writable/logs/customers_refresh.log 2>&1
+ *
+ * On a Windows workstation, install_customers_refresh_task.ps1 (same folder)
+ * creates the equivalent Task Scheduler entry.
  *
  * No outer flock(1) is needed: refresh() holds a kernel flock on
  * Config\Snapshot::$refreshLockFile for the whole run, for cron AND manual
@@ -37,26 +44,34 @@ use Config\Snapshot as SnapshotConfig;
  * manual run — and echoed on the terminal when there is one. The cron
  * redirection above then only adds what PHP itself prints (fatal errors).
  *
- * Exit codes: 0 new version active (or --skip-if-fresh: today's already is)
- *             · 1 failed (previous version kept) · 3 already running.
+ * Each real attempt is also recorded in customers_sync_runs (SyncRunRecorder).
+ * A run that finds Oracle unchanged since the active version extracts
+ * nothing: that is recorded as skipped, never as a success.
+ *
+ * Exit codes: 0 new version active, today's already is (--skip-if-fresh) or
+ *             source unchanged · 1 failed (previous version kept)
+ *             · 3 already running.
  */
 class CustomersRefresh extends BaseCommand
 {
     protected $group       = 'Snapshot';
     protected $name        = 'customers:refresh';
     protected $description = 'Extract CMS_RFC.TB_CUSTOMERS_LIST from Oracle into the working customers_list.csv (previous file kept on any failure).';
-    protected $usage       = 'customers:refresh [--force] [--skip-if-fresh]';
+    protected $usage       = 'customers:refresh [--force] [--skip-if-fresh] [--scheduled]';
     protected $options     = [
-        '--force'         => 'Accept an extraction with markedly fewer rows than the active version.',
-        '--skip-if-fresh' => 'Do nothing when the active version was already extracted today (06:00 catch-up run).',
+        '--force'         => 'Extract even when Oracle is unchanged, and accept markedly fewer rows than the active version.',
+        '--skip-if-fresh' => 'Do nothing when the active version already holds today\'s Oracle load (catch-up runs).',
+        '--scheduled'     => 'Record this run as started by the scheduler, not by hand.',
     ];
 
     /** @var resource|null */
     private $logHandle;
 
     /**
-     * The active version's id when it was extracted today (its meta
-     * generated_at, server time), else null — the catch-up run then refreshes.
+     * The active version's id when it already holds today's data, else null —
+     * the catch-up run then refreshes. Today's data means today's Oracle load
+     * (source_updated_at): a version extracted at 03:00 still holds yesterday's.
+     * generated_at only decides for a version without that stamp (SFTP push).
      */
     public static function activeExtractedToday(SnapshotConfig $config, ?string $today = null): ?string
     {
@@ -65,7 +80,8 @@ class CustomersRefresh extends BaseCommand
         } catch (SnapshotException) {
             return null;
         }
-        $at = strtotime((string) ($active->meta['generated_at'] ?? ''));
+        $source = (string) ($active->meta['manifest']['source_updated_at'] ?? '');
+        $at     = strtotime($source !== '' ? $source : (string) ($active->meta['generated_at'] ?? ''));
 
         return $at !== false && date('Y-m-d', $at) === ($today ?? date('Y-m-d')) ? $active->id : null;
     }
@@ -93,9 +109,14 @@ class CustomersRefresh extends BaseCommand
             return EXIT_SUCCESS;
         }
 
+        $log      = fn (string $level, string $message) => $this->log($level, $message);
+        $recorder = new SyncRunRecorder(log: $log);
+        $trigger  = CLI::getOption('scheduled') !== null ? 'scheduled' : 'manual';
+
         $result = (new CustomersRefresher(
-            log: fn (string $level, string $message) => $this->log($level, $message),
+            log: $log,
             shouldStop: fn (): bool => $this->stopRequested,
+            onStart: static fn () => $recorder->start($trigger, (new SnapshotStore($config))->activeId()),
         ))->refresh(CLI::getOption('force') !== null);
 
         $duration = $this->duration(microtime(true) - $t0);
@@ -103,6 +124,11 @@ class CustomersRefresh extends BaseCommand
         switch ($result['result']) {
             case CustomersRefresher::RESULT_ACTIVATED:
                 $meta = $result['meta'];
+                $recorder->finish(CustomersSyncRunModel::STATUS_SUCCESS, [
+                    'rows_read'         => $meta['rows'] ?? null,
+                    'snapshot_version'  => $result['version'],
+                    'source_updated_at' => $result['facts']['source_updated_at'] ?? null,
+                ] + $this->comparison($config, $result));
                 $this->log('info', sprintf(
                     'CSV replaced successfully — version %s, %d lignes, %.1f Mo, validation %ss, précédente %s',
                     $result['version'],
@@ -120,7 +146,21 @@ class CustomersRefresh extends BaseCommand
                 $code = 3;
                 break;
 
+            case CustomersRefresher::RESULT_UNCHANGED:
+                $recorder->finish(CustomersSyncRunModel::STATUS_SKIPPED, [
+                    'error_reason'  => $result['reason'],
+                    'error_message' => $result['message'],
+                ]);
+                $this->log('warning', 'SKIPPED ' . $result['message']);
+                $code = EXIT_SUCCESS;
+                break;
+
             default:
+                $recorder->finish(CustomersSyncRunModel::STATUS_FAILED, [
+                    'error_count'   => 1,
+                    'error_reason'  => $result['reason'],
+                    'error_message' => $result['message'],
+                ]);
                 $this->log('error', sprintf('FAILED raison=%s : %s', $result['reason'] ?? '-', $result['message']));
                 $this->log('error', 'Fichier de travail inchangé — version active conservée : ' . ($result['previous'] ?? 'aucune') . " (Duration: {$duration})");
                 $code = EXIT_ERROR;
@@ -131,6 +171,45 @@ class CustomersRefresh extends BaseCommand
         }
 
         return $code;
+    }
+
+    /**
+     * Added / modified / removed customers against the previous version. The
+     * new version is already active and valid: a comparison that cannot be
+     * made leaves the counts empty, it does not turn the run into a failure.
+     *
+     * @param array<string, mixed> $result CustomersRefresher::refresh()
+     *
+     * @return array<string, int|null>
+     */
+    private function comparison(SnapshotConfig $config, array $result): array
+    {
+        try {
+            $store    = new SnapshotStore($config);
+            $current  = $store->load((string) $result['version']);
+            $previous = $result['previous'] !== null ? $store->load((string) $result['previous']) : null;
+            $diff     = (new SnapshotDiff($config))->compare($current, $previous);
+
+            $this->log('info', sprintf(
+                'Comparaison : %s actifs, ajoutés %s, modifiés %s, inchangés %s, retirés %s, devenus inactifs %s, doublons %d',
+                $diff['rows_active'],
+                $diff['rows_added'] ?? 'n/d',
+                $diff['rows_modified'] ?? 'n/d',
+                $diff['rows_ignored'] ?? 'n/d',
+                $diff['rows_removed'] ?? 'n/d',
+                $diff['rows_inactivated'] ?? 'n/d',
+                $diff['rows_duplicate'],
+            ));
+            if ($diff['rows_duplicate'] > 0) {
+                $this->log('warning', "{$diff['rows_duplicate']} contrat(s) en double dans la source");
+            }
+
+            return $diff;
+        } catch (Throwable $e) {
+            $this->log('warning', 'Comparaison avec la version précédente impossible : ' . $e->getMessage());
+
+            return [];
+        }
     }
 
     public function log(string $level, string $message): void

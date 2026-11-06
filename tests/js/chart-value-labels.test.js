@@ -120,12 +120,12 @@ test('plugin: formatters are not scriptable, labels on by default', () => {
     assert.equal(plugin.descriptors._scriptable, false);
 });
 
-test('dashboard: plugin loaded after Chart.js, registered with the app fmt / pct, tooltips kept', () => {
+test('dashboard: plugin loaded after Chart.js, registered with the app fmt, tooltips kept, counts only', () => {
     const chartjs = view.indexOf('vendor/chartjs/chart.umd.min.js');
     const labels = view.indexOf('assets/js/chart-value-labels.js');
     assert.ok(chartjs !== -1 && labels > chartjs && labels < view.indexOf("assets/js/dashboard.js'"));
     assert.match(js, /Chart\.register\(window\.bscdChartValueLabels\.plugin\)/);
     assert.match(js, /bscdValueLabels\.formatValue = fmt;/);
-    assert.match(js, /bscdValueLabels\.formatPercent = pct;/);
-    assert.equal((js.match(/tooltip: \{ callbacks:/g) || []).length, 2);
+    assert.doesNotMatch(js, /formatPercent|\bpct\(|\.percent\(/);
+    assert.equal((js.match(/tooltip: \{ callbacks:/g) || []).length, 3);
 });

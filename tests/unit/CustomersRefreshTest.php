@@ -227,6 +227,73 @@ final class CustomersRefreshTest extends TestCase
         $this->assertNull($this->fx->store->activeId());
     }
 
+    public function testSourceUnchangedSinceTheActiveVersionExtractsNothing(): void
+    {
+        $oracle = new RefreshFakeOracle(self::oracleRows(10), 10, stamp: '2026-11-05 04:32:26');
+        $make   = fn () => new CustomersRefresher($this->fx->store, new OracleSnapshotExtractor($oracle));
+
+        $first = $make()->refresh();
+        $this->assertSame(CustomersRefresher::RESULT_ACTIVATED, $first['result'], $first['message']);
+
+        $oracle->streamed = 0;
+        $again            = $make()->refresh();
+
+        $this->assertSame(CustomersRefresher::RESULT_UNCHANGED, $again['result'], $again['message']);
+        $this->assertSame('source_unchanged', $again['reason']);
+        $this->assertSame(0, $oracle->streamed, 'nothing may be extracted');
+        $this->assertSame($first['version'], $this->fx->store->activeId());
+        $this->assertCount(1, $this->fx->store->versions(), 'relaunching creates no new version');
+
+        $forced = $make()->refresh(true);
+        $this->assertSame(CustomersRefresher::RESULT_ACTIVATED, $forced['result'], '--force re-extracts');
+    }
+
+    public function testNewOracleLoadWithTheSameRowCountIsExtracted(): void
+    {
+        $oracle = new RefreshFakeOracle(self::oracleRows(10), 10, stamp: '2026-11-05 04:32:26');
+        $make   = fn () => new CustomersRefresher($this->fx->store, new OracleSnapshotExtractor($oracle));
+        $make()->refresh();
+
+        $oracle->stamp = '2026-11-06 04:32:26';
+
+        $this->assertSame(CustomersRefresher::RESULT_ACTIVATED, $make()->refresh()['result']);
+    }
+
+    public function testNotEnoughDiskSpaceRefusesBeforeExtracting(): void
+    {
+        $previous = $this->baseline();
+        $this->fx->config->refreshMinFreeBytes = PHP_INT_MAX;
+
+        $r = $this->refresher(self::oracleRows(10))->refresh();
+
+        $this->assertFailedKeeping($r, 'disk_space', $previous);
+    }
+
+    public function testStartCallbackRunsUnderTheLockOnly(): void
+    {
+        $started = 0;
+        $onStart = static function () use (&$started): void {
+            $started++;
+        };
+        $make = fn () => new CustomersRefresher(
+            $this->fx->store,
+            new OracleSnapshotExtractor(new RefreshFakeOracle(self::oracleRows(3), 3)),
+            onStart: $onStart,
+        );
+
+        $lock = fopen($this->fx->config->refreshLockFile, 'c');
+        flock($lock, LOCK_EX | LOCK_NB);
+        $busy = $make()->refresh();
+        flock($lock, LOCK_UN);
+        fclose($lock);
+
+        $this->assertSame(CustomersRefresher::RESULT_BUSY, $busy['result']);
+        $this->assertSame(0, $started, 'a run that does not get the lock must leave no trace in the history');
+
+        $make()->refresh();
+        $this->assertSame(1, $started);
+    }
+
     public function testStaleTemporaryFileFromAKilledRunIsReplaced(): void
     {
         file_put_contents($this->fx->config->refreshTmpFile, "garbage from a killed run\n");
@@ -269,9 +336,17 @@ final class CustomersRefreshTest extends TestCase
  */
 final class RefreshFakeOracle extends OracleExtractionService
 {
-    /** @param list<array<string, mixed>> $rows */
-    public function __construct(private array $rows, private int $count, private ?Throwable $failCount = null, private ?int $failAfter = null)
+    public int $streamed = 0;
+
+    private static int $loads = 0;
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     * @param string|null                $stamp UPDATED_AT of this load; default: a new load each time.
+     */
+    public function __construct(private array $rows, private int $count, private ?Throwable $failCount = null, private ?int $failAfter = null, public ?string $stamp = null)
     {
+        $this->stamp ??= sprintf('2026-09-27 04:%02d:%02d', intdiv(++self::$loads, 60) % 60, self::$loads % 60);
     }
 
     public function select(string $sql, array $binds = [], int $maxRows = 5000): array
@@ -280,11 +355,12 @@ final class RefreshFakeOracle extends OracleExtractionService
             throw $this->failCount;
         }
 
-        return ['columns' => ['N', 'SOURCE_UPDATED_AT'], 'rows' => [['N' => (string) $this->count, 'SOURCE_UPDATED_AT' => '2026-09-27 04:32:49']]];
+        return ['columns' => ['N', 'SOURCE_UPDATED_AT'], 'rows' => [['N' => (string) $this->count, 'SOURCE_UPDATED_AT' => $this->stamp]]];
     }
 
     public function stream(string $sql, callable $onRow, array $binds = [], ?int $prefetch = null): int
     {
+        $this->streamed++;
         $n = 0;
         foreach ($this->rows as $row) {
             if ($this->failAfter !== null && $n === $this->failAfter) {

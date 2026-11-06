@@ -53,7 +53,6 @@
             colCategory: 'Catégorie',
             colValue: 'Valeur source',
             colCount: 'Nombre de clients',
-            colShare: 'Part (%)',
             sheetData: 'Données',
             sheetContext: 'Contexte',
             ctxChart: 'Graphique',
@@ -82,7 +81,6 @@
             colCategory: 'Category',
             colValue: 'Source value',
             colCount: 'Number of customers',
-            colShare: 'Share (%)',
             sheetData: 'Data',
             sheetContext: 'Context',
             ctxChart: 'Chart',
@@ -156,20 +154,19 @@
             });
         }
         var total = rows.reduce(function (s, r) { return s + r.count; }, 0);
-        rows.forEach(function (r) { r.share = total ? r.count / total : 0; });
         var withValue = rows.some(function (r) { return r.value != null && String(r.value) !== r.label; });
         return { rows: rows, total: total, withValue: withValue };
     }
 
-    // Header + one array per row: [label, (value), count, share as a fraction].
+    // Header + one array per row: [label, (value), count].
     function tableMatrix(table, loc) {
         var head = [t('colCategory', loc)];
         if (table.withValue) head.push(t('colValue', loc));
-        head.push(t('colCount', loc), t('colShare', loc));
+        head.push(t('colCount', loc));
         var body = table.rows.map(function (r) {
             var line = [r.label];
             if (table.withValue) line.push(r.value == null ? '' : String(r.value));
-            line.push(r.count, r.share);
+            line.push(r.count);
             return line;
         });
         return { head: head, body: body };
@@ -178,8 +175,7 @@
     // A text cell starting like a formula is neutralised (CSV injection).
     function safeText(s) { return /^[=+\-@\t\r]/.test(s) ? "'" + s : s; }
 
-    // CSV in the user's language convention: fr = ";" + decimal ",", en =
-    // "," + decimal ".". Share = the percentage the tooltip shows (1 decimal).
+    // CSV in the user's language convention: fr = ";", en = ",".
     // No BOM here (added when the Blob is made).
     function toCsv(table, loc) {
         var sep = loc === 'en' ? ',' : ';';
@@ -191,12 +187,7 @@
         }
         var lines = [m.head.map(function (h) { return cell(h, true); }).join(sep)];
         m.body.forEach(function (line) {
-            var last = line.length - 1;
-            lines.push(line.map(function (v, i) {
-                if (i === last) {
-                    var p = (Math.round(v * 1000) / 10).toFixed(1);
-                    return loc === 'en' ? p : p.replace('.', ',');
-                }
+            lines.push(line.map(function (v) {
                 return cell(v, typeof v !== 'number');
             }).join(sep));
         });
@@ -287,20 +278,18 @@
 
     function colName(i) { var s = ''; i++; while (i > 0) { var m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }
 
-    // Style ids, see STYLES_XML: 0 text, 1 header, 2 integer, 3 percent, 4 bold.
+    // Style ids, see STYLES_XML: 0 text, 1 header, 2 integer, 3 bold.
     var STYLES_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
         '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
-        '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0%"/></numFmts>' +
         '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>' +
         '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
         '<fill><patternFill patternType="solid"><fgColor rgb="FFEEF2F7"/><bgColor indexed="64"/></patternFill></fill></fills>' +
         '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
         '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
-        '<cellXfs count="5">' +
+        '<cellXfs count="4">' +
         '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
         '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>' +
         '<xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
-        '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
         '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
         '</cellXfs>' +
         '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
@@ -340,17 +329,16 @@
         var last = m.head.length - 1;
         var dataRows = [m.head.map(function (h) { return { v: h, s: 1 }; })].concat(m.body.map(function (line) {
             return line.map(function (v, i) {
-                if (i === last) return { v: v, s: 3 };
-                if (i === last - 1) return { v: v, s: 2 };
+                if (i === last) return { v: v, s: 2 };
                 return { v: v };
             });
         }));
         var widths = m.head.map(function (h, i) {
             var longest = m.body.reduce(function (w, line) { return Math.max(w, String(line[i]).length); }, String(h).length);
-            return i >= last - 1 ? Math.max(14, String(h).length + 2) : Math.min(60, Math.max(12, longest + 2));
+            return i === last ? Math.max(14, String(h).length + 2) : Math.min(60, Math.max(12, longest + 2));
         });
 
-        var B = function (v) { return { v: v, s: 4 }; };
+        var B = function (v) { return { v: v, s: 3 }; };
         var ctxRows = [[B(t('ctxChart', loc)), ctx.title]];
         if (ctx.subtitle) ctxRows.push([B(t('ctxSubtitle', loc)), ctx.subtitle]);
         if (ctx.filters && ctx.filters.length) {
@@ -606,12 +594,11 @@
     }
 
     // HTML list cards ("Type de compteurs"): drawn as on screen — total, then
-    // one row per value: swatch, name, count, share.
+    // one row per value: swatch, name, count.
     function listHeight(table) { return 96 + table.rows.length * 40; }
 
     function drawList(ctx, key, table, x, y, width, font, loc, pal) {
         var nf = new Intl.NumberFormat(numberLocale(loc));
-        var pf = new Intl.NumberFormat(numberLocale(loc), { minimumFractionDigits: 1, maximumFractionDigits: 1 });
         ctx.textBaseline = 'alphabetic';
         ctx.textAlign = 'left';
         ctx.fillStyle = pal.muted;
@@ -633,10 +620,7 @@
             ctx.fillText(r.label, x + 30, cy);
             ctx.textAlign = 'right';
             ctx.font = '700 17px ' + font;
-            ctx.fillText(nf.format(r.count), x + width - 110, cy);
-            ctx.fillStyle = pal.muted;
-            ctx.font = '400 17px ' + font;
-            ctx.fillText(pf.format(r.share * 100) + ' %', x + width, cy);
+            ctx.fillText(nf.format(r.count), x + width, cy);
         });
         ctx.textAlign = 'left';
         ctx.textBaseline = 'alphabetic';

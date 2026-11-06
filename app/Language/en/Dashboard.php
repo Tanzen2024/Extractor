@@ -32,6 +32,8 @@ return [
             'title'    => 'Prepaid View',
             'subtitle' => 'Prepaid Reports & Analytics',
         ],
+        'total'     => 'Total customers:',
+        'totalHint' => 'Show all customers in the table',
         'detail'   => [
             'title'    => 'Customer details',
             'subtitle' => 'List and export of the active customers matching the applied filters',
@@ -42,6 +44,36 @@ return [
             'postpaid' => 'Postpaid',
             'prepaid'  => 'Prepaid',
         ],
+    ],
+
+    // Freshness indicator; its state and figures are drawn by sync-status.js.
+    'sync' => [
+        'label'        => 'Data freshness',
+        'history'      => 'History',
+        'historyTitle' => 'Synchronisation history',
+        'columns'      => [
+            'start'    => 'Start',
+            'duration' => 'Duration',
+            'trigger'  => 'Origin',
+            'status'   => 'Status',
+            'read'     => 'Read',
+            'added'    => 'Added',
+            'modified' => 'Modified',
+            'ignored'  => 'Unchanged',
+            'removed'  => 'Removed',
+            'error'    => 'Error',
+        ],
+    ],
+
+    // Analysis of the 6 Défaillant profile (Postpaid section): not profiles.
+    'failure' => [
+        'title'        => 'Défaillant profile breakdown',
+        'subtitle'     => 'Défaillant customers by payment behaviour.',
+        'filter'       => 'Défaillant component',
+        'alwaysLate'   => 'Always Late',
+        'sometimePaid' => 'Sometime Paid',
+        'neverPaid'    => 'Never Paid',
+        'other'        => 'Other',
     ],
 
     'charts' => [

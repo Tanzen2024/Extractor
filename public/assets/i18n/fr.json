@@ -1,8 +1,7 @@
 {
     "meta": {
         "numberLocale": "fr-FR",
-        "decimalSeparator": ",",
-        "percent": "{value} %"
+        "decimalSeparator": ","
     },
     "glossary": {
         "payerProfile": "Profil Payeur",
@@ -35,6 +34,46 @@
         "no": "Non"
     },
     "dashboard": {
+        "sync": {
+            "state": {
+                "fresh": "À jour",
+                "late": "En retard",
+                "failed": "Échec"
+            },
+            "status": {
+                "running": "En cours",
+                "success": "Réussie",
+                "failed": "Échouée",
+                "skipped": "Sans nouvelle donnée"
+            },
+            "trigger": {
+                "scheduled": "Planifiée",
+                "manual": "Manuelle"
+            },
+            "reason": {
+                "oracle_or_internal_error": "Erreur de lecture Oracle",
+                "source_unchanged": "Oracle n’a pas été rechargée",
+                "row_count_mismatch": "Oracle a changé pendant la lecture",
+                "volume_drop": "Volume anormalement bas",
+                "no_data": "Aucune donnée reçue",
+                "disk_space": "Espace disque insuffisant",
+                "interrupted": "Exécution interrompue",
+                "write_failed": "Écriture du fichier impossible",
+                "index_failed": "Construction de l’index impossible",
+                "duckdb_failed": "Construction de l’index impossible",
+                "other": "Voir le journal de synchronisation"
+            },
+            "lastSuccess": "Dernière synchronisation réussie",
+            "lastRun": "Dernière tentative",
+            "clients": "Clients synchronisés",
+            "source": "Chargement Oracle",
+            "nextRun": "Prochaine synchronisation",
+            "none": "Aucune",
+            "notScheduled": "Non programmée",
+            "running": "Synchronisation en cours…",
+            "unavailable": "État indisponible",
+            "historyEmpty": "Aucune synchronisation enregistrée."
+        },
         "sections": {
             "clients": {
                 "one": "{count} client",
@@ -81,16 +120,13 @@
             "niuCorrect": "NUI CORRECT",
             "niuToReclass": "NUI à RECLASSER",
             "smartMeters": "COMPTEURS COMMUNICANTS",
-            "unstable": "Instable",
-            "atRisk": "À risque",
-            "other": "Other"
+            "unclassified": "Non classé"
         },
         "filters": {
             "date_from": "Depuis",
             "date_to": "Jusqu'au"
         },
         "kpi": {
-            "ofTotal": "{pct} du total",
             "nuiCorrectsNote": "NUI corrects correspondant aux filtres"
         },
         "table": {
@@ -126,6 +162,15 @@
             "launchFailedHttp": "L'export n'a pas pu être lancé (HTTP {status}). Réessayez.",
             "unexpected": "Réponse inattendue du serveur. Rechargez la page puis réessayez.",
             "network": "Erreur réseau. Réessayez."
+        },
+        "failure": {
+            "total": "TOTAL DÉFAILLANT",
+            "filter": "Composante Défaillant",
+            "unassigned": "{n} clients défaillants sans composante : ce snapshot ne porte pas l’information.",
+            "alwaysLate": "Always Late",
+            "sometimePaid": "Sometime Paid",
+            "neverPaid": "Never Paid",
+            "other": "Other"
         }
     },
     "export": {

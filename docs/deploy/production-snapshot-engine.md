@@ -115,3 +115,41 @@ redémarre le worker. Les snapshots ne sont pas touchés (les index `.duckdb`
 sont ignorés par l'ancien code) ; la colonne `snapshot_version` est laissée
 (additive). Données : `php spark snapshot:rollback` réactive la version
 précédente, avec son index.
+
+## 5. Synchronisation quotidienne et indicateur de fraîcheur
+
+À appliquer sur le serveur une fois le code livré. **Commencer par constater
+l'état réel** : rien de ce qui suit n'a pu être vérifié depuis le poste de
+développement (SSH filtré).
+
+```
+cat /etc/cron.d/extractor-customers-refresh            # le cron existe-t-il ?
+grep -rn "customers:refresh" /etc/cron.d /etc/crontab; crontab -u www-data -l
+sudo -u www-data php spark snapshot:status             # version active et date
+tail -n 50 /var/www/extractor/writable/logs/customers_refresh.log
+grep -E 'CRON.*customers:refresh' /var/log/syslog | tail # cron a-t-il lancé la commande ?
+```
+
+Mise en service :
+
+```
+cd /var/www/extractor
+sudo -u www-data php spark migrate                     # table customers_sync_runs (additive)
+# Protéger les versions présentes de la purge automatique :
+for v in writable/data/snapshots/customers/versions/*/; do sudo -u www-data touch "$v.retain"; done
+sudo sh docs/snapshot/extractor/install_customers_refresh_cron.sh --dry-run
+sudo sh docs/snapshot/extractor/install_customers_refresh_cron.sh
+sudo -u www-data php spark customers:refresh --scheduled ; echo "code=$?"
+sudo -u www-data php spark dashboard:warm
+sudo -u www-data php spark customers:sync-status       # code 0 = à jour
+```
+
+Le lendemain matin, confirmer l'exécution par cron : une ligne `scheduled` à
+05:00 dans `php spark customers:sync-status`. Un cron installé ne prouve rien
+tant que cette ligne n'existe pas.
+
+Relance après échec : lire la raison (`customers:sync-status`, puis
+`writable/logs/customers_refresh.log`), corriger, relancer
+`php spark customers:refresh`. Il n'y a rien à nettoyer : la version active
+n'a pas changé, le fichier temporaire est supprimé, et une exécution restée
+« en cours » est clôturée en échec par la suivante.

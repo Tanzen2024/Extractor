@@ -172,9 +172,12 @@ $chartTitles = [
         <span class="bscd-section-nav__count" data-section-count="<?= $sk ?>"></span>
     </a>
     <?php endforeach; ?>
-    <a class="bscd-section-nav__link bscd-section-nav__link--detail" href="#bscdSection-detail">
-        <i class="fas fa-table-list" aria-hidden="true"></i>
-        <span><?= esc(lang('Dashboard.sections.detail.title')) ?></span>
+    <?php // Postpaid + Prepaid, summed by dashboard.js from the two section totals. Opens the table on "Tous". ?>
+    <a class="bscd-section-nav__link bscd-section-nav__link--total" href="#bscdSection-detail" data-table-scope-link="all"
+       title="<?= esc(lang('Dashboard.sections.totalHint'), 'attr') ?>">
+        <i class="fas fa-users" aria-hidden="true"></i>
+        <span class="bscd-section-nav__total-label"><?= esc(lang('Dashboard.sections.total')) ?></span>
+        <span class="bscd-section-nav__total-value" data-sections-total></span>
     </a>
     <span class="bscd-section-nav__note" data-section-unassigned hidden></span>
 </nav>
@@ -238,6 +241,19 @@ $chartTitles = [
         </div>
     <?php endforeach; ?>
     </div>
+
+    <?php if ($sk === 'postpaid'): ?>
+    <div class="bscd-chart-card bscd-failure mb-3">
+        <div class="bscd-chart-card__header">
+            <h3 class="bscd-chart-card__title"><?= esc(lang('Dashboard.failure.title')) ?></h3>
+            <div class="bscd-chart-card__subtitle"><?= esc(lang('Dashboard.failure.subtitle')) ?></div>
+            <div class="bscd-cx" data-chart-export="postpaid-failure"></div>
+        </div>
+        <div class="bscd-chart-card__body" data-chart-wrap="failure"><canvas id="bscdChart_postpaid_failure" height="240"></canvas></div>
+        <div class="bscd-failure__stats" data-failure-stats></div>
+        <p class="bscd-failure__note" data-failure-note hidden></p>
+    </div>
+    <?php endif; ?>
 </section>
 <?php endforeach; ?>
 
@@ -256,9 +272,22 @@ $chartTitles = [
         </div>
     </header>
 
+<!-- ── Data freshness (sync-status.js) ─────────────────────── -->
+<div class="bscd-sync" id="bscdSyncStatus" role="status" aria-label="<?= esc(lang('Dashboard.sync.label'), 'attr') ?>">
+    <div class="bscd-sync__state">
+        <span class="bscd-sync__badge" data-sync-badge><span class="bscd-skeleton bscd-skeleton--text"></span></span>
+        <span class="bscd-sync__running" data-sync-running hidden></span>
+    </div>
+    <dl class="bscd-sync__facts" data-sync-facts></dl>
+    <button type="button" class="btn btn-link bscd-sync__history" data-sync-history data-toggle="modal" data-target="#bscdSyncHistoryModal">
+        <i class="fas fa-clock-rotate-left mr-1" aria-hidden="true"></i><?= esc(lang('Dashboard.sync.history')) ?>
+    </button>
+</div>
+
 <!-- ── Table ───────────────────────────────────────────────── -->
 <div class="bscd-table-card">
     <div class="bscd-table-toolbar">
+        <div class="bscd-chips bscd-failure-filter" id="bscdFailureFilter"></div>
         <div class="bscd-table-tools">
             <div class="bscd-table-count" id="bscdRowCount"><span class="bscd-skeleton bscd-skeleton--text"></span></div>
             <div class="bscd-search">
@@ -308,6 +337,36 @@ $chartTitles = [
 </section>
 
 <!-- ── Modale export ───────────────────────────────────────── -->
+<div class="modal fade" id="bscdSyncHistoryModal" tabindex="-1" role="dialog" aria-labelledby="bscdSyncHistoryTitle">
+    <div class="modal-dialog modal-xl" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="bscdSyncHistoryTitle"><?= esc(lang('Dashboard.sync.historyTitle')) ?></h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="<?= esc(lang('App.actions.close'), 'attr') ?>">&times;</button>
+            </div>
+            <div class="modal-body table-responsive">
+                <table class="bscd-sync-history">
+                    <thead>
+                        <tr>
+                            <th scope="col"><?= esc(lang('Dashboard.sync.columns.start')) ?></th>
+                            <th scope="col"><?= esc(lang('Dashboard.sync.columns.duration')) ?></th>
+                            <th scope="col"><?= esc(lang('Dashboard.sync.columns.trigger')) ?></th>
+                            <th scope="col"><?= esc(lang('Dashboard.sync.columns.status')) ?></th>
+                            <th scope="col"><?= esc(lang('Dashboard.sync.columns.read')) ?></th>
+                            <th scope="col"><?= esc(lang('Dashboard.sync.columns.added')) ?></th>
+                            <th scope="col"><?= esc(lang('Dashboard.sync.columns.modified')) ?></th>
+                            <th scope="col"><?= esc(lang('Dashboard.sync.columns.ignored')) ?></th>
+                            <th scope="col"><?= esc(lang('Dashboard.sync.columns.removed')) ?></th>
+                            <th scope="col"><?= esc(lang('Dashboard.sync.columns.error')) ?></th>
+                        </tr>
+                    </thead>
+                    <tbody id="bscdSyncHistoryBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="modal fade" id="bscdExportModal" tabindex="-1" role="dialog">
     <div class="modal-dialog" role="document">
         <div class="modal-content">
@@ -334,6 +393,7 @@ $chartTitles = [
 
 <?= $this->section('styles') ?>
 <link rel="stylesheet" href="<?= base_url('assets/css/chart-export.css') ?>?v=<?= @filemtime(FCPATH . 'assets/css/chart-export.css') ?: 0 ?>">
+<link rel="stylesheet" href="<?= base_url('assets/css/sync-status.css') ?>?v=<?= @filemtime(FCPATH . 'assets/css/sync-status.css') ?: 0 ?>">
 <?= $this->endSection() ?>
 
 <?= $this->section('scripts') ?>
@@ -343,6 +403,7 @@ $chartTitles = [
 <?php // Per-chart CSV / Excel / PNG export menu — before dashboard.js, which registers each chart's dataset in it. ?>
 <script src="<?= base_url('assets/js/chart-export.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/chart-export.js') ?: 0 ?>"></script>
 <script type="application/json" id="bscd-dashboard-data"><?= json_encode($bootstrap, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?></script>
+<script src="<?= base_url('assets/js/sync-status.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/sync-status.js') ?: 0 ?>"></script>
 <?php // ?v=<mtime>: a reload always fetches the deployed version, never a stale cached copy.
       // export-progress.js / export-widget.js: loaded by layout/main.php, before these. ?>
 <script src="<?= base_url('assets/js/dashboard-sections.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/dashboard-sections.js') ?: 0 ?>"></script>

@@ -15,7 +15,7 @@
  *   - line: above the point, below it when that collides with another label.
  *
  * Per chart: options.plugins.bscdValueLabels = { display, formatValue,
- * formatPercent, color, haloColor, darkColor, lightColor }. formatValue /
+ * formatPercent, color, haloColor, darkColor, lightColor, center }. formatValue /
  * formatPercent are plain functions (the app's fmt / pct), not scriptable.
  */
 (function (root, factory) {
@@ -33,6 +33,7 @@
     var GAP = 4;              // px between a mark and its label
     var EDGE = 2;             // px kept free along the canvas edges
     var LINE_HEIGHT = 1.2;
+    var MIN_CENTER_SIZE = 7;
     var ARC_TYPES = ['doughnut', 'pie', 'polarArea'];
 
     // ── colour ─────────────────────────────────────────────────────────
@@ -394,6 +395,31 @@
         });
     }
 
+    // options.center = { label, value }: two lines in the hole of a doughnut,
+    // on the canvas like the labels, so exported images carry them too.
+    function drawCenter(chart, opts) {
+        var center = opts.center;
+        var arc = chart.getDatasetMeta(0).data[0];
+        if (!center || !arc || !(arc.innerRadius > 0)) return;
+        var measure = measurer(chart), k = scaleOf(chart), ctx = chart.ctx;
+        var room = arc.innerRadius * 1.7;
+        var fit = function (text, size, bold) {
+            while (size > MIN_CENTER_SIZE * k && measure(text, size, bold) > room) size--;
+            return size;
+        };
+        var labelSize = fit(center.label, Math.round(9 * k), true);
+        var valueSize = fit(center.value, Math.round(20 * k), true);
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = opts.color;
+        ctx.font = fontOf(chart, labelSize, true);
+        ctx.fillText(center.label, arc.x, arc.y - valueSize * 0.65);
+        ctx.font = fontOf(chart, valueSize, true);
+        ctx.fillText(center.value, arc.x, arc.y + labelSize * 0.6);
+        ctx.restore();
+    }
+
     var plugin = {
         id: 'bscdValueLabels',
         defaults: {
@@ -403,7 +429,8 @@
             color: '#374151',
             darkColor: '#1f2937',
             lightColor: '#ffffff',
-            haloColor: '#ffffff'
+            haloColor: '#ffffff',
+            center: null
         },
         // formatValue / formatPercent are formatters, not scriptable options.
         descriptors: { _scriptable: false, _indexable: false },
@@ -428,6 +455,7 @@
         afterDatasetsDraw: function (chart, args, opts) {
             if (opts.display === false) return;
             draw(chart, collect(chart, opts), opts);
+            drawCenter(chart, opts);
         }
     };
 

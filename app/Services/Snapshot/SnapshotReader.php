@@ -29,6 +29,15 @@ final class SnapshotReader
 
     private int $lineNo = 1;
 
+    /** @var array<int, array<string, string>> field position => trimmed value => new value */
+    private array $translations = [];
+
+    private ?int $derivedField = null;
+    private ?int $derivedFrom  = null;
+
+    /** @var array<string, string> */
+    private array $derivation = [];
+
     public function __construct(private readonly string $path, private readonly string $delimiter)
     {
         $handle = @fopen($path, 'rb');
@@ -67,6 +76,40 @@ final class SnapshotReader
     }
 
     /**
+     * Records are delivered with this column's values replaced through
+     * $translation (trimmed value => new value). The file is not changed.
+     *
+     * @param array<string, string> $translation
+     */
+    public function translate(string $column, array $translation): self
+    {
+        if (isset($this->index[$column])) {
+            $this->translations[$this->index[$column]] = $translation;
+        }
+
+        return $this;
+    }
+
+    /**
+     * Records also carry $column, filled from the file's $from value through
+     * $map when the file holds no value for it (trimmed value => new value,
+     * '' otherwise). A column the file lacks is added after its last field,
+     * to index() only: header() stays the file's. Reads $from before
+     * translate() replaces it. The file is not changed.
+     *
+     * @param array<string, string> $map
+     */
+    public function derive(string $column, string $from, array $map): self
+    {
+        $this->derivedField   = $this->index[$column] ?? count($this->header);
+        $this->derivedFrom    = $this->index[$from] ?? null;
+        $this->derivation     = $map;
+        $this->index[$column] = $this->derivedField;
+
+        return $this;
+    }
+
+    /**
      * Calls $onRecord(list<string> $fields) for every data record, in file
      * order; stops early when it returns false. Returns the number of
      * records read.
@@ -89,6 +132,14 @@ final class SnapshotReader
                     count($fields),
                     $expected,
                 ));
+            }
+
+            if ($this->derivedField !== null && trim($fields[$this->derivedField] ?? '') === '') {
+                $fields[$this->derivedField] = $this->derivedFrom !== null ? ($this->derivation[trim($fields[$this->derivedFrom])] ?? '') : '';
+            }
+
+            foreach ($this->translations as $field => $translation) {
+                $fields[$field] = $translation[trim($fields[$field])] ?? $fields[$field];
             }
 
             $read++;

@@ -29,6 +29,9 @@ final class SnapshotStore
     public const META_FILE       = 'customers_list.meta.json';
     public const POINTER_FILE    = 'current.json';
 
+    /** A version folder holding this file is never pruned; delete the file to release it. */
+    public const RETAIN_FILE = '.retain';
+
     private SnapshotConfig $config;
 
     public function __construct(?SnapshotConfig $config = null)
@@ -236,6 +239,9 @@ final class SnapshotStore
         foreach ($pinned === null ? [] : array_slice($others, $slots) as $id) {
             if (in_array($id, $pinned, true)) {
                 continue; // an export still needs it
+            }
+            if (is_file($this->versionDir($id) . DIRECTORY_SEPARATOR . self::RETAIN_FILE)) {
+                continue; // kept on purpose by an operator
             }
             if (self::deleteTree($this->versionDir($id))) {
                 $removed[] = $id;

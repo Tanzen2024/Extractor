@@ -2,6 +2,7 @@
 
 namespace App\Services\Snapshot;
 
+use App\Services\CustomersList\FailureSubcategories;
 use App\Services\CustomersList\FilterCriteria;
 
 /**
@@ -22,6 +23,8 @@ use App\Services\CustomersList\FilterCriteria;
  *     not even FilterCriteria::none(), lets an excluded customer through;
  *   - "Contact renseigné": PHONE_NUMBERS or E_MAIL non-blank once trimmed
  *     (QueryBuilder::contactCondition(), the "Contacts renseignés" KPI rule);
+ *   - FailureSubcategories::COLUMN (detail list of the Postpaid breakdown):
+ *     needs a reader built with ActiveSnapshot::reader(true);
  *   - all active dimensions are ANDed; no filter = every in-perimeter row.
  * The export has no free-text search (QueryBuilder::withSearch is table-only).
  */
@@ -52,6 +55,11 @@ final class RowMatcher
     private ?array $contactIdx = null;
     private bool $hasContact   = false;
 
+    private ?int $failureIdx = null;
+
+    /** @var array<string, true> */
+    private array $failures = [];
+
     /**
      * @param array<string, int> $index Column name => field index.
      */
@@ -67,6 +75,11 @@ final class RowMatcher
         if ($criteria->hasContact !== null) {
             $this->contactIdx = array_map(static fn (string $col): int => $index[$col], FilterCriteria::CONTACT_COLUMNS);
             $this->hasContact = $criteria->hasContact;
+        }
+
+        if ($criteria->failureSubcategories !== []) {
+            $this->failureIdx = $index[FailureSubcategories::COLUMN];
+            $this->failures   = array_fill_keys($criteria->failureSubcategories, true);
         }
 
         if ($criteria->dateFrom !== null || $criteria->dateTo !== null) {
@@ -89,6 +102,10 @@ final class RowMatcher
             if (! isset($accepted[trim($fields[$i])])) {
                 return false;
             }
+        }
+
+        if ($this->failureIdx !== null && ! isset($this->failures[trim($fields[$this->failureIdx])])) {
+            return false;
         }
 
         if ($this->contactIdx !== null) {
