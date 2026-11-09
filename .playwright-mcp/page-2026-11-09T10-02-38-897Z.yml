@@ -1,0 +1,301 @@
+- generic [ref=f1e2]:
+  - navigation [ref=f1e3]:
+    - list [ref=f1e4]:
+      - listitem [ref=f1e5]:
+        - button "Afficher / masquer le menu" [ref=f1e6] [cursor=pointer]:
+          - generic [ref=f1e7]: 
+    - generic [ref=f1e8]:
+      - generic [ref=f1e9]: MARKETING (MI)
+      - generic [ref=f1e10]: La bonne action à chaque profil de payeur et de consommateur, pour sécuriser nos recettes et réactiver nos clients dormants.
+    - list [ref=f1e11]:
+      - listitem [ref=f1e12]:
+        - generic [ref=f1e13]:
+          - button "Choisir la langue" [ref=f1e14] [cursor=pointer]:
+            - generic [ref=f1e15]: Français
+          - text: 
+      - listitem [ref=f1e16]:
+        - button "Passer au thème sombre" [ref=f1e17] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e18]: 
+      - listitem [ref=f1e19]:
+        - link " —" [ref=f1e20] [cursor=pointer]:
+          - /url: "#"
+          - generic [ref=f1e21]: 
+          - generic [ref=f1e22]: —
+        - text: 
+  - complementary [ref=f1e23]:
+    - link " MARKETING (MI)" [ref=f1e24] [cursor=pointer]:
+      - /url: /dashboard
+      - generic [ref=f1e25]: 
+      - text: MARKETING (MI)
+    - navigation [ref=f1e27]:
+      - menu [ref=f1e28]:
+        - listitem [ref=f1e29]:
+          - link " Dashboard" [ref=f1e30] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=f1e31]: 
+            - paragraph [ref=f1e32]: Dashboard
+  - generic [ref=f1e33]:
+    - heading "Segmentation Profil Payeur | Segmentation Profil Consommateur" [level=1] [ref=f1e38]:
+      - generic [ref=f1e39]:
+        - generic [ref=f1e41]: 
+        - generic [ref=f1e42]:
+          - generic [ref=f1e43]: Segmentation
+          - generic [ref=f1e44]: Profil Payeur
+      - generic [ref=f1e46]: "|"
+      - generic [ref=f1e47]:
+        - generic [ref=f1e49]: 
+        - generic [ref=f1e50]:
+          - generic [ref=f1e51]: Segmentation
+          - generic [ref=f1e52]: Profil Consommateur
+    - generic [ref=f1e54]:
+      - generic [ref=f1e56]:
+        - generic [ref=f1e57]: Actualisé à l'instant
+        - button " Rafraîchir" [ref=f1e58] [cursor=pointer]:
+          - generic [ref=f1e59]: 
+          - text: Rafraîchir
+      - form [ref=f1e60]:
+        - heading "Critères de sélection" [level=2] [ref=f1e61]:
+          - generic [aria-hidden] [ref=f1e62]: 
+          - text: Critères de sélection
+        - generic [ref=f1e63]:
+          - generic [ref=f1e64]:
+            - generic [ref=f1e65]: Région
+            - button "Toutes " [ref=f1e67] [cursor=pointer]:
+              - generic [ref=f1e68]: Toutes
+              - generic [ref=f1e69]: 
+          - generic [ref=f1e70]:
+            - generic [ref=f1e71]: Division
+            - button "Toutes " [ref=f1e73] [cursor=pointer]:
+              - generic [ref=f1e74]: Toutes
+              - generic [ref=f1e75]: 
+          - generic [ref=f1e76]:
+            - generic [ref=f1e77]: Agence
+            - button "Toutes " [ref=f1e79] [cursor=pointer]:
+              - generic [ref=f1e80]: Toutes
+              - generic [ref=f1e81]: 
+          - generic [ref=f1e82]:
+            - generic [ref=f1e83]: Type compteur
+            - button "Toutes " [ref=f1e85] [cursor=pointer]:
+              - generic [ref=f1e86]: Toutes
+              - generic [ref=f1e87]: 
+          - generic [ref=f1e88]:
+            - generic [ref=f1e89]: Segmentation
+            - button "Toutes " [ref=f1e91] [cursor=pointer]:
+              - generic [ref=f1e92]: Toutes
+              - generic [ref=f1e93]: 
+          - generic [ref=f1e94]:
+            - generic [ref=f1e95]: Trésorerie
+            - button "Toutes " [ref=f1e97] [cursor=pointer]:
+              - generic [ref=f1e98]: Toutes
+              - generic [ref=f1e99]: 
+          - generic [ref=f1e100]:
+            - generic [ref=f1e101]: Tension
+            - button "Toutes " [ref=f1e103] [cursor=pointer]:
+              - generic [ref=f1e104]: Toutes
+              - generic [ref=f1e105]: 
+        - text:     
+        - generic [ref=f1e106]:
+          - button "Filtres avancés" [ref=f1e107] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f1e108]: 
+          - generic [ref=f1e110]:
+            - button "Réinitialiser" [ref=f1e111] [cursor=pointer]
+            - button " Appliquer" [ref=f1e112] [cursor=pointer]:
+              - generic [ref=f1e113]: 
+              - text: Appliquer
+      - navigation "Accès rapide aux vues" [ref=f1e114]:
+        - link "Vue Postpaid 1 352 515 clients" [ref=f1e115] [cursor=pointer]:
+          - /url: "#bscdSection-postpaid"
+          - generic [aria-hidden] [ref=f1e116]: 
+          - generic [ref=f1e117]: Vue Postpaid
+          - generic [ref=f1e118]: 1 352 515 clients
+        - link "Vue Prepaid 1 092 287 clients" [ref=f1e119] [cursor=pointer]:
+          - /url: "#bscdSection-prepaid"
+          - generic [aria-hidden] [ref=f1e120]: 
+          - generic [ref=f1e121]: Vue Prepaid
+          - generic [ref=f1e122]: 1 092 287 clients
+        - 'link "Total clients : 2 444 802" [ref=f1e123] [cursor=pointer]':
+          - /url: "#bscdSection-detail"
+          - generic [aria-hidden] [ref=f1e124]: 
+          - generic [ref=f1e125]: "Total clients :"
+          - generic [ref=f1e126]: 2 444 802
+      - region [ref=f1e127]:
+        - generic [ref=f1e128]:
+          - generic [ref=f1e130]: 
+          - generic [ref=f1e131]:
+            - heading "Vue Postpaid" [level=2] [ref=f1e132]
+            - paragraph [ref=f1e133]: Segmentation des profils payeurs Postpaid
+          - generic [ref=f1e134]: 1 352 515 clients
+        - generic [ref=f1e135]:
+          - generic [ref=f1e136]:
+            - heading "Répartition par segmentation" [level=3] [ref=f1e137]
+            - generic [ref=f1e138]: Nombre de clients par profil payeur. Cliquez sur un profil pour afficher ses clients.
+            - generic [ref=f1e139]:
+              - button "Exporter ce graphique" [ref=f1e140] [cursor=pointer]:
+                - generic [aria-hidden] [ref=f1e141]: 
+              - text:      
+          - generic [ref=f1e145]:
+            - generic [ref=f1e146]:
+              - generic [ref=f1e147]: Total clients classés
+              - generic [ref=f1e148]: 1 225 677
+            - generic [ref=f1e149]:
+              - button "1 PERFECT 30 043" [ref=f1e150] [cursor=pointer]:
+                - generic [ref=f1e152]: 1 PERFECT
+                - generic [ref=f1e153]: 30 043
+              - button "2 RELIABLE 159 220" [ref=f1e154] [cursor=pointer]:
+                - generic [ref=f1e156]: 2 RELIABLE
+                - generic [ref=f1e157]: 159 220
+              - button "3 Occasionnal 206 345" [ref=f1e158] [cursor=pointer]:
+                - generic [ref=f1e160]: 3 Occasionnal
+                - generic [ref=f1e161]: 206 345
+              - button "4 At-Risk 234 045" [ref=f1e162] [cursor=pointer]:
+                - generic [ref=f1e164]: 4 At-Risk
+                - generic [ref=f1e165]: 234 045
+              - button "5 Delinquant 229 204" [ref=f1e166] [cursor=pointer]:
+                - generic [ref=f1e168]: 5 Delinquant
+                - generic [ref=f1e169]: 229 204
+              - button "6 Défaillant 366 820" [ref=f1e170] [cursor=pointer]:
+                - generic [ref=f1e172]: 6 Défaillant
+                - generic [ref=f1e173]: 366 820
+              - generic [ref=f1e174]:
+                - generic [ref=f1e176]: Non classé
+                - generic [ref=f1e177]: 126 838
+            - paragraph [ref=f1e178]: 126 838 clients hors des six profils (non classés), non comptés dans le total.
+        - generic [ref=f1e179]:
+          - generic [ref=f1e180]:
+            - heading "Décomposition du profil Défaillant" [level=3] [ref=f1e181]
+            - generic [ref=f1e182]: Répartition des clients défaillants selon leur comportement de paiement.
+            - generic [ref=f1e183]:
+              - button "Exporter ce graphique" [ref=f1e184] [cursor=pointer]:
+                - generic [aria-hidden] [ref=f1e185]: 
+              - text:      
+          - generic [ref=f1e189]:
+            - generic [ref=f1e190]:
+              - generic [ref=f1e191]: Total clients Défaillants
+              - generic [ref=f1e192]: 366 820
+            - generic [ref=f1e193]:
+              - button "Always Late 52 160" [ref=f1e194] [cursor=pointer]:
+                - generic [ref=f1e195]: Always Late
+                - generic [ref=f1e196]: 52 160
+              - button "Sometime Paid 132 419" [ref=f1e197] [cursor=pointer]:
+                - generic [ref=f1e198]: Sometime Paid
+                - generic [ref=f1e199]: 132 419
+              - button "Never Paid 182 241" [ref=f1e200] [cursor=pointer]:
+                - generic [ref=f1e201]: Never Paid
+                - generic [ref=f1e202]: 182 241
+              - button "Other 0" [ref=f1e203] [cursor=pointer]:
+                - generic [ref=f1e204]: Other
+                - generic [ref=f1e205]: "0"
+      - region [ref=f1e206]:
+        - generic [ref=f1e207]:
+          - generic [ref=f1e209]: 
+          - generic [ref=f1e210]:
+            - heading "Vue Prepaid" [level=2] [ref=f1e211]
+            - paragraph [ref=f1e212]: Segmentation des profils payeurs Prepaid
+          - generic [ref=f1e213]: 1 092 287 clients
+        - generic [ref=f1e214]:
+          - generic [ref=f1e215]:
+            - heading "Répartition par segmentation" [level=3] [ref=f1e216]
+            - generic [ref=f1e217]: Nombre de clients par profil payeur. Cliquez sur un profil pour afficher ses clients.
+            - generic [ref=f1e218]:
+              - button "Exporter ce graphique" [ref=f1e219] [cursor=pointer]:
+                - generic [aria-hidden] [ref=f1e220]: 
+              - text:      
+          - generic [ref=f1e224]:
+            - generic [ref=f1e225]:
+              - generic [ref=f1e226]: Total clients classés
+              - generic [ref=f1e227]: 1 092 287
+            - generic [ref=f1e228]:
+              - button "1-Stable 252 345" [ref=f1e229] [cursor=pointer]:
+                - generic [ref=f1e231]: 1-Stable
+                - generic [ref=f1e232]: 252 345
+              - button "2-InStable 251 888" [ref=f1e233] [cursor=pointer]:
+                - generic [ref=f1e235]: 2-InStable
+                - generic [ref=f1e236]: 251 888
+              - button "3-At Risk 425 372" [ref=f1e237] [cursor=pointer]:
+                - generic [ref=f1e239]: 3-At Risk
+                - generic [ref=f1e240]: 425 372
+              - generic [ref=f1e241]:
+                - generic [ref=f1e243]: 4-Suspect Dormant
+                - generic [ref=f1e244]: "0"
+              - button "5-Dormant 151 514" [ref=f1e245] [cursor=pointer]:
+                - generic [ref=f1e247]: 5-Dormant
+                - generic [ref=f1e248]: 151 514
+              - button "6-Never Vending 11 168" [ref=f1e249] [cursor=pointer]:
+                - generic [ref=f1e251]: 6-Never Vending
+                - generic [ref=f1e252]: 11 168
+      - region [ref=f1e253]:
+        - generic [ref=f1e254]:
+          - generic [ref=f1e256]: 
+          - generic [ref=f1e257]:
+            - heading "Détail des clients" [level=2] [ref=f1e258]
+            - paragraph [ref=f1e259]: Liste et export des clients actifs selon les filtres appliqués
+          - group "Périmètre du tableau et de l’export" [ref=f1e260]:
+            - button "Tous" [pressed] [ref=f1e261] [cursor=pointer]
+            - button "Postpaid" [ref=f1e262] [cursor=pointer]
+            - button "Prepaid" [ref=f1e263] [cursor=pointer]
+        - status "Fraîcheur des données" [ref=f1e264]:
+          - generic [ref=f1e267]:
+            - generic [ref=f1e268]:
+              - term [ref=f1e269]: Dernière synchronisation réussie
+              - definition [ref=f1e270]: Aucune
+            - generic [ref=f1e271]:
+              - term [ref=f1e272]: Dernière tentative
+              - definition [ref=f1e273]: Aucune
+            - generic [ref=f1e274]:
+              - term [ref=f1e275]: Clients synchronisés
+              - definition [ref=f1e276]: Aucune
+            - generic [ref=f1e277]:
+              - term [ref=f1e278]: Chargement Oracle
+              - definition [ref=f1e279]: Aucune
+            - generic [ref=f1e280]:
+              - term [ref=f1e281]: Prochaine synchronisation
+              - definition [ref=f1e282]: Non programmée
+          - button "Historique" [ref=f1e283] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f1e284]: 
+            - text: Historique
+        - generic [ref=f1e285]:
+          - generic [ref=f1e286]:
+            - generic [ref=f1e287]:
+              - generic [ref=f1e288]: 0 résultat
+              - generic [ref=f1e289]:
+                - generic [ref=f1e290]: 
+                - searchbox "Nom, contrat, code client, n° compteur…" [ref=f1e291]
+              - button " Colonnes" [ref=f1e293] [cursor=pointer]:
+                - generic [ref=f1e294]: 
+                - text: Colonnes
+              - combobox [ref=f1e295]:
+                - option "20 / page"
+                - option "50 / page" [selected]
+                - option "100 / page"
+                - option "200 / page"
+            - button " Export CSV" [ref=f1e297] [cursor=pointer]:
+              - generic [ref=f1e298]: 
+              - text: Export CSV
+          - table [ref=f1e300]:
+            - rowgroup [ref=f1e301]:
+              - row [ref=f1e302]:
+                - columnheader "Région" [ref=f1e303] [cursor=pointer]
+                - columnheader "Division" [ref=f1e304] [cursor=pointer]
+                - columnheader "Agence" [ref=f1e305] [cursor=pointer]
+                - columnheader "Code client" [ref=f1e306] [cursor=pointer]
+                - columnheader "Contrat ▲" [ref=f1e307] [cursor=pointer]
+                - columnheader "Statut" [ref=f1e308] [cursor=pointer]
+                - columnheader "N° compteur" [ref=f1e309]
+                - columnheader "Client" [ref=f1e310] [cursor=pointer]
+                - columnheader "Téléphone" [ref=f1e311]
+                - columnheader "E-mail" [ref=f1e312]
+                - columnheader "Date abo." [ref=f1e313] [cursor=pointer]
+                - columnheader "Date résil." [ref=f1e314] [cursor=pointer]
+                - columnheader "NIU_RIGHT" [ref=f1e315]
+                - columnheader "NUI_QC" [ref=f1e316]
+                - columnheader "Segmentation" [ref=f1e317] [cursor=pointer]
+                - columnheader "Mis à jour le" [ref=f1e318]
+            - rowgroup
+          - generic [ref=f1e319]:
+            - generic [ref=f1e320]: 
+            - paragraph [ref=f1e321]: Aucune ligne ne correspond aux filtres sélectionnés.
+            - button "Réinitialiser les filtres" [ref=f1e322] [cursor=pointer]
+  - contentinfo [ref=f1e324]:
+    - generic [ref=f1e325]: Version 0.1.0 — Phase 1
+    - strong [ref=f1e326]: © 2026 MARKETING (MI).
+    - text: Tous droits réservés.
