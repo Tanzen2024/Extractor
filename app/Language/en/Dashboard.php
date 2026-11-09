@@ -12,28 +12,21 @@ return [
         'title'    => 'Selection criteria',
         'dateFrom' => 'Subscription start date',
         'dateTo'   => 'Subscription end date',
-    ],
-
-    'kpi' => [
-        'heading'     => 'Active Customers Overview',
-        'actifs'      => 'Active customers',
-        'nuiCorrects' => 'NUMBER OF CORRECT NIUs',
-        'contacts'    => 'Contacts on file',
+        'advanced' => 'Advanced filters',
     ],
 
     // "Postpaid View" / "Prepaid View" sections and the scoped detail table.
     'sections' => [
-        'nav'      => 'Jump to a view',
+        'grandTotal'     => 'Total active customers',
+        'grandTotalHint' => 'Postpaid + Prepaid, under the applied filters',
         'postpaid' => [
             'title'    => 'Postpaid View',
-            'subtitle' => 'Postpaid Reports & Analytics',
+            'subtitle' => 'Postpaid payer-profile segmentation',
         ],
         'prepaid'  => [
             'title'    => 'Prepaid View',
-            'subtitle' => 'Prepaid Reports & Analytics',
+            'subtitle' => 'Prepaid payer-profile segmentation',
         ],
-        'total'     => 'Total customers:',
-        'totalHint' => 'Show all customers in the table',
         'detail'   => [
             'title'    => 'Customer details',
             'subtitle' => 'List and export of the active customers matching the applied filters',
@@ -73,16 +66,11 @@ return [
         'alwaysLate'   => 'Always Late',
         'sometimePaid' => 'Sometime Paid',
         'neverPaid'    => 'Never Paid',
-        'other'        => 'Other',
     ],
 
     'charts' => [
-        'byRegion'          => 'Breakdown by region',
-        'byStatus'          => 'Breakdown by status',
         'bySegmentation'    => 'Breakdown by segmentation',
-        'meterTypes'        => 'Meter types',
-        'meterTypesHint'    => 'Customers by meter type',
-        'meterTotal'        => 'Total meters',
+        'segmentationHint'  => 'Customers per payer profile. Click a profile to list its customers.',
     ],
 
     'table' => [

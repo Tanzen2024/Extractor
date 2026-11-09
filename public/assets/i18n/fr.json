@@ -74,16 +74,6 @@
             "unavailable": "État indisponible",
             "historyEmpty": "Aucune synchronisation enregistrée."
         },
-        "sections": {
-            "clients": {
-                "one": "{count} client",
-                "other": "{count} clients"
-            },
-            "unassigned": {
-                "one": "{count} client sans type de compteur n’apparaît dans aucune vue",
-                "other": "{count} clients sans type de compteur n’apparaissent dans aucune vue"
-            }
-        },
         "columns": {
             "REGION": "Région",
             "DIVISION": "Division",
@@ -124,10 +114,17 @@
         },
         "filters": {
             "date_from": "Depuis",
-            "date_to": "Jusqu'au"
+            "date_to": "Jusqu'au",
+            "advancedActive": {
+                "one": "{count} filtre avancé actif",
+                "other": "{count} filtres avancés actifs"
+            }
         },
-        "kpi": {
-            "nuiCorrectsNote": "NUI corrects correspondant aux filtres"
+        "sections": {
+            "clients": {
+                "one": "{count} client",
+                "other": "{count} clients"
+            }
         },
         "table": {
             "results": {
@@ -166,11 +163,9 @@
         "failure": {
             "total": "TOTAL DÉFAILLANT",
             "filter": "Composante Défaillant",
-            "unassigned": "{n} clients défaillants sans composante : ce snapshot ne porte pas l’information.",
             "alwaysLate": "Always Late",
             "sometimePaid": "Sometime Paid",
-            "neverPaid": "Never Paid",
-            "other": "Other"
+            "neverPaid": "Never Paid"
         }
     },
     "export": {

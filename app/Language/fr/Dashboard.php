@@ -14,28 +14,21 @@ return [
         'title'    => 'Critères de sélection',
         'dateFrom' => 'Date début abonnement',
         'dateTo'   => 'Date fin abonnement',
-    ],
-
-    'kpi' => [
-        'heading'     => 'Vue globale des clients actifs',
-        'actifs'      => 'Clients actifs',
-        'nuiCorrects' => 'NOMBRE DE NUI CORRECTS',
-        'contacts'    => 'Contacts renseignés',
+        'advanced' => 'Filtres avancés',
     ],
 
     // "Vue Postpaid" / "Vue Prepaid" sections and the scoped detail table.
     'sections' => [
-        'nav'      => 'Accès rapide aux vues',
+        'grandTotal'     => 'Total clients actifs',
+        'grandTotalHint' => 'Postpaid + Prepaid, selon les filtres appliqués',
         'postpaid' => [
             'title'    => 'Vue Postpaid',
-            'subtitle' => 'Rapports et analyses Postpaid',
+            'subtitle' => 'Segmentation des profils payeurs Postpaid',
         ],
         'prepaid'  => [
             'title'    => 'Vue Prepaid',
-            'subtitle' => 'Rapports et analyses Prepaid',
+            'subtitle' => 'Segmentation des profils payeurs Prepaid',
         ],
-        'total'     => 'Total clients :',
-        'totalHint' => 'Afficher tous les clients dans le tableau',
         'detail'   => [
             'title'    => 'Détail des clients',
             'subtitle' => 'Liste et export des clients actifs selon les filtres appliqués',
@@ -75,16 +68,11 @@ return [
         'alwaysLate'   => 'Always Late',
         'sometimePaid' => 'Sometime Paid',
         'neverPaid'    => 'Never Paid',
-        'other'        => 'Other',
     ],
 
     'charts' => [
-        'byRegion'          => 'Répartition par région',
-        'byStatus'          => 'Répartition par statut',
         'bySegmentation'    => 'Répartition par segmentation',
-        'meterTypes'        => 'Type de compteurs',
-        'meterTypesHint'    => 'Répartition des clients selon le type de compteur',
-        'meterTotal'        => 'Total compteurs',
+        'segmentationHint'  => 'Nombre de clients par profil payeur. Cliquez sur un profil pour afficher ses clients.',
     ],
 
     'table' => [

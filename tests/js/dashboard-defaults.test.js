@@ -30,7 +30,7 @@ test('the perimeter is server-side only: ActiveCustomers lists the 4 statuses, d
     assert.ok(!fs.existsSync(path.join(ROOT, 'public/assets/js/dashboard-defaults.js')));
 });
 
-test('view: no Référentiel line, no Oracle/snapshot banner, NOMBRE DE NUI CORRECTS card', () => {
+test('view: no Référentiel line, no Oracle/snapshot banner, no KPI card', () => {
     const view = fs.readFileSync(path.join(ROOT, 'app/Views/dashboard/index.php'), 'utf8');
     const js = fs.readFileSync(path.join(ROOT, 'public/assets/js/dashboard.js'), 'utf8');
     for (const src of [view, js]) {
@@ -38,11 +38,9 @@ test('view: no Référentiel line, no Oracle/snapshot banner, NOMBRE DE NUI CORR
         assert.ok(!src.includes('bscdSourceNote') && !src.includes('bscdSourceWarning') && !src.includes('bscdExportSource'));
         assert.ok(!src.includes('La base Oracle en direct'));
     }
-    // Labels are lang() keys; their French text lives in app/Language/fr/Dashboard.php.
+    // The views show the segmentation only: no KPI card at all (tests/js/dashboard-kpis.test.js).
     const frDashboard = fs.readFileSync(path.join(ROOT, 'app/Language/fr/Dashboard.php'), 'utf8');
-    assert.ok(view.includes("'Dashboard.kpi.nuiCorrects'") && frDashboard.includes("'NOMBRE DE NUI CORRECTS'"));
-    // No "Total clients" card any more: it would always equal "Clients actifs".
-    assert.ok(!view.includes("'Dashboard.kpi.total'") && !view.includes('dashboard-defaults.js'));
+    assert.ok(!view.includes("'Dashboard.kpi.") && !view.includes('dashboard-defaults.js'));
     assert.ok(!/'total'\s*=>\s*'Total clients'/.test(frDashboard));
 });
 
@@ -130,7 +128,9 @@ function bootDashboard(overrides = {}, extraEndpoints = {}, parked = null) {
         setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {},
         localStorage: { getItem: () => null, setItem() {} },
         sessionStorage: { getItem: () => parked, setItem() {}, removeItem() { parked = null; } },
-        Chart: function (ctx, config) { charts[ctx.canvas] = config; this.destroy = () => { if (charts[ctx.canvas] === config) delete charts[ctx.canvas]; }; },
+        Chart: Object.assign(function (ctx, config) { charts[ctx.canvas] = config; this.destroy = () => { if (charts[ctx.canvas] === config) delete charts[ctx.canvas]; }; }, {
+            overrides: { doughnut: { plugins: { legend: { labels: { generateLabels: (chart) => chart.data.labels.map((text, index) => ({ text, index })) } } } } },
+        }),
         $: () => ({ modal() {} }),
         frdate: { clear() {}, setBounds() {} },
         bscdExportProgress: require('../../public/assets/js/export-progress.js'),
@@ -166,9 +166,9 @@ test('first load: STATUT offers the 4 active statuses, none pre-checked, no "Con
     assert.ok(!/Contrats inactifs|Contrats actifs/.test(statusList.innerHTML));
 });
 
-test('Défaillant breakdown: Postpaid only, doughnut and cards from one answer, a component opens its customers', async () => {
+test('Défaillant breakdown: Postpaid only, one doughnut, counts in its legend, a slice or legend item opens its customers', async () => {
     const failureBreakdown = { total: 8, unassigned: 0, components: [
-        { value: 'ALWAYS_LATE', count: 2 }, { value: 'SOMETIME_PAID', count: 2 }, { value: 'NEVER_PAID', count: 4 }, { value: 'OTHER', count: 0 },
+        { value: 'ALWAYS_LATE', count: 2 }, { value: 'NEVER_PAID', count: 4 }, { value: 'SOMETIME_PAID', count: 2 },
     ] };
     const ctx = bootDashboard({
         '/dashboard/stats': { totalRows: 10, kpis: { total: 10 }, charts: { region: [], status: [], segmentation: [], meterType: [], failureBreakdown } },
@@ -178,19 +178,21 @@ test('Défaillant breakdown: Postpaid only, doughnut and cards from one answer, 
     const chart = ctx.charts[id];
     assert.equal(chart.type, 'doughnut');
     const plain = (v) => JSON.parse(JSON.stringify(v)); // built in the page's own realm
-    assert.deepEqual(plain(chart.data.datasets[0].data), [2, 2, 4, 0]);
-    assert.deepEqual(plain(chart.data.labels), ['Always Late', 'Sometime Paid', 'Never Paid', 'Other']);
+    assert.deepEqual(plain(chart.data.datasets[0].data), [2, 4, 2]);
+    assert.deepEqual(plain(chart.data.labels), ['Always Late', 'Never Paid', 'Sometime Paid'], 'three components, no Other');
     assert.deepEqual(plain(chart.options.plugins.bscdValueLabels.center), { label: 'TOTAL DÉFAILLANT', value: '8' });
     assert.equal(ctx.charts.bscdChart_prepaid_failure, undefined);
 
-    const html = inSection(ctx.document, 'postpaid', '[data-failure-stats]').innerHTML;
-    ['Always Late', 'Sometime Paid', 'Never Paid', 'Other'].forEach((name) => assert.ok(html.includes(name), name));
-    assert.ok(html.includes('>4<') && html.includes('>2<'), 'cards carry the counts');
-    assert.doesNotMatch(html, /%|50,0|25,0/);
-    assert.equal(chart.options.plugins.tooltip.callbacks.label({ label: 'Never Paid', parsed: 1234, dataIndex: 2 }), 'Never Paid: ' + (1234).toLocaleString('fr-FR'));
+    // The figures are in the diagram itself: each legend item carries its count, never a %.
+    const legend = chart.options.plugins.legend;
+    const items = plain(legend.labels.generateLabels({ data: chart.data }));
+    assert.deepEqual(items.map((i) => i.text), ['Always Late : 2', 'Never Paid : 4', 'Sometime Paid : 2']);
+    items.forEach((i) => assert.doesNotMatch(i.text, /%/));
+    assert.equal(chart.options.plugins.tooltip.callbacks.label({ label: 'Never Paid', parsed: 1234, dataIndex: 1 }), 'Never Paid: ' + (1234).toLocaleString('fr-FR'));
+    assert.equal(inSection(ctx.document, 'postpaid', '[data-failure-stats]').innerHTML, '', 'no cards around the doughnut');
 
     const before = ctx.requests.length;
-    chart.options.onClick(null, [{ index: 2 }]);
+    chart.options.onClick(null, [{ index: 1 }]);
     await settle();
     const added = ctx.requests.slice(before);
     assert.equal(added.length, 1, 'only the table reloads');
@@ -198,12 +200,17 @@ test('Défaillant breakdown: Postpaid only, doughnut and cards from one answer, 
     assert.ok(added[0].startsWith('/dashboard/rows'));
     assert.deepEqual(q.getAll('failure_subcategory[]'), ['NEVER_PAID']);
     assert.deepEqual(q.getAll('segmentation[]'), [], 'no official filter involved');
+    assert.match(ctx.byId.bscdFailureFilter.innerHTML, /<button type="button" data-failure-clear aria-label="[^"]+">&times;<\/button>/);
     assert.equal(q.get('page'), '1');
     assert.ok(q.getAll('meter[]').length > 0, 'Postpaid scope of the table');
 
-    chart.options.onClick(null, [{ index: 2 }]); // same component again: back to the whole scope
+    chart.options.onClick(null, [{ index: 1 }]); // same component again: back to the whole scope
     await settle();
     assert.deepEqual(new URLSearchParams(ctx.requests[ctx.requests.length - 1].split('?')[1]).getAll('failure_subcategory[]'), []);
+
+    legend.onClick(null, { index: 0 }); // a legend item selects its component (never hides the slice)
+    await settle();
+    assert.deepEqual(new URLSearchParams(ctx.requests[ctx.requests.length - 1].split('?')[1]).getAll('failure_subcategory[]'), ['ALWAYS_LATE']);
 });
 
 test('first load: stats (one per section), count and rows carry no STATUT filter (= the whole active perimeter, server-side)', async () => {
@@ -221,30 +228,48 @@ test('first load: stats (one per section), count and rows carry no STATUT filter
     assert.deepEqual(stats.map((u) => new URLSearchParams(u.split('?')[1]).getAll('meter[]')), [['POSTPAID'], ['PREPAID']]);
 });
 
-test('Total clients: sum of the two section answers, no extra request, never a partial sum', async () => {
+test('totals: each view header shows its customers, the band above both their sum; never a partial sum', async () => {
     const { document, requests } = bootDashboard();
     await settle();
-    assert.equal(document.querySelector('[data-sections-total]').textContent, '20'); // 10 + 10
-    assert.equal(requests.filter((u) => u.startsWith('/dashboard/stats')).length, 2);
+    assert.equal(requests.filter((u) => u.startsWith('/dashboard/stats')).length, 2, 'one stats call per view, nothing extra');
+    assert.equal(inSection(document, 'postpaid', '[data-section-total]').textContent, '10 clients');
+    assert.equal(inSection(document, 'prepaid', '[data-section-total]').textContent, '10 clients');
+    assert.equal(document.querySelector('[data-grand-total]').textContent, '20'); // 10 + 10
 
     let release = null;
     const slow = bootDashboard({
         '/dashboard/stats': (url) => (url.includes('PREPAID')
             ? new Promise((res) => { release = () => res({ totalRows: 5, kpis: { total: 5 }, charts: { region: [], status: [], segmentation: [], meterType: [] } }); })
-            : { totalRows: 7, kpis: { total: 7 }, charts: { region: [], status: [], segmentation: [], meterType: [] } }),
+            : { totalRows: 1, kpis: { total: 1 }, charts: { region: [], status: [], segmentation: [], meterType: [] } }),
     });
     await settle();
-    assert.equal(slow.document.querySelector('[data-section-count="postpaid"]').textContent, '7 clients');
-    assert.equal(slow.document.querySelector('[data-sections-total]').textContent, '', 'waits for Prepaid');
+    assert.equal(inSection(slow.document, 'postpaid', '[data-section-total]').textContent, '1 client');
+    assert.equal(inSection(slow.document, 'prepaid', '[data-section-total]').textContent, '', 'Prepaid not answered yet');
+    assert.match(slow.document.querySelector('[data-grand-total]').innerHTML, /bscd-skeleton/, 'waits for Prepaid');
     release(); await settle();
-    assert.equal(slow.document.querySelector('[data-sections-total]').textContent, '12');
+    assert.equal(slow.document.querySelector('[data-grand-total]').textContent, '6');
+
+    // Around the charts: still no profile total, list or unclassified note.
+    ['postpaid', 'prepaid'].forEach((key) => {
+        ['[data-profile-total]', '[data-profile-stats]', '[data-profile-note]', '[data-failure-total]', '[data-failure-note]'].forEach((sel) => {
+            const el = inSection(document, key, sel);
+            assert.equal(el.textContent + el.innerHTML, '', key + ' ' + sel);
+        });
+    });
 });
 
-test('first load: the NUI card shows the stats figure', async () => {
+test('totals: a view with no possible row counts 0 without a request, the global total stays the sum', async () => {
+    const r = await applyScope(['PREPAID']);
+    assert.equal(inSection(r.ctx.document, 'postpaid', '[data-section-total]').textContent, '0 client');
+    const prepaid = inSection(r.ctx.document, 'prepaid', '[data-section-total]').textContent;
+    assert.match(prepaid, /clients?$/);
+    assert.equal(r.ctx.document.querySelector('[data-grand-total]').textContent, prepaid.replace(/ clients?$/, ''));
+});
+
+test('first load: no KPI slot is filled (the views show the segmentation only)', async () => {
     const { document } = bootDashboard();
     await settle();
-    assert.equal(inSection(document, 'postpaid', '[data-kpi="nuiCorrects"]').textContent, '7');
-    assert.doesNotMatch(String(inSection(document, 'postpaid', '[data-kpi-sub="nuiCorrects"]').textContent), /%/); // NUI corrects / all NUI (backend pct)
+    assert.equal(inSection(document, 'postpaid', '[data-kpi="nuiCorrects"]').textContent, '');
 });
 
 test('the user can narrow STATUT inside the perimeter: the next apply sends exactly the new selection', async () => {
@@ -262,15 +287,6 @@ test('the user can narrow STATUT inside the perimeter: the next apply sends exac
         const call = requests.find((u) => u.startsWith(ep));
         assert.deepEqual([...statusesOf(call)].sort(), expected, ep);
     });
-});
-
-// ── KPI row: "Clients actifs" is the section's total (no separate "Total clients") ──
-
-test('KPI row: "Clients actifs" shows the stats figure, no percentage', async () => {
-    const { document } = bootDashboard();
-    await settle();
-    assert.equal(inSection(document, 'postpaid', '[data-kpi="actifs"]').textContent, '10');
-    assert.doesNotMatch(String(inSection(document, 'postpaid', '[data-kpi-sub="actifs"]').textContent), /%/); // backend actifs.pct
 });
 
 test('a parked STATUT value that is no longer offered (an excluded status) is dropped, never sent', async () => {
@@ -509,12 +525,114 @@ test('segmentation chart: unclassified customers (blank SEGMENTATION) get their 
     assert.equal(r.counts.reduce((a, n) => a + n, 0), 30043 + 159220 + 206345 + 234045 + 229204 + 817910 + 42);
 });
 
-test('chart tooltips and the meter type list give the count only, never a percentage', async () => {
+test('segmentation tooltips give the count only, never a percentage', async () => {
     const r = await applyScope(['POSTPAID']);
     const config = r.ctx.charts.bscdChart_postpaid_segmentation;
+    assert.equal(config.options.indexAxis, 'y', 'horizontal bars: full profile labels stay readable');
     const label = config.options.plugins.tooltip.callbacks.label({ label: 'A', parsed: { x: 1234, y: 1234 }, dataIndex: 0 });
     assert.equal(label, (1234).toLocaleString('fr-FR'));
-    assert.doesNotMatch(inSection(r.ctx.document, 'postpaid', '[data-metertype="list"]').innerHTML, /%|metertype__pct/);
+});
+
+// ── Répartition par segmentation: counts on the bars, click -> customers ──
+
+const POSTPAID_COUNTS = [30043, 159220, 206345, 234045, 229204, 817910];
+
+const clickAdds = async (r, key, index) => {
+    const chart = r.ctx.charts['bscdChart_' + key + '_segmentation'];
+    const before = r.ctx.requests.length;
+    chart.options.onClick(null, [{ index }]);
+    await settle();
+    const added = r.ctx.requests.slice(before);
+    if (added.length) { chart.options.onClick(null, [{ index }]); await settle(); } // back to the whole view
+    return added;
+};
+
+test('segmentation, POSTPAID: the 6 profiles with their counts on the bars; the unclassified bar is shown, not clickable', async () => {
+    const r = await applyScope(['POSTPAID'], [], { extra: [{ value: 'Non renseigné', count: 42 }] });
+    assert.deepEqual(r.labels, [...POSTPAID_ORDER, 'Non classé']);
+    assert.deepEqual(r.counts, [...POSTPAID_COUNTS, 42]);
+    for (let i = 0; i < POSTPAID_ORDER.length; i++) assert.equal((await clickAdds(r, 'postpaid', i)).length, 1, POSTPAID_ORDER[i] + ' clickable');
+    assert.equal((await clickAdds(r, 'postpaid', 6)).length, 0, 'unclassified is not clickable');
+    assert.equal(inSection(r.ctx.document, 'postpaid', '[data-profile-note]').textContent, '', 'no separate unclassified note');
+});
+
+test('segmentation, PREPAID: the 6 segments on the bars; a segment at 0 keeps its bar but is not clickable', async () => {
+    const r = await applyScope(['PREPAID']);
+    assert.deepEqual(r.labels, PREPAID_ORDER);
+    assert.equal(r.counts.reduce((a, b) => a + b, 0), 1091001 + 9888);
+    assert.equal(r.counts[0], 0);
+    assert.equal((await clickAdds(r, 'prepaid', 0)).length, 0, '1-Stable at 0 = shown, not clickable');
+    const added = await clickAdds(r, 'prepaid', PREPAID_ORDER.indexOf('5-Dormant'));
+    assert.deepEqual(new URLSearchParams(added[0].split('?')[1]).getAll('segmentation[]'), ['5-Dormant']);
+});
+
+test('click on a POSTPAID profile: only the table reloads, Postpaid scope + Segmentation = that profile; again = whole view', async () => {
+    const r = await applyScope([]);
+    const chart = r.ctx.charts.bscdChart_postpaid_segmentation;
+    const before = r.ctx.requests.length;
+    chart.options.onClick(null, [{ index: 5 }]); // 6 Défaillant
+    await settle();
+    const added = r.ctx.requests.slice(before);
+    assert.equal(added.length, 1, 'only the table reloads');
+    assert.ok(added[0].startsWith('/dashboard/rows'));
+    const q = new URLSearchParams(added[0].split('?')[1]);
+    assert.deepEqual(q.getAll('segmentation[]'), ['6 Défaillant']);
+    assert.ok(q.getAll('meter[]').length && !q.getAll('meter[]').includes('PREPAID'), 'Postpaid scope');
+    assert.deepEqual(q.getAll('failure_subcategory[]'), []);
+    assert.equal(q.get('page'), '1');
+    assert.match(r.ctx.byId.bscdFailureFilter.innerHTML, /Segmentation : 6 Défaillant/);
+    // Well-formed remove button: a stray quote would rename the attribute and the × would do nothing.
+    assert.match(r.ctx.byId.bscdFailureFilter.innerHTML, /<button type="button" data-profile-clear aria-label="[^"]+">&times;<\/button>/);
+
+    chart.options.onClick(null, [{ index: 5 }]);
+    await settle();
+    const last = new URLSearchParams(r.ctx.requests[r.ctx.requests.length - 1].split('?')[1]);
+    assert.deepEqual(last.getAll('segmentation[]'), [], 'back to the whole Postpaid view');
+    assert.equal(r.ctx.byId.bscdFailureFilter.innerHTML, '');
+});
+
+test('click on a PREPAID profile: Prepaid scope + that segment; a bar at 0 does nothing', async () => {
+    const r = await applyScope([]);
+    const chart = r.ctx.charts.bscdChart_prepaid_segmentation;
+    const before = r.ctx.requests.length;
+    chart.options.onClick(null, [{ index: 0 }]); // 1-Stable, 0 in this data
+    await settle();
+    assert.equal(r.ctx.requests.length, before, 'nothing requested for an empty profile');
+    chart.options.onClick(null, [{ index: 4 }]); // 5-Dormant
+    await settle();
+    const q = new URLSearchParams(r.ctx.requests[r.ctx.requests.length - 1].split('?')[1]);
+    assert.deepEqual(q.getAll('segmentation[]'), ['5-Dormant']);
+    assert.deepEqual(q.getAll('meter[]'), ['PREPAID']);
+});
+
+test('profile then Défaillant component: one narrowing at a time, never both', async () => {
+    const failureBreakdown = { total: 8, unassigned: 0, components: [
+        { value: 'ALWAYS_LATE', count: 2 }, { value: 'NEVER_PAID', count: 4 }, { value: 'SOMETIME_PAID', count: 2 },
+    ] };
+    const ctx = bootDashboard({
+        '/dashboard/filter-options': { meters: CHART_METERS, segmentations: ALL_SEGS },
+        '/dashboard/stats': (url) => ({ ...statsFor(url), charts: { ...statsFor(url).charts, failureBreakdown } }),
+    });
+    await settle();
+    ctx.charts.bscdChart_postpaid_segmentation.options.onClick(null, [{ index: 0 }]);
+    await settle();
+    ctx.charts.bscdChart_postpaid_failure.options.onClick(null, [{ index: 1 }]);
+    await settle();
+    const q = new URLSearchParams(ctx.requests[ctx.requests.length - 1].split('?')[1]);
+    assert.deepEqual(q.getAll('failure_subcategory[]'), ['NEVER_PAID']);
+    assert.deepEqual(q.getAll('segmentation[]'), [], 'the profile narrowing was dropped');
+});
+
+test('new filters that exclude the clicked profile drop it; the export then follows the page filters', async () => {
+    const r = await applyScope([]);
+    r.ctx.charts.bscdChart_postpaid_segmentation.options.onClick(null, [{ index: 0 }]); // 1 PERFECT
+    await settle();
+    msList(r.ctx, 'segmentation').querySelectorAll('input[type=checkbox]').forEach((cb) => { if (cb.value === '2 RELIABLE') { cb.checked = true; cb.fire('change'); } });
+    r.ctx.byId.bscdFilters.fire('submit');
+    await settle();
+    const rows = r.ctx.requests.filter((u) => u.startsWith('/dashboard/rows'));
+    const q = new URLSearchParams(rows[rows.length - 1].split('?')[1]);
+    assert.deepEqual(q.getAll('segmentation[]'), ['2 RELIABLE']);
 });
 
 test('segmentation chart, Compteurs communicants: the POSTPAID segmentation and order', async () => {
@@ -696,7 +814,6 @@ test('sections: Type de compteur = PREPAID only -> Vue Postpaid empty without an
     assert.deepEqual(new URLSearchParams(stats[stats.length - 1].split('?')[1]).getAll('meter[]'), ['PREPAID']);
     assert.equal(r.ctx.charts.bscdChart_postpaid_segmentation, undefined);
     assert.equal(r.ctx.byId.bscdChart_postpaid_segmentation.parentNode.dataset.chartMsg, 'Aucune donnée disponible pour les filtres sélectionnés.');
-    assert.equal(inSection(r.ctx.document, 'postpaid', '[data-kpi="actifs"]').textContent, '0');
     assert.deepEqual(r.labels, PREPAID_ORDER);
 });
 
@@ -715,11 +832,10 @@ test('segmentation chart, Segmentation = PERFECT: only PERFECT, the other segmen
 test('empty scope: every chart shows the empty-state message, no chart and no global fallback', async () => {
     const r = await applyScope(['POSTPAID'], [], { empty: true });
     const msg = 'Aucune donnée disponible pour les filtres sélectionnés.';
-    ['bscdChart_postpaid_region', 'bscdChart_postpaid_status', 'bscdChart_postpaid_segmentation'].forEach((id) => {
+    ['bscdChart_postpaid_segmentation'].forEach((id) => {
         assert.equal(r.ctx.charts[id], undefined, id);
         assert.equal(r.ctx.byId[id].parentNode.dataset.chartMsg, msg, id);
     });
-    assert.match(inSection(r.ctx.document, 'postpaid', '[data-metertype="list"]').innerHTML, /Aucune donnée disponible pour les filtres sélectionnés/);
 });
 
 test('a slow answer for an older filter set never overwrites the current charts; loading hides the old ones', async () => {

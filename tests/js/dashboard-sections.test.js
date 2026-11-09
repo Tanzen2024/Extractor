@@ -8,7 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { SECTIONS, universeOf, sectionCriteria, sectionsTotal, unassigned, failureBreakdown, withFailureFilter } = require('../../public/assets/js/dashboard-sections.js');
+const { SECTIONS, universeOf, sectionCriteria, sectionsTotal, failureBreakdown, withFailureFilter, withSegmentation, profileInScope, profileTotals } = require('../../public/assets/js/dashboard-sections.js');
 
 const ROOT = path.join(__dirname, '../..');
 
@@ -27,13 +27,13 @@ const crit = (applied, key) => sectionCriteria(applied, universeOf(key), OFFERED
 
 test('Défaillant breakdown: shares of the Défaillant total, 100 % together; no answer = empty', () => {
     const view = failureBreakdown({ total: 8, unassigned: 0, components: [
-        { value: 'ALWAYS_LATE', count: 1 }, { value: 'SOMETIME_PAID', count: 3 }, { value: 'NEVER_PAID', count: 4 }, { value: 'OTHER', count: 0 },
+        { value: 'ALWAYS_LATE', count: 1 }, { value: 'NEVER_PAID', count: 4 }, { value: 'SOMETIME_PAID', count: 3 },
     ] });
-    assert.deepEqual(view.rows.map((r) => r.share), [12.5, 37.5, 50, 0]);
+    assert.deepEqual(view.rows.map((r) => r.share), [12.5, 50, 37.5]);
     assert.equal(view.rows.reduce((s, r) => s + r.count, 0), view.total);
     assert.equal(view.rows.reduce((s, r) => s + r.share, 0), 100);
     assert.deepEqual(failureBreakdown(undefined), { total: 0, unassigned: 0, rows: [] });
-    assert.deepEqual(failureBreakdown({ total: 0, components: [{ value: 'OTHER', count: 0 }] }).rows[0].share, 0);
+    assert.deepEqual(failureBreakdown({ total: 0, components: [{ value: 'NEVER_PAID', count: 0 }] }).rows[0].share, 0);
 });
 
 test('component selected: added to a copy of the criteria; nothing selected or no possible row: unchanged', () => {
@@ -78,34 +78,34 @@ test('the snapshot offers no meter of a universe -> that section is null', () =>
     assert.equal(sectionCriteria({}, 'PREPAID', ['POSTPAID'], meterUniverse, segUniverse), null);
 });
 
-test('total clients: Postpaid + Prepaid, null until both figures are known, an empty section counts 0', () => {
-    assert.equal(sectionsTotal({ postpaid: 1339542, prepaid: 1093744 }), 2433286);
-    assert.equal(sectionsTotal({ postpaid: 1339542 }), null);
-    assert.equal(sectionsTotal({}), null);
-    assert.equal(sectionsTotal({ postpaid: 0, prepaid: 1093744 }), 1093744);
-});
-
-test('view: "Total clients" comes after the views and is the only link to the table, opened on "Tous"', () => {
+test('view: a badge per view header, the global total in one band above both views; no quick links', () => {
     const view = fs.readFileSync(path.join(ROOT, 'app/Views/dashboard/index.php'), 'utf8');
-    assert.ok(view.indexOf('data-section-count="<?= $sk ?>"') < view.indexOf('data-sections-total'));
-    assert.match(view, /href="#bscdSection-detail" data-table-scope-link="all"/);
-    assert.equal(view.match(/href="#bscdSection-detail"/g).length, 1);
+    ['bscd-section-nav', 'data-section-count', 'data-sections-total', 'data-section-unassigned', 'data-table-scope-link']
+        .forEach((s) => assert.ok(!view.includes(s), s));
+    const grid = view.indexOf('<div class="bscd-compare">');
+    const band = view.indexOf('data-grand-total');
+    assert.ok(grid !== -1 && band > grid && band < view.indexOf('<section class="bscd-section bscd-section--<?= $sk ?>"'), 'band first in the grid');
+    assert.equal(view.match(/data-grand-total/g).length, 1);
+    const header = view.slice(view.indexOf('<header class="bscd-section__header">'), view.indexOf('</header>'));
+    assert.ok(header.includes('data-section-total'), 'badge in the view header');
     assert.ok(view.includes('id="bscdSection-detail"'), 'the detail section itself stays');
 });
 
-test('unassigned rows: page count minus both sections, null while a figure is missing, never negative', () => {
-    assert.equal(unassigned(100, { postpaid: 60, prepaid: 35 }), 5);
-    assert.equal(unassigned(100, { postpaid: 60 }), null);
-    assert.equal(unassigned(null, { postpaid: 60, prepaid: 40 }), null);
-    assert.equal(unassigned(90, { postpaid: 60, prepaid: 40 }), 0);
+test('sectionsTotal: Postpaid + Prepaid, null until both figures are known, an empty view counts 0', () => {
+    assert.equal(sectionsTotal({ postpaid: 1342540, prepaid: 1110571 }), 2453111);
+    assert.equal(sectionsTotal({ postpaid: 1342540 }), null);
+    assert.equal(sectionsTotal({}), null);
+    assert.equal(sectionsTotal({ postpaid: 0, prepaid: 1110571 }), 1110571);
 });
 
-test('view: one section per universe, quick links, scoped detail table; script before dashboard.js', () => {
+test('view: one section per universe in one comparative grid, scoped detail table; script before dashboard.js', () => {
     const view = fs.readFileSync(path.join(ROOT, 'app/Views/dashboard/index.php'), 'utf8');
     assert.match(view, /'postpaid' => \['icon' => '[^']+', 'title' => 'Dashboard\.sections\.postpaid\.title'/);
     assert.match(view, /'prepaid'  => \['icon' => '[^']+', 'title' => 'Dashboard\.sections\.prepaid\.title'/);
     assert.ok(view.includes('data-section="<?= $sk ?>"'));
-    assert.ok(view.includes('href="#bscdSection-<?= $sk ?>"') && view.includes('href="#bscdSection-detail"'));
+    const grid = view.indexOf('<div class="bscd-compare">');
+    assert.ok(grid !== -1 && grid < view.indexOf('<?php foreach ($sections as $sk => $sec): ?>\n<section'), 'both views inside the grid');
+    assert.ok(view.indexOf("'postpaid' =>") < view.indexOf("'prepaid'  =>"), 'Postpaid first (left column, first when stacked)');
     assert.ok(view.includes('data-table-scope="<?= $scope ?>"'));
     assert.ok(view.indexOf("base_url('assets/js/dashboard-sections.js')") < view.indexOf("base_url('assets/js/dashboard.js')"));
 });
@@ -113,8 +113,47 @@ test('view: one section per universe, quick links, scoped detail table; script b
 test('i18n: section titles in French and English', () => {
     const fr = fs.readFileSync(path.join(ROOT, 'app/Language/fr/Dashboard.php'), 'utf8');
     const en = fs.readFileSync(path.join(ROOT, 'app/Language/en/Dashboard.php'), 'utf8');
-    for (const [src, a, b] of [[fr, 'Vue Postpaid', 'Rapports et analyses Postpaid'], [fr, 'Vue Prepaid', 'Rapports et analyses Prepaid'],
-        [en, 'Postpaid View', 'Postpaid Reports & Analytics'], [en, 'Prepaid View', 'Prepaid Reports & Analytics']]) {
+    for (const [src, a, b] of [[fr, 'Vue Postpaid', 'Segmentation des profils payeurs Postpaid'], [fr, 'Vue Prepaid', 'Segmentation des profils payeurs Prepaid'],
+        [en, 'Postpaid View', 'Postpaid payer-profile segmentation'], [en, 'Prepaid View', 'Prepaid payer-profile segmentation']]) {
         assert.ok(src.includes("'" + a + "'") && src.includes("'" + b + "'"), a);
     }
+});
+
+// ── Segmentation views: a clicked profile narrows the table through the existing Segmentation filter ──
+
+test('withSegmentation: the section criteria with Segmentation = the clicked profile, nothing else changed', () => {
+    const c = { meter: ['POSTPAID'], region: ['DCUD'], segmentation: ['1 PERFECT', '6 Défaillant'] };
+    assert.deepEqual(withSegmentation(c, '6 Défaillant'), { meter: ['POSTPAID'], region: ['DCUD'], segmentation: ['6 Défaillant'] });
+    assert.deepEqual(c.segmentation, ['1 PERFECT', '6 Défaillant'], 'page criteria untouched');
+    assert.equal(withSegmentation(null, '1 PERFECT'), null, 'no possible row stays none');
+    assert.equal(withSegmentation(c, null), c);
+});
+
+test('profileInScope: a profile survives new filters only inside its section and its Segmentation filter', () => {
+    assert.equal(profileInScope({ meter: ['POSTPAID'] }, '1 PERFECT'), true);
+    assert.equal(profileInScope({ meter: ['POSTPAID'], segmentation: ['1 PERFECT'] }, '1 PERFECT'), true);
+    assert.equal(profileInScope({ meter: ['POSTPAID'], segmentation: ['2 RELIABLE'] }, '1 PERFECT'), false);
+    assert.equal(profileInScope(null, '1 PERFECT'), false);
+});
+
+test('profileTotals: the six official profiles apart from the rest', () => {
+    const profiles = ['1 PERFECT', '2 RELIABLE', '3 Occasionnal', '4 At-Risk', '5 Delinquant', '6 Défaillant'];
+    const pairs = profiles.map((value, i) => ({ value, count: (i + 1) * 10 })).concat([{ value: 'Non renseigné', count: 7 }]);
+    assert.deepEqual(profileTotals(pairs, profiles), { classified: 210, unclassified: 7 });
+    assert.deepEqual(profileTotals([], profiles), { classified: 0, unclassified: 0 });
+});
+
+test('view: Postpaid = segmentation then Défaillant breakdown, Prepaid = segmentation only; nothing else drawn', () => {
+    const view = fs.readFileSync(path.join(ROOT, 'app/Views/dashboard/index.php'), 'utf8');
+    const start = view.indexOf('<?php foreach ($sections as $sk => $sec): ?>\n<section');
+    const body = view.slice(start, view.indexOf('</section>', start));
+    const seg = body.indexOf('bscdChart_<?= $sk ?>_segmentation');
+    const fail = body.indexOf('bscdChart_postpaid_failure');
+    assert.ok(seg !== -1 && fail > seg, 'segmentation before the Défaillant breakdown');
+    assert.ok(body.indexOf("<?php if ($sk === 'postpaid'): ?>") < fail, 'Défaillant in Postpaid only');
+    ['data-kpi', 'bscd-kpi', 'byRegion', 'byStatus', 'meterType', 'data-metertype'].forEach((s) => assert.ok(!body.includes(s), s));
+    ['data-profile-total', 'data-profile-stats', 'data-profile-note', 'data-failure-total', 'data-failure-stats', 'data-failure-note',
+        'bscd-viz__side', 'bscd-viz__total', 'classifiedTotal'].forEach((s) => assert.ok(!body.includes(s), s));
+    assert.equal((body.match(/<canvas /g) || []).length, 2, 'two charts in the loop body: segmentation + (Postpaid) Défaillant');
+    assert.equal((body.match(/class="bscd-chart-card /g) || []).length, 2);
 });

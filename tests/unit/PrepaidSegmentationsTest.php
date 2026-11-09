@@ -87,6 +87,29 @@ final class PrepaidSegmentationsTest extends TestCase
         $this->assertSame(1, substr_count($sql, 'LEFT JOIN prepaid_rfm rfm'));
     }
 
+    public function testOneReferenceDateAndRecenseIsRecalculatedFromIt(): void
+    {
+        $sql = preg_replace('/\s+/', ' ', $this->sql());
+
+        $this->assertSame(1, substr_count($sql, 'TRUNC(MAX(LASTPURCHASE_DATE)) AS REF_DATE'));
+        $this->assertStringContainsString('ref.REF_DATE - TRUNC(l.LASTPURCHASE_DATE) AS RECENSE', $sql);
+        $this->assertStringNotContainsString('SYSDATE - ', $sql);
+        $this->assertStringContainsString('SELECT TRUNC(REF_DATE, \'MM\') FROM prepaid_reference', $sql);
+    }
+
+    public function testExclusivePriorityOfTheCustomersWithoutProfile(): void
+    {
+        $sql    = preg_replace('/\s+/', ' ', $this->sql());
+        $buyer  = strpos($sql, "AND nb.METER_PREP IS NOT NULL THEN '1-Stable'");
+        $dormant = strpos($sql, "AND om.METER_PREP IS NOT NULL THEN '5-Dormant'");
+        $never  = strpos($sql, "AND om.METER_PREP IS NULL THEN '6-Never Vending'");
+
+        $this->assertNotFalse($buyer);
+        $this->assertTrue($buyer < $dormant && $dormant < $never, 'first matching branch wins');
+        $this->assertStringContainsString("o.op_time >= ref.REF_DATE + 1 AND o.order_type = '01' AND o.status = '01'", $sql);
+        $this->assertStringContainsString('b.op_time < ref.REF_DATE + 1', $sql);
+    }
+
     public function testTheSixSegmentsInBusinessOrderWithoutDuplicate(): void
     {
         $this->assertSame(self::ALL, PrepaidSegmentations::values());

@@ -1,0 +1,45 @@
+/* Contrôles PREPAID en lecture seule, à lancer après un chargement de
+   TB_CUSTOMERS_LIST par customers_list.sql. Aucune écriture. Perimetre :
+   les 4 statuts actifs d'Extractor. */
+
+/* 1. Effectifs par segment : les 6 libellés officiels, et le total */
+SELECT NVL(SEGMENTATION, '(NON CLASSE)') AS SEGMENT, COUNT(*) AS CLIENTS
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE METER = 'PREPAID'
+  AND TRIM(STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.')
+GROUP BY ROLLUP (NVL(SEGMENTATION, '(NON CLASSE)'))
+ORDER BY 1;
+
+/* 2. Valeurs hors nomenclature : doit ne retourner aucune ligne */
+SELECT SEGMENTATION, COUNT(*) AS CLIENTS
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE METER = 'PREPAID'
+  AND (SEGMENTATION IS NULL OR SEGMENTATION NOT IN
+       ('1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant', '6-Never Vending'))
+GROUP BY SEGMENTATION;
+
+/* 3. Chevauchement : chaque contrat une seule fois, doit ne retourner aucune ligne */
+SELECT CONTRACT, COUNT(*) AS LIGNES
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE METER = 'PREPAID'
+GROUP BY CONTRACT
+HAVING COUNT(*) > 1;
+
+/* 4. Bornes 29, 30, 59, 60 jours, et clients sans date de dernier achat */
+WITH ref AS (
+    SELECT TRUNC(MAX(LASTPURCHASE_DATE)) AS REF_DATE FROM CMS_RFC.PREPAID_PROFILE_P
+),
+last_row AS (
+    SELECT p.METER, ref.REF_DATE - TRUNC(p.LASTPURCHASE_DATE) AS RECENSE
+    FROM CMS_RFC.PREPAID_PROFILE_P p
+    CROSS JOIN ref
+    WHERE p.VC_DATE = TRUNC(ref.REF_DATE, 'MM')
+)
+SELECT NVL(TO_CHAR(r.RECENSE), 'SANS DATE') AS JOURS, t.SEGMENTATION, COUNT(*) AS CLIENTS
+FROM CMS_RFC.TB_CUSTOMERS_LIST t
+JOIN last_row r ON r.METER = t.METER_NO
+WHERE t.METER = 'PREPAID'
+  AND TRIM(t.STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.')
+  AND (r.RECENSE IN (29, 30, 59, 60) OR r.RECENSE IS NULL)
+GROUP BY r.RECENSE, t.SEGMENTATION
+ORDER BY r.RECENSE NULLS LAST, 2;

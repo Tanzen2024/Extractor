@@ -351,18 +351,38 @@ body {
 /* ── Filters ─────────────────────────────────────────────── */
 .bscd-filters {
     background: #fff; border: 1px solid #e3e6ec; border-radius: 8px;
-    padding: 1rem; margin-bottom: .75rem;
+    padding: .75rem 1rem; margin-bottom: .75rem;
 }
 .bscd-filters__grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: .75rem 1rem;
 }
 .bscd-filters__title {
-    display: flex; align-items: center; gap: .45rem; margin: 0 0 .8rem;
+    display: flex; align-items: center; gap: .45rem; margin: 0 0 .6rem;
     font-size: .9rem; font-weight: 600; color: #374151;
 }
 .bscd-filters__title .fas { color: var(--bscd-accent); font-size: .85rem; }
-.bscd-filters__actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-top: .85rem; }
+.bscd-filters__actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+
+/* "Filtres avancés": collapsed by default (`hidden`), one light separator,
+   same grid as the main criteria so the columns line up. */
+.bscd-filters__advanced { margin-top: .75rem; padding-top: .75rem; border-top: 1px dashed #e3e6ec; }
+.bscd-filters__advanced[hidden] { display: none; }
+.bscd-filters__toggle {
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .3rem .55rem; margin-left: -.55rem; border: 0; border-radius: 6px; background: transparent;
+    font-size: .8rem; font-weight: 600; color: var(--bscd-accent); cursor: pointer;
+}
+.bscd-filters__toggle:hover { background: #f2f8fd; }
+.bscd-filters__toggle:focus-visible { outline: 2px solid var(--bscd-accent); outline-offset: 1px; }
+.bscd-filters__chevron { font-size: .65rem; width: .7rem; transition: transform .15s ease; }
+.bscd-filters__toggle[aria-expanded="true"] .bscd-filters__chevron { transform: rotate(90deg); }
+.bscd-filters__count {
+    min-width: 1.15rem; height: 1.15rem; padding: 0 .3rem; border-radius: 999px;
+    background: var(--bscd-accent); color: #fff; font-size: .68rem; line-height: 1.15rem; text-align: center;
+}
+.bscd-filters__count[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .bscd-filters__chevron { transition: none; } }
 
 .bscd-filter-group { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
 .bscd-filter-group > label {
@@ -380,10 +400,10 @@ body {
 .bscd-filters__grid .frdate__input,
 .bscd-filters__grid .bscd-ms__button { height: 2.15rem; line-height: 1.3; }
 
-/* The selection criteria, two lines on desktop: 7 columns shared by both
-   lines (so they stay aligned), the two dates spanning 2 columns each on the
-   second line. Each group is a 2-row subgrid, so a label that wraps keeps
-   every field on the same baseline. DOM order = business order at every width. */
+/* The selection criteria: 7 columns on desktop, used by the main line and
+   by the advanced line (whose two dates span 2 columns each), so both stay
+   aligned. Each group is a 2-row subgrid, so a label that wraps keeps every
+   field on the same baseline. DOM order = business order at every width. */
 .bscd-filters__grid--main {
     grid-template-columns: repeat(7, minmax(0, 1fr));
     grid-auto-rows: auto;
@@ -396,6 +416,13 @@ body {
 .bscd-filters__grid--main > .bscd-filter-group > label { align-self: end; }
 @media (max-width: 1199.98px) {
     .bscd-filters__grid--main { grid-template-columns: repeat(4, minmax(0, 1fr)); row-gap: .75rem; }
+}
+@media (max-width: 767.98px) {
+    .bscd-filters__grid--main { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 399.98px) {
+    .bscd-filters__grid--main { grid-template-columns: minmax(0, 1fr); }
+    .bscd-filters__grid--main > .bscd-filter-group--wide { grid-column: auto; }
 }
 
 /* ── French date field (frdatepicker.js) ─────────────────────── */
@@ -546,14 +573,6 @@ body {
 }
 .bscd-chip button:hover { color: #c0392b; }
 
-/* ── KPI cards ───────────────────────────────────────────── */
-.bscd-kpi-row { margin-bottom: .25rem; }
-/* Title over a KPI row ("Vue globale de la base clients") */
-.bscd-kpi-heading {
-    margin: 0 0 .6rem; color: #374151; font-size: .9rem;
-    font-weight: 600; line-height: 1.3; overflow-wrap: anywhere;
-}
-
 /* ==========================================================
    "Vue Postpaid" / "Vue Prepaid" sections (dashboard/index.php)
    ========================================================== */
@@ -586,33 +605,6 @@ body {
 }
 .bscd-section__badge:empty { display: none; }
 .bscd-section .bscd-table-card { margin-top: 0; }
-
-/* Quick links to the sections (anchors, no tabs) */
-.bscd-section-nav { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .25rem 0 0; }
-.bscd-section-nav__link {
-    --bscd-sec-accent: #1f6fb2;
-    display: inline-flex; align-items: center; gap: .45rem; padding: .38rem .85rem;
-    border: 1px solid #e3e6ec; border-radius: 999px; background: #fff;
-    color: #3a4657; font-size: .8rem; font-weight: 600; text-decoration: none;
-    transition: border-color .15s ease, color .15s ease;
-}
-.bscd-section-nav__link--prepaid { --bscd-sec-accent: #7c3aed; }
-.bscd-section-nav__link i { color: var(--bscd-sec-accent); }
-.bscd-section-nav__link:hover, .bscd-section-nav__link:focus-visible {
-    border-color: var(--bscd-sec-accent); color: var(--bscd-sec-accent); text-decoration: none; outline: none;
-}
-.bscd-section-nav__count { font-weight: 500; color: #9ca3af; font-variant-numeric: tabular-nums; }
-.bscd-section-nav__count:empty { display: none; }
-/* Total clients: same pill, a soft navy tint and a stronger figure */
-.bscd-section-nav__link--total {
-    --bscd-sec-accent: var(--bscd-navy);
-    background: #f0f4f9; border-color: #d5dde8; color: var(--bscd-navy);
-}
-.bscd-section-nav__total-label { font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
-.bscd-section-nav__total-value { font-size: .86rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-.bscd-section-nav__total-value:empty { display: none; }
-.bscd-section-nav__note { font-size: .74rem; color: #9ca3af; }
-.bscd-section-nav__note[hidden] { display: none; }
 
 /* Scope of the detail table + export: Tous / Postpaid / Prepaid */
 .bscd-scope { display: inline-flex; padding: 3px; border-radius: 8px; background: #eef2f7; border: 1px solid #e3e6ec; }
@@ -664,61 +656,31 @@ body.dark-mode {
 .dark-mode .bscd-seg-title__item--consumer .bscd-seg-title__icon { background: rgba(76, 155, 224, .16); color: #8cc4f2; }
 
 /* surfaces */
-.dark-mode .bscd-filters, .dark-mode .bscd-kpi-card, .dark-mode .bscd-chart-card, .dark-mode .bscd-table-card,
+.dark-mode .bscd-filters, .dark-mode .bscd-chart-card, .dark-mode .bscd-table-card,
 .dark-mode .bscd-stat-box, .dark-mode .bscd-module-card, .dark-mode .bscd-module-card .card-header,
 .dark-mode .bscd-xw, .dark-mode .frdate__cal, .dark-mode .bscd-ms__panel {
     background: var(--bscd-surface); border-color: var(--bscd-border); color: var(--bscd-text);
 }
-.dark-mode .bscd-kpi-card { box-shadow: none; }
 .dark-mode .bscd-filters__title { color: var(--bscd-text); }
+.dark-mode .bscd-filters__advanced { border-top-color: var(--bscd-border); }
+.dark-mode .bscd-filters__toggle:hover { background: rgba(76, 155, 224, .14); }
 
 /* text */
-.dark-mode .bscd-kpi-value, .dark-mode .bscd-chart-card__title, .dark-mode .bscd-metertype__total-value,
-.dark-mode .bscd-metertype__row, .dark-mode .bscd-table-count, .dark-mode .frdate__cal-title, .dark-mode .frdate__pick,
+.dark-mode .bscd-chart-card__title,
+.dark-mode .bscd-table-count, .dark-mode .frdate__cal-title, .dark-mode .frdate__pick,
 .dark-mode .bscd-xw__title, .dark-mode .bscd-xw__state, .dark-mode .bscd-xw__download-title,
-.dark-mode .bscd-section__title, .dark-mode .bscd-kpi-heading { color: var(--bscd-text-strong); }
-.dark-mode .bscd-kpi-label, .dark-mode .bscd-filter-group > label, .dark-mode .bscd-dash-subtitle,
+.dark-mode .bscd-section__title { color: var(--bscd-text-strong); }
+.dark-mode .bscd-filter-group > label, .dark-mode .bscd-dash-subtitle,
 .dark-mode .bscd-section__subtitle, .dark-mode .bscd-table-empty, .dark-mode .bscd-xw__meta,
-.dark-mode .bscd-xw__download-text, .dark-mode .bscd-xw__status, .dark-mode .bscd-xw, .dark-mode .bscd-xw__pct,
-.dark-mode .bscd-kpi-scope { color: #cbd5e1; }
-.dark-mode .bscd-kpi-sub, .dark-mode .bscd-chart-card__subtitle, .dark-mode .bscd-cache-note,
-.dark-mode .bscd-metertype__total-label, .dark-mode .bscd-metertype__empty,
+.dark-mode .bscd-xw__download-text, .dark-mode .bscd-xw__status, .dark-mode .bscd-xw, .dark-mode .bscd-xw__pct { color: #cbd5e1; }
+.dark-mode .bscd-chart-card__subtitle, .dark-mode .bscd-cache-note,
 .dark-mode .bscd-page-info, .dark-mode .bscd-page-gap, .dark-mode .bscd-ms__opt em, .dark-mode .bscd-ms__none,
-.dark-mode .bscd-chart-card__body[data-chart-msg]::after, .dark-mode .frdate__cal-dow span,
-.dark-mode .bscd-section-nav__count, .dark-mode .bscd-section-nav__note { color: var(--bscd-muted); }
-.dark-mode .bscd-metertype__total { border-bottom-color: var(--bscd-border); }
-
-/* KPI icons: same hues, lifted for the dark surface */
-.dark-mode .bscd-kpi-icon--blue   { background: rgba(76, 155, 224, .16); color: #7fb8ec; }
-.dark-mode .bscd-kpi-icon--green  { background: rgba(52, 211, 153, .14); color: #5fd3a2; }
-.dark-mode .bscd-kpi-icon--purple { background: rgba(167, 139, 250, .16); color: #b4a2fb; }
-.dark-mode .bscd-kpi-icon--orange { background: rgba(251, 191, 36, .14); color: #f5b84a; }
-
-/* form controls */
-.dark-mode .bscd-filter-group input[type="date"], .dark-mode .bscd-filter-group input[type="text"],
-.dark-mode .bscd-filter-group select, .dark-mode .bscd-ms__button, .dark-mode .bscd-ms__filter,
-.dark-mode .bscd-search input, .dark-mode .bscd-perpage, .dark-mode .frdate__nav, .dark-mode .frdate__year-input,
-.dark-mode .frdate__year-go, .dark-mode .bscd-page-btns button, .dark-mode .bscd-lang__toggle, .dark-mode .bscd-theme-toggle {
-    background: var(--bscd-surface-2); border-color: var(--bscd-border); color: var(--bscd-text);
-}
-.dark-mode .bscd-ms.is-active .bscd-ms__button { background: rgba(76, 155, 224, .14); border-color: var(--bscd-accent); }
-.dark-mode .bscd-ms__opt:hover, .dark-mode .frdate__cal-day:hover:not(.is-disabled),
-.dark-mode .frdate__cal-month:hover:not(.is-disabled), .dark-mode .frdate__cal-year:hover:not(.is-disabled),
-.dark-mode .frdate__pick:hover { background: var(--bscd-surface-2); }
-.dark-mode .frdate__cal-day, .dark-mode .frdate__cal-month, .dark-mode .frdate__cal-year { color: var(--bscd-text); }
-.dark-mode .frdate__cal-day.is-disabled, .dark-mode .frdate__cal-month.is-disabled,
-.dark-mode .frdate__cal-year.is-disabled { color: #4b5563; }
-.dark-mode .bscd-ms__group-separator { background: var(--bscd-border); }
-.dark-mode .bscd-page-btns button.is-active { background: var(--bscd-accent); border-color: var(--bscd-accent); color: #0b1220; }
+.dark-mode .bscd-chart-card__body[data-chart-msg]::after, .dark-mode .frdate__cal-dow span { color: var(--bscd-muted); }
 .dark-mode .bscd-theme-toggle:hover, .dark-mode .bscd-lang__toggle:hover { border-color: #475569; color: #fbbf24; }
 
 /* chips, alerts, table */
 .dark-mode .bscd-chip { background: var(--bscd-surface-2); border-color: var(--bscd-border); color: var(--bscd-text); }
 .dark-mode .bscd-chip button { color: var(--bscd-muted); }
-.dark-mode .bscd-failure__stat { background: var(--bscd-surface-2); border-color: var(--bscd-border); border-left-color: var(--bscd-failure-color, #94a3b8); color: var(--bscd-text-strong); }
-.dark-mode .bscd-failure__stat:hover { border-color: var(--bscd-failure-color, #94a3b8); }
-.dark-mode .bscd-failure__stat.is-active { background: var(--bscd-surface); border-color: var(--bscd-failure-color, #94a3b8); }
-.dark-mode .bscd-failure__name { color: var(--bscd-muted); }
 .dark-mode .bscd-alert--error { background: rgba(220, 38, 38, .12); border-color: rgba(248, 113, 113, .35); color: #fca5a5; }
 .dark-mode .bscd-table-toolbar { border-bottom-color: var(--bscd-border); }
 .dark-mode .bscd-datatable thead th { background: var(--bscd-surface-2); color: #cbd5e1; border-bottom-color: var(--bscd-border); }
@@ -737,11 +699,11 @@ body.dark-mode {
 .dark-mode .bscd-section--detail  { --bscd-sec-tint: rgba(148, 163, 184, .1); --bscd-sec-line: rgba(148, 163, 184, .3); --bscd-sec-accent: #94a3b8; }
 .dark-mode .bscd-section__header { background: linear-gradient(90deg, var(--bscd-sec-tint), rgba(31, 38, 51, 0) 75%), var(--bscd-surface); }
 .dark-mode .bscd-section__icon { color: #0b1220; box-shadow: none; }
-.dark-mode .bscd-section__badge, .dark-mode .bscd-section-nav__link { background: var(--bscd-surface); border-color: var(--bscd-border); }
-.dark-mode .bscd-section-nav__link { color: var(--bscd-text); }
-.dark-mode .bscd-section-nav__link--postpaid { --bscd-sec-accent: #4c9be0; }
-.dark-mode .bscd-section-nav__link--prepaid  { --bscd-sec-accent: #a78bfa; }
-.dark-mode .bscd-section-nav__link--total    { --bscd-sec-accent: #8cc4f2; background: var(--bscd-surface-2); border-color: #3b4960; color: var(--bscd-text-strong); }
+.dark-mode .bscd-compare > .bscd-section--prepaid::before { background: var(--bscd-border); }
+.dark-mode .bscd-section__badge, .dark-mode .bscd-grand-total { background: var(--bscd-surface); border-color: var(--bscd-border); }
+.dark-mode .bscd-grand-total__icon { background: var(--bscd-surface-2); color: #8cc4f2; }
+.dark-mode .bscd-grand-total__label, .dark-mode .bscd-grand-total__hint { color: var(--bscd-muted); }
+.dark-mode .bscd-grand-total__value { color: var(--bscd-text-strong); }
 .dark-mode .bscd-scope { background: var(--bscd-bg); border-color: var(--bscd-border); }
 .dark-mode .bscd-scope__btn { color: #cbd5e1; }
 .dark-mode .bscd-scope__btn.is-active { background: var(--bscd-surface-2); color: #8cc4f2; box-shadow: none; }
@@ -758,28 +720,6 @@ body.dark-mode {
 .dark-mode .modal-content { background: var(--bscd-surface); color: var(--bscd-text); border-color: var(--bscd-border); }
 .dark-mode .modal-header, .dark-mode .modal-footer { border-color: var(--bscd-border); }
 .dark-mode .close { color: var(--bscd-text); text-shadow: none; }
-.bscd-kpi-card {
-    background: #fff; border: 1px solid #e3e6ec; border-radius: 8px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .04); padding: .9rem 1rem;
-    display: flex; align-items: center; gap: .75rem; height: 100%;
-}
-.bscd-kpi-icon {
-    width: 42px; height: 42px; border-radius: 10px; display: flex;
-    align-items: center; justify-content: center; font-size: 1.05rem; flex-shrink: 0;
-}
-.bscd-kpi-icon--blue   { background: rgba(31, 111, 178, .12); color: #1f6fb2; }
-.bscd-kpi-icon--green  { background: rgba(26, 127, 77, .12);  color: #1a7f4d; }
-.bscd-kpi-icon--purple { background: rgba(124, 58, 237, .12); color: #7c3aed; }
-.bscd-kpi-icon--orange { background: rgba(217, 119, 6, .12);  color: #d97706; }
-.bscd-kpi-body { min-width: 0; flex: 1; }
-.bscd-kpi-label {
-    font-size: .7rem; text-transform: uppercase; letter-spacing: .03em;
-    color: #6b7280; font-weight: 600; margin-bottom: .15rem;
-}
-.bscd-kpi-value { font-size: 1.35rem; font-weight: 700; color: #1f2937; line-height: 1.2; }
-.bscd-kpi-sub { font-size: .72rem; color: #9ca3af; }
-.bscd-kpi-note { display: block; }
-
 /* ── Chart cards ─────────────────────────────────────────── */
 .bscd-chart-card {
     background: #fff; border: 1px solid #e3e6ec; border-radius: 8px;
@@ -797,46 +737,63 @@ body.dark-mode {
     display: flex; align-items: center; justify-content: center; text-align: center;
     padding: 1rem; color: #9ca3af; font-size: .82rem;
 }
-.bscd-donut-wrap { position: relative; }
-
-/* ── "Type de compteurs" summary (replaces the old data-quality chart) ── */
-/* Défaillant breakdown (Postpaid): 4 compact cards under the doughnut */
-.bscd-failure__stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .6rem; margin-top: .75rem; }
-.bscd-failure__stats:empty { display: none; }
-.bscd-failure__stat {
-    display: flex; flex-direction: column; gap: .05rem; min-width: 0; padding: .5rem .7rem; text-align: left;
-    background: #fff; color: #1f2937; cursor: pointer; border: 1px solid #e3e6ec;
-    border-left: 3px solid var(--bscd-failure-color, #94a3b8); border-radius: 8px;
+/* ── Segmentation views: one comparative grid ─────────────────
+   Desktop (xl+): two equal columns, Postpaid left, Prepaid right. Each
+   section is a 2-row subgrid (header, body), so both headers share one row
+   and both bodies one row: the cards start on the same line and end on the
+   same line. In the Postpaid body the second card grows, the Prepaid card
+   fills its whole body — the Prepaid card is exactly the two Postpaid cards
+   plus the gap between them. Inside a card the chart area grows (the canvas
+   is absolutely positioned, so Chart.js follows the box and never pushes
+   it). Below xl: one column, Postpaid then Prepaid, natural heights. */
+.bscd-compare {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto 1fr;
+    column-gap: 1.5rem; row-gap: .9rem; margin-top: 1.5rem;
 }
-.bscd-failure__stat:hover { border-color: var(--bscd-failure-color, #94a3b8); }
-.bscd-failure__stat.is-active { background: #f2f8fd; border-color: var(--bscd-failure-color, #94a3b8); }
-.bscd-failure__name { font-size: .72rem; font-weight: 600; color: #6b7280; }
-.bscd-failure__count { font-size: 1.05rem; font-weight: 700; line-height: 1.25; }
-.bscd-failure__note { margin: .6rem 0 0; font-size: .75rem; color: #b45309; }
+.bscd-compare > .bscd-section {
+    display: grid; grid-row: span 2; grid-template-rows: subgrid; margin-top: 0; min-width: 0;
+}
+.bscd-compare > .bscd-section > .bscd-section__header { margin-bottom: 0; }
+/* "Total clients actifs" = Postpaid + Prepaid: one slim band over both
+   columns (first grid row), the sum of the two header badges below it. */
+.bscd-grand-total {
+    grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem;
+    padding: .6rem 1rem; border: 1px solid #e3e6ec; border-radius: 10px; background: #fff;
+}
+.bscd-grand-total__icon {
+    display: inline-flex; align-items: center; justify-content: center; width: 1.9rem; height: 1.9rem;
+    border-radius: .5rem; background: #eef2f7; color: var(--bscd-navy); font-size: .85rem;
+}
+.bscd-grand-total__label { font-size: .74rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #4b5563; }
+.bscd-grand-total__value { font-size: 1.25rem; font-weight: 700; color: #1f2937; font-variant-numeric: tabular-nums; line-height: 1.2; min-width: 4rem; }
+.bscd-grand-total__hint { margin-left: auto; font-size: .76rem; color: #6b7280; }
+/* Discreet separation between the two columns. */
+.bscd-compare > .bscd-section--prepaid { position: relative; }
+.bscd-compare > .bscd-section--prepaid::before {
+    content: ""; position: absolute; top: 0; bottom: 0; left: -.75rem; width: 1px; background: #e3e6ec;
+}
+.bscd-section__body { display: flex; flex-direction: column; gap: .9rem; min-width: 0; }
+.bscd-section__body > .bscd-chart-card { display: flex; flex-direction: column; height: auto; min-width: 0; }
+.bscd-section__body > .bscd-chart-card:last-child { flex: 1 1 auto; }
+
+.bscd-viz .bscd-chart-card__title { font-size: 1rem; }
+.bscd-viz .bscd-chart-card__subtitle { font-size: .76rem; color: #6b7280; }
+.bscd-viz__chart { flex: 1 1 auto; min-height: 240px; }
+.bscd-viz__chart > canvas { position: absolute; inset: 0; }
+.bscd-viz__chart--doughnut { min-height: 300px; }
+
+@media (max-width: 1199.98px) {
+    .bscd-compare { display: block; margin-top: 1.5rem; }
+    .bscd-compare > .bscd-section { display: block; margin-top: 2.25rem; }
+    .bscd-compare > .bscd-section > .bscd-section__header { margin-bottom: 1.1rem; }
+    .bscd-compare > .bscd-section--prepaid::before { content: none; }
+}
+@media (max-width: 575.98px) {
+    .bscd-compare > .bscd-section { margin-top: 1.75rem; }
+    .bscd-viz__chart--doughnut { min-height: 280px; }
+}
+
 .bscd-failure-filter { flex-basis: 100%; margin-bottom: 0; }
-@media (max-width: 767.98px) { .bscd-failure__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-
-.bscd-metertype { display: flex; flex-direction: column; gap: .9rem; padding-top: .25rem; }
-.bscd-metertype__total {
-    display: flex; flex-direction: column; gap: .15rem;
-    padding-bottom: .75rem; border-bottom: 1px solid #eef0f4;
-}
-.bscd-metertype__total-label {
-    font-size: .68rem; font-weight: 700; letter-spacing: .04em;
-    text-transform: uppercase; color: #9ca3af;
-}
-.bscd-metertype__total-value { font-size: 1.6rem; font-weight: 700; color: #1f2937; line-height: 1.1; }
-.bscd-metertype__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .55rem; }
-.bscd-metertype__row {
-    display: grid; grid-template-columns: 12px 1fr auto;
-    align-items: center; column-gap: .6rem;
-    font-size: .82rem; color: #1f2937;
-}
-.bscd-metertype__swatch { width: 12px; height: 12px; border-radius: 3px; }
-.bscd-metertype__name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bscd-metertype__count { font-variant-numeric: tabular-nums; font-weight: 700; }
-.bscd-metertype__empty { list-style: none; color: #9ca3af; font-size: .82rem; }
-
 /* ── Data table ──────────────────────────────────────────── */
 .bscd-table-card {
     background: #fff; border: 1px solid #e3e6ec; border-radius: 8px;
@@ -980,12 +937,11 @@ body.dark-mode {
 
 /* ── Responsive ──────────────────────────────────────────── */
 @media (max-width: 767.98px) {
-    .bscd-filters__grid { grid-template-columns: 1fr 1fr; }
+    .bscd-filters__grid:not(.bscd-filters__grid--main) { grid-template-columns: 1fr 1fr; }
     .bscd-search input { min-width: 150px; }
     .bscd-table-toolbar { flex-direction: column; align-items: stretch; }
     .bscd-ms__panel { position: fixed; left: 1rem; right: 1rem; top: auto; }
 }
 @media (max-width: 575.98px) {
-    .bscd-filters__grid { grid-template-columns: 1fr; }
-    .bscd-filters__grid--main > .bscd-filter-group--wide { grid-column: auto; }
+    .bscd-filters__grid:not(.bscd-filters__grid--main) { grid-template-columns: 1fr; }
 }

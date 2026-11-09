@@ -136,31 +136,37 @@ classe personne : il lit `SEGMENTATION`, et la liste affichée vient de
 | `4 At-Risk` | `0.25 ≤ rate < 0.50` |
 | `5 Delinquant` | `0 < rate < 0.25` |
 | `6 Défaillant` | tous les autres cas (dont les anciens Always Late, sometime Paid, Never Paid, Other) |
-| vide (NULL) | `bill_number = 0` sur la dernière ligne, ou contrat sans historique de facturation |
+| `6 Défaillant` (dernier recours) | aucun profil calculé : `bill_number = 0` sur la dernière ligne, ou contrat sans ligne dans `POSTPAID_PROFILE_P` |
 
-`8 Autre` n'est pas une composante de `6 Défaillant` : c'était le `ELSE` final de
-`SEGMENTATION`, soit les contrats POSTPAID et Compteurs Communicants sans ligne
-de profil. Il ne concerne pas PREPAID, dont la catégorie `Other` est distincte.
-Ces contrats restent non classés. Une dernière ligne à `bill_number = 0` reste
-non classée même si une ligne plus ancienne avait un profil.
+Règle du 09/11/2026 : aucun client POSTPAID ou Compteurs Communicants n'est
+laissé non classé. `profile_calculation` (et ses seuils) ne change pas et rend
+toujours NULL pour ces deux cas ; c'est la colonne `SEGMENTATION` qui applique
+le dernier recours `COALESCE(pp.PROFILE, '6 Défaillant')`, et
+`FAILURE_SUBCATEGORY` les range en `NEVER_PAID`. C'est une convention de
+classement pour couvrir toute la population, pas la preuve qu'une facture a
+été émise et non payée. Une dernière ligne à `bill_number = 0` ne reprend pas
+le profil d'une ligne plus ancienne.
 
-Les clients sans profil apparaissent comme « Non classé » dans le graphique et
-restent vides dans le tableau et les exports. Les règles PREPAID ne passent pas
-par ce calcul.
+L'ancien `8 Autre` (le `ELSE` final de `SEGMENTATION` : contrats sans ligne de
+profil, jamais PREPAID) suit la même règle. Traçabilité et concordance :
+`docs/snapshot/source/control_postpaid_segments.sql` (lecture seule) donne les
+effectifs par profil, la concordance Défaillant = Always Late + Never Paid +
+Sometime Paid, et l'origine de chaque client (AUCUNE LIGNE, BILL_NUMBER = 0,
+PROFIL CALCULE). Les règles PREPAID ne passent pas par ce calcul.
 
 Ordre de mise en production : déployer `customers_list.sql` sur le serveur
 source, laisser le rechargement nocturne de `TB_CUSTOMERS_LIST` s'exécuter,
 vérifier les profils dans la table. Un snapshot produit avant la règle garde
 les anciennes valeurs dans son CSV, jamais réécrit : à la lecture, l'application
 les remplace par `PostpaidSegmentations::LEGACY` (Always Late, sometime Paid,
-Never Paid, Other → `6 Défaillant` ; `8 Autre` → non classé) pour le tableau de
+Never Paid, Other, `8 Autre` → `6 Défaillant`) pour le tableau de
 bord, les filtres et les exports. Cette équivalence ne vérifie pas `bill_number` :
 seul le SQL déployé donne les effectifs définitifs. Retour arrière : restaurer le fichier SQL précédent ; côté
 Extractor, `php spark snapshot:rollback`.
 
 ### Décomposition du profil Défaillant (analyse)
 
-La section Postpaid décompose `6 Défaillant` en quatre composantes. Ce ne sont
+La section Postpaid décompose `6 Défaillant` en trois composantes. Ce ne sont
 pas des profils : `SEGMENTATION` ne les contient jamais, le filtre Segmentation
 ne les propose pas, les exports n'ont pas de colonne pour elles.
 
@@ -173,7 +179,10 @@ car les conditions se chevauchent :
 | 1 | `ALWAYS_LATE` | `rate = 0`, `bad_count = bill_number`, `bill_number > 0` |
 | 2 | `NEVER_PAID` | `rate = 0`, `no_paid_count = bill_number`, `bill_number > 0` |
 | 3 | `SOMETIME_PAID` | `rate = 0`, `no_paid_count < bill_number`, `bill_number > 0` |
-| 4 | `OTHER` | tout le reste du profil |
+| 4 | `NEVER_PAID` | tout le reste du profil (compteurs incohérents, `rate` NULL ou hors 0–1) |
+
+Il n'y a plus de composante `OTHER` (décision du 09/11/2026) : son effectif est
+rangé dans `NEVER_PAID`, et les trois composantes totalisent exactement le profil.
 
 Mise en production, dans cet ordre, sur le serveur source :
 
@@ -191,19 +200,25 @@ anciens libellés ou la colonne.
 
 ## 0 quater. Segments PREPAID
 
-La règle est définie une seule fois : CTE `prepaid_rfm` et colonne `SEGMENTATION`
-de `docs/snapshot/source/customers_list.sql`, à partir de `RECENSE` et
-`SEGMENT_RFM_2` de `CMS_RFC.PREPAID_PROFILE_P`. La liste affichée vient de
+La règle est définie une seule fois : CTE `prepaid_reference`, `prepaid_recense`,
+`prepaid_new_buyers`, `prepaid_rfm` et colonne `SEGMENTATION` de
+`docs/snapshot/source/customers_list.sql`, à partir de `LASTPURCHASE_DATE` et
+`SEGMENT_RFM_2` de `CMS_RFC.PREPAID_PROFILE_P` et de `PREPAID.ORDER_MASTER`.
+La liste affichée vient de
 `App\Services\CustomersList\PrepaidSegmentations`.
 
 | Segment | Condition |
 |---|---|
 | `1-Stable`, `2-InStable`, `3-At Risk` | `RECENSE < 30` : segment comportemental calculé en amont |
-| `4-Suspect Dormant` | `30 ≤ RECENSE < 60` |
-| `5-Dormant` | `RECENSE ≥ 60`, ou compteur sans profil présent dans `ORDER_MASTER` |
-| `6-Never Vending` | `RECENSE` vide, ou compteur sans profil absent de `ORDER_MASTER` |
+| `1-Stable` | sans profil, premier achat (`ORDER_TYPE` 01) après la date de référence |
+| `4-Suspect Dormant` | `30 ≤ RECENSE ≤ 59` |
+| `5-Dormant` | `RECENSE ≥ 60`, ou autre compteur sans profil présent dans `ORDER_MASTER`, avec ou sans achat |
+| `6-Never Vending` | dernier achat inconnu, ou compteur sans profil absent de `ORDER_MASTER` |
 
-`RECENSE` est mesurée à la fin du mois de dernier achat connu. Un snapshot
+`RECENSE = REF_DATE − TRUNC(LASTPURCHASE_DATE)`, en jours entiers. `REF_DATE` est
+le dernier jour d'achat de `PREPAID_PROFILE_P`, déterminé une fois par extraction
+(CTE `prepaid_reference`). Contrôles en lecture seule :
+`docs/snapshot/source/control_prepaid_segments.sql`. Un snapshot
 produit avant la règle ne contient pas `RECENSE` : l'application renomme ses
 anciennes valeurs à la lecture (`PrepaidSegmentations::LEGACY`), et
 `4-Suspect Dormant` reste à 0 jusqu'au premier chargement issu du SQL déployé.

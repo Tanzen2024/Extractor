@@ -116,7 +116,7 @@ final class PostpaidSegmentationsTest extends CIUnitTestCase
         $sql = $this->sql();
         $this->assertSame(1, substr_count($sql, 'profile_calculation AS ('));
         $this->assertSame(1, substr_count($sql, 'LEFT JOIN profile_calculation pp'));
-        $this->assertSame(1, substr_count($sql, 'THEN pp.PROFILE'), 'one branch feeds POSTPAID and Compteurs Communicants');
+        $this->assertSame(1, substr_count($sql, "THEN COALESCE(pp.PROFILE, '6 Défaillant')"), 'one branch feeds POSTPAID and Compteurs Communicants');
 
         preg_match_all("/(?:THEN|ELSE) '([^']+)'/", $this->rule(), $m);
         $this->assertSame(PostpaidSegmentations::VALUES, $m[1]);
@@ -131,6 +131,94 @@ final class PostpaidSegmentationsTest extends CIUnitTestCase
         // Skipping rows without a profile would hand a bill_number = 0
         // customer the profile of an older month.
         $this->assertStringNotContainsString('WHERE PROFILE IS NOT NULL', $sql);
+    }
+
+    /** The whole SEGMENTATION column of customers_list.sql, as written. */
+    private function segmentation(): string
+    {
+        $this->assertSame(1, preg_match('/CASE\s+\/\*\s+\* PREPAID avec profil RFM.*?END AS SEGMENTATION/s', $this->sql(), $m));
+
+        return substr($m[0], 0, -strlen(' AS SEGMENTATION'));
+    }
+
+    /** The whole FAILURE_SUBCATEGORY column of customers_list.sql, as written. */
+    private function failure(): string
+    {
+        $this->assertSame(1, preg_match('/CASE\s+WHEN p\.METER_PREP IS NULL\s+AND COALESCE.*?END AS FAILURE_SUBCATEGORY/s', $this->sql(), $m));
+
+        return substr($m[0], 0, -strlen(' AS FAILURE_SUBCATEGORY'));
+    }
+
+    /**
+     * POSTPAID: [profile row? (SERVICE_NO), profile computed by the rule,
+     * bill_number, rate] => [SEGMENTATION, FAILURE_SUBCATEGORY].
+     *
+     * @return array<string, array{string|null, string|null, int|null, float|null, string, string|null}>
+     */
+    public static function lastResortCases(): array
+    {
+        return [
+            'profile kept'               => ['S1', '3 Occasionnal', 4, 0.6, '3 Occasionnal', null],
+            'Défaillant kept'            => ['S1', '6 Défaillant', 4, 0.0, '6 Défaillant', 'NEVER_PAID'],
+            'last row bill_number 0'     => ['S1', null, 0, 1.0, '6 Défaillant', 'NEVER_PAID'],
+            'no row in profile table'    => [null, null, null, null, '6 Défaillant', 'NEVER_PAID'],
+        ];
+    }
+
+    /**
+     * Every POSTPAID / Compteurs Communicants customer gets one of the six
+     * profiles (2026-11-09): the computed one when there is one, else
+     * 6 Défaillant; and a Défaillant gets exactly one component, so the two
+     * charts agree. Runs the two columns of customers_list.sql as written.
+     *
+     * @dataProvider lastResortCases
+     */
+    public function testEveryPostpaidCustomerGetsOneOfTheSixProfiles(?string $row, ?string $profile, ?int $bills, ?float $rate, string $segmentation, ?string $component): void
+    {
+        if (! class_exists(SQLite3::class)) {
+            $this->markTestSkipped('sqlite3 extension absent.');
+        }
+        $db   = new SQLite3(':memory:');
+        $stmt = $db->prepare('SELECT ' . $this->segmentation() . ' AS s, ' . $this->failure() . ' AS f FROM '
+            . '(SELECT NULL AS METER_PREP) p, (SELECT NULL AS METER, NULL AS SEGMENT_RFM_2) rfm, '
+            . '(SELECT NULL AS METER_PREP) om, (SELECT NULL AS METER_PREP) nb, '
+            . '(SELECT :row AS SERVICE_NO, :profile AS PROFILE, :b AS BILL_NUMBER, :r AS RATE, 0 AS BAD_COUNT, :b AS NO_PAID_COUNT) pp');
+        $stmt->bindValue(':row', $row, $row === null ? SQLITE3_NULL : SQLITE3_TEXT);
+        $stmt->bindValue(':profile', $profile, $profile === null ? SQLITE3_NULL : SQLITE3_TEXT);
+        $stmt->bindValue(':b', $bills, $bills === null ? SQLITE3_NULL : SQLITE3_INTEGER);
+        $stmt->bindValue(':r', $rate, $rate === null ? SQLITE3_NULL : SQLITE3_FLOAT);
+        $out = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+        $db->close();
+
+        $this->assertSame($segmentation, $out['s']);
+        $this->assertContains($out['s'], PostpaidSegmentations::VALUES);
+        $this->assertSame($component, $out['f']);
+        $this->assertSame($out['s'] === PostpaidSegmentations::DEFAILLANT, $out['f'] !== null, 'component iff Défaillant');
+    }
+
+    public function testThePrepaidBranchesAreUntouchedByTheLastResort(): void
+    {
+        if (! class_exists(SQLite3::class)) {
+            $this->markTestSkipped('sqlite3 extension absent.');
+        }
+        $db  = new SQLite3(':memory:');
+        $run = function (?string $rfm, ?string $om, ?string $nb) use ($db): array {
+            $q = $db->prepare('SELECT ' . $this->segmentation() . ' AS s, ' . $this->failure() . ' AS f FROM '
+                . "(SELECT 'M1' AS METER_PREP) p, (SELECT :rfm AS METER, '3-At Risk' AS SEGMENT_RFM_2) rfm, "
+                . '(SELECT :om AS METER_PREP) om, (SELECT :nb AS METER_PREP) nb, '
+                . '(SELECT NULL AS SERVICE_NO, NULL AS PROFILE, NULL AS BILL_NUMBER, NULL AS RATE, NULL AS BAD_COUNT, NULL AS NO_PAID_COUNT) pp');
+            foreach ([':rfm' => $rfm, ':om' => $om, ':nb' => $nb] as $k => $v) {
+                $q->bindValue($k, $v, $v === null ? SQLITE3_NULL : SQLITE3_TEXT);
+            }
+
+            return $q->execute()->fetchArray(SQLITE3_ASSOC);
+        };
+
+        $this->assertSame(['s' => '3-At Risk', 'f' => null], $run('M1', null, null));
+        $this->assertSame(['s' => '1-Stable', 'f' => null], $run(null, null, 'M1'));
+        $this->assertSame(['s' => '5-Dormant', 'f' => null], $run(null, 'M1', null));
+        $this->assertSame(['s' => '6-Never Vending', 'f' => null], $run(null, null, null));
+        $db->close();
     }
 
     public function testPrepaidKeepsItsOwnBranches(): void
@@ -249,7 +337,7 @@ final class PostpaidSegmentationsTest extends CIUnitTestCase
             $duck     = (new SnapshotIndex($fx->config))->engine($snapshot);
             $scan     = new SnapshotScanEngine($snapshot);
             $export   = new SnapshotRowSource(snapshot: $snapshot, store: $fx->store);
-            $expected = ['' => 1, '1 PERFECT' => 1, '6 Défaillant' => 4];
+            $expected = ['1 PERFECT' => 1, '6 Défaillant' => 5]; // '8 Autre' = former unclassified -> 6 Défaillant
             $postpaid = FilterCriteria::fromArray(['meters' => ['POSTPAID']]);
             $failing  = FilterCriteria::fromArray(['segmentations' => ['6 Défaillant']]);
 
@@ -258,7 +346,7 @@ final class PostpaidSegmentationsTest extends CIUnitTestCase
             $this->assertSame($expected, $this->sorted($duck->distributions($postpaid)['segmentation']));
 
             foreach ([$duck->count($failing), $scan->count($failing), $export->count($failing)] as $count) {
-                $this->assertSame(4, $count);
+                $this->assertSame(5, $count);
             }
 
             $exported = [];
@@ -266,12 +354,12 @@ final class PostpaidSegmentationsTest extends CIUnitTestCase
                 $exported[] = $row['SEGMENTATION'];
             });
             sort($exported);
-            $this->assertSame(['', '1 PERFECT', '6 Défaillant', '6 Défaillant', '6 Défaillant', '6 Défaillant'], $exported);
+            $this->assertSame(['1 PERFECT', '6 Défaillant', '6 Défaillant', '6 Défaillant', '6 Défaillant', '6 Défaillant'], $exported);
 
             foreach ([$duck->filterOptions(), $scan->filterOptions(), $snapshot->filterOptions()] as $options) {
                 $offered = array_column($options['segmentations'], 'count', 'value');
                 ksort($offered);
-                $this->assertSame(['1 PERFECT' => 1, '5-Dormant' => 1, '6 Défaillant' => 4], $offered);
+                $this->assertSame(['1 PERFECT' => 1, '5-Dormant' => 1, '6 Défaillant' => 5], $offered);
             }
 
             $this->assertSame(['' => 1, '5-Dormant' => 1], $this->sorted($duck->segmentationCounts(FilterCriteria::fromArray(['meters' => ['PREPAID']]))));

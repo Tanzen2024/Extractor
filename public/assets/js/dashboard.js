@@ -17,7 +17,6 @@
     var I18N = window.bscdI18n;                  // public/assets/js/i18n.js — every text below
     var t = I18N.t;
 
-    var PALETTE = ['#1f6fb2', '#7c3aed', '#d97706', '#1a7f4d', '#c0392b', '#0891b2', '#db2777', '#ca8a04', '#475569', '#94a3b8'];
     var OTHER_COLOR = '#c7ccd6';
 
     // Translated headers (i18n "dashboard.columns"); a technical column name
@@ -73,11 +72,10 @@
     // not in POSTPAID_SEGMENTATIONS, not in the Segmentation filter.
     var FAILURE_LABELS = {
         ALWAYS_LATE: function () { return t('dashboard.failure.alwaysLate'); },
-        SOMETIME_PAID: function () { return t('dashboard.failure.sometimePaid'); },
         NEVER_PAID: function () { return t('dashboard.failure.neverPaid'); },
-        OTHER: function () { return t('dashboard.failure.other'); }
+        SOMETIME_PAID: function () { return t('dashboard.failure.sometimePaid'); }
     };
-    var FAILURE_COLORS = { ALWAYS_LATE: '#d97706', SOMETIME_PAID: '#1f6fb2', NEVER_PAID: '#c0392b', OTHER: '#94a3b8' };
+    var FAILURE_COLORS = { ALWAYS_LATE: '#d97706', NEVER_PAID: '#c0392b', SOMETIME_PAID: '#1f6fb2' };
 
     var DIM_LABELS = {
         // Only two real NUI_QC values exist (see QueryBuilder::TABLE_COLUMNS
@@ -125,6 +123,8 @@
         tableScope: 'all',           // 'all' | 'postpaid' | 'prepaid' — table + export (tableCriteria())
         failureFilter: null,         // component of the Défaillant breakdown narrowing the table + export
         failureView: null,           // last breakdown received (SECTIONS.failureBreakdown())
+        profileFilter: null,         // {section, value}: profile clicked in a "Répartition par segmentation" (table + export)
+        profileCounts: {},           // section -> {segmentation value -> plotted count}
         sectionCriteria: {},         // section -> criteria of its KPIs/charts (null = no possible row)
         sectionTotals: {},           // section -> rows of that criteria (stats totalRows)
         sectionData: {}              // section -> last stats answer, re-drawn on a theme change
@@ -168,7 +168,6 @@
         return m ? m[3] + '/' + m[2] + '/' + m[1] : String(v);
     }
     function debounce(fn, ms) { var t; return function () { var a = arguments, c = this; clearTimeout(t); t = setTimeout(function () { fn.apply(c, a); }, ms); }; }
-    function colorFor(i) { return PALETTE[i % PALETTE.length]; }
 
     function json(url, options) {
         return bscdFetch(url, options).then(function (data) { return data; });
@@ -327,6 +326,57 @@
         Object.keys(ms).forEach(function (dim) { ms[dim].updateTooltip(); });
     }
     window.addEventListener('resize', debounce(refreshAllTooltips, 200));
+
+    // ── "Filtres avancés" (presentation only) ─────────────────────────
+    // The section is collapsed with `hidden`: its fields stay in the form,
+    // so readForm() / Appliquer / Réinitialiser / chips treat them exactly
+    // like the main criteria. The badge counts the advanced criteria that
+    // currently hold a value in the form (staged or applied), derived from
+    // the section's own DOM — no second list of filter names.
+    var advanced = {
+        panel: document.getElementById('bscdAdvanced'),
+        toggle: document.getElementById('bscdAdvancedToggle'),
+        count: document.getElementById('bscdAdvancedCount')
+    };
+    function advancedActiveCount() {
+        if (!advanced.panel || !advanced.panel.querySelectorAll) return 0;
+        var n = 0;
+        Array.prototype.forEach.call(advanced.panel.querySelectorAll('.bscd-ms[data-dim]'), function (root) {
+            var m = ms[root.getAttribute('data-dim')];
+            if (m && m.getValues().length) n++;
+        });
+        Array.prototype.forEach.call(advanced.panel.querySelectorAll('input[type="hidden"][name]'), function (input) {
+            if (input.value) n++;
+        });
+        return n;
+    }
+    function updateAdvancedCount() {
+        if (!advanced.count) return;
+        var n = advancedActiveCount();
+        advanced.count.textContent = n ? I18N.number(n) : '';
+        advanced.count.hidden = !n;
+        if (n) advanced.count.setAttribute('title', I18N.tn('dashboard.filters.advancedActive', n));
+        else advanced.count.removeAttribute('title');
+    }
+    function setAdvancedOpen(open) {
+        if (!advanced.panel || !advanced.toggle) return;
+        advanced.panel.hidden = !open;
+        advanced.toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (!open && advanced.panel.querySelectorAll) { // no dropdown left open inside a hidden section
+            Array.prototype.forEach.call(advanced.panel.querySelectorAll('.bscd-ms[data-dim]'), function (root) {
+                var m = ms[root.getAttribute('data-dim')];
+                if (m) m.close();
+            });
+        }
+        if (open) refreshAllTooltips(); // labels measured while hidden had no width
+    }
+    if (advanced.toggle) {
+        advanced.toggle.addEventListener('click', function () {
+            setAdvancedOpen(advanced.toggle.getAttribute('aria-expanded') !== 'true');
+        });
+    }
+    // Checkbox ticks and date commits bubble a `change` up to the form.
+    if (els.form) els.form.addEventListener('change', updateAdvancedCount);
     configureSegmentationGroups();
 
     // ── geo cascade ───────────────────────────────────────────────────
@@ -607,7 +657,9 @@
     // universe (dashboard-sections.js, same meterUniverse() rule as the
     // segmentation dropdown). The server validates it like any meter filter.
     var SECTIONS = window.bscdDashboardSections;
-    var CHART_KINDS = ['region', 'status', 'segmentation', 'failure'];
+    // Only the segmentation is drawn in a section (+ the Défaillant breakdown
+    // in Postpaid). The other figures of /dashboard/stats are not displayed.
+    var CHART_KINDS = ['segmentation', 'failure'];
 
     function sectionRoot(key) { return document.querySelector('[data-section="' + key + '"]'); }
     function eachSection(fn) { SECTIONS.SECTIONS.forEach(function (sec) { fn(sec.key, sectionRoot(sec.key)); }); }
@@ -618,13 +670,21 @@
     }
 
     // The table and its server export follow the scope switch of
-    // "Détail des clients": the page filters, or one section's criteria.
-    // null = that scope has no possible row (nothing is requested).
+    // "Détail des clients": the page filters, or one section's criteria —
+    // narrowed, when one is clicked, to a profile (existing Segmentation
+    // filter) or to a Défaillant component. null = that scope has no
+    // possible row (nothing is requested).
     function tableCriteria() {
         var c = state.tableScope === 'all' ? state.applied : criteriaFor(state.tableScope);
+        if (state.profileFilter) c = SECTIONS.withSegmentation(c, state.profileFilter.value);
         return SECTIONS.withFailureFilter(c, state.failureFilter);
     }
     function exportCount() {
+        if (state.profileFilter) {
+            var counts = state.profileCounts[state.profileFilter.section] || {};
+            var pn = counts[state.profileFilter.value];
+            return typeof pn === 'number' ? pn : null;
+        }
         if (state.failureFilter) {
             var row = ((state.failureView && state.failureView.rows) || []).filter(function (r) { return r.value === state.failureFilter; })[0];
             return row ? row.count : null;
@@ -635,38 +695,33 @@
         return typeof n === 'number' ? n : null;
     }
 
-    // "1 234 clients" in the quick links and section headers, plus the rows of
-    // the page filters that belong to no section (blank METER).
+    var statsSeq = 0;
+
+    // Customer count in each view header ("1 342 540 clients") and their sum
+    // in the band above both views — '' while a figure is missing.
     function renderSectionTotals() {
         eachSection(function (key, root) {
             var n = state.sectionTotals[key];
-            var text = typeof n === 'number' ? I18N.tn('dashboard.sections.clients', n) : '';
-            var nav = document.querySelector('[data-section-count="' + key + '"]');
-            if (nav) nav.textContent = text;
             var badge = root && root.querySelector('[data-section-total]');
-            if (badge) badge.textContent = text;
+            if (badge) badge.textContent = typeof n === 'number' ? I18N.tn('dashboard.sections.clients', n) : '';
         });
-        var totalEl = document.querySelector('[data-sections-total]');
         var total = SECTIONS.sectionsTotal(state.sectionTotals);
-        if (totalEl) totalEl.textContent = total === null ? '' : fmt(total);
-        var note = document.querySelector('[data-section-unassigned]');
-        if (!note) return;
-        var rest = SECTIONS.unassigned(state.filterTotal, state.sectionTotals);
-        note.hidden = !rest;
-        note.textContent = rest ? I18N.tn('dashboard.sections.unassigned', rest) : '';
+        var el = document.querySelector('[data-grand-total]');
+        if (el) {
+            if (total === null) el.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>';
+            else el.textContent = fmt(total);
+        }
     }
-
-    var statsSeq = 0;
 
     function loadStats(fresh) {
         var seq = ++statsSeq;
         var applied = state.applied;
-        setKpiSkeleton(true);
         setChartsLoading(t('common.loading'));
         state.sectionTotals = {};
         state.sectionData = {};
+        state.profileCounts = {};
         renderSectionTotals();
-        if (EP.count) loadCount(toParams(applied).toString()); // in parallel: the page count (export "Tous", unassigned rows)
+        if (EP.count) loadCount(toParams(applied).toString()); // in parallel: the page count (export "Tous")
         return Promise.all(SECTIONS.SECTIONS.map(function (sec) {
             var key = sec.key;
             var criteria = criteriaFor(key);
@@ -679,13 +734,14 @@
                 if (data.error) throw data;
                 state.sectionData[key] = data;
                 state.sectionTotals[key] = data.totalRows;
-                renderKpis(key, data);
                 renderCharts(key, data, criteria);
                 renderSectionTotals();
                 refreshExportCount();
             }).catch(function (err) {
                 if (seq !== statsSeq) return;
                 setChartsLoading(t('common.unavailable'), key); // never the previous charts
+                var total = document.querySelector('[data-grand-total]');
+                if (total) total.textContent = '—'; // no sum without both views, no endless shimmer
                 throw err;
             });
         })).then(function () {
@@ -698,12 +754,8 @@
     // A section with no possible row under the filters (e.g. Type de compteur
     // = PREPAID only, seen from the Postpaid section): zeros, no request.
     function renderSectionEmpty(key) {
-        var root = sectionRoot(key);
         state.sectionTotals[key] = 0;
-        ['actifs', 'nuiCorrects', 'contacts'].forEach(function (k) {
-            root.querySelector('[data-kpi="' + k + '"]').textContent = fmt(0);
-            root.querySelector('[data-kpi-sub="' + k + '"]').innerHTML = '&nbsp;';
-        });
+        state.profileCounts[key] = {};
         setChartsLoading(CHART_EMPTY, key);
         renderSectionTotals();
     }
@@ -723,7 +775,6 @@
             if (!data || data.error || typeof data.count !== 'number') throw data;
             state.filterTotal = data.count;
             refreshExportCount();
-            renderSectionTotals();
         }).catch(function () {
             // No snapshot count: the modal keeps showing '…', never an Oracle stand-in.
         });
@@ -772,46 +823,8 @@
     }
 
     // ── renderers ─────────────────────────────────────────────────────
-    // No "Total clients" card: every row is an active customer, so it would
-    // always repeat "Clients actifs". The KPI columns are equal flex columns
-    // (col-lg): the 3 cards share one desktop line.
-    function setKpiSkeleton(on) {
-        ['actifs', 'nuiCorrects', 'contacts'].forEach(function (k) {
-            eachSection(function (key, root) {
-                var v = root.querySelector('[data-kpi="' + k + '"]');
-                var s = root.querySelector('[data-kpi-sub="' + k + '"]');
-                if (on) { v.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>'; s.innerHTML = '&nbsp;'; }
-            });
-        });
-    }
-
-    // The 4 cards of one section, from that section's /dashboard/stats answer.
-    function renderKpis(key, stats) {
-        var root = sectionRoot(key);
-        var k = stats.kpis;
-        // Same filters and same query as the other cards (QueryBuilder::kpiStatement() NUI_CORRECT).
-        root.querySelector('[data-kpi="nuiCorrects"]').textContent = k.nuiCorrects ? fmt(k.nuiCorrects.value) : '—';
-        setKpiNote(root, 'nuiCorrects', t('dashboard.kpi.nuiCorrectsNote'));
-        // "Clients actifs" = the section's contracts (all in-perimeter).
-        [['actifs', k.actifs], ['contacts', k.contacts]].forEach(function (pair) {
-            if (!pair[1]) { // stats cached before this card existed
-                root.querySelector('[data-kpi="' + pair[0] + '"]').textContent = '—';
-                return;
-            }
-            root.querySelector('[data-kpi="' + pair[0] + '"]').textContent = fmt(pair[1].value);
-        });
-    }
-
-    // The card's descriptive note (text only).
-    function setKpiNote(root, key, note) {
-        var s = root.querySelector('[data-kpi-sub="' + key + '"]');
-        s.textContent = '';
-        var n = document.createElement('span');
-        n.className = 'bscd-kpi-note';
-        n.textContent = note;
-        s.appendChild(n);
-    }
-
+    // A section shows its segmentation only: no KPI cards (the KPIs of
+    // /dashboard/stats are still computed, just not displayed here).
     function destroyChart(id) {
         if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; }
         delete chartPairs[id];
@@ -840,10 +853,7 @@
             return { label: FILTER_LABELS[k] || k, text: filterText(k, criteria[k]) };
         });
         applyChartTheme();
-        bar(canvasIdOf(key, 'region'), ch.region, true);
-        donut(canvasIdOf(key, 'status'), ch.status);
-        bar(canvasIdOf(key, 'segmentation'), segmentationChartPairs(ch.segmentation, criteria || {}), false);
-        meterTypeSummary(sectionRoot(key), key, ch.meterType);
+        segmentationBreakdown(key, ch.segmentation, criteria || {});
         if (key === 'postpaid') failureBreakdown(sectionRoot(key), canvasIdOf(key, 'failure'), ch.failureBreakdown);
         CHART_KINDS.forEach(function (kind) {
             var id = canvasIdOf(key, kind);
@@ -921,6 +931,74 @@
         });
     }
 
+    // "Répartition par segmentation" of one section: horizontal bars (full
+    // profile labels, business order, counts on the bars — the only place
+    // the figures are shown). A bar opens its customers in "Détail des
+    // clients" through the existing Segmentation filter; one at 0, or the
+    // unclassified bar (no filter value can select it), cannot.
+    // Profile colours run from the best profile (green) to the worst (red),
+    // same rank = same colour in both views; unclassified = grey.
+    var PROFILE_COLORS = ['#1a7f4d', '#5b9a3c', '#1f6fb2', '#d97706', '#c2410c', '#b91c1c'];
+    function profilesOf(key) { return key === 'prepaid' ? PREPAID_SEGMENTATIONS : POSTPAID_SEGMENTATIONS; }
+    function isOfferedSegmentation(value) {
+        return ((state.options && state.options.segmentations) || []).some(function (o) { return o.value === value; });
+    }
+
+    function segmentationBreakdown(key, rawPairs, criteria) {
+        var canvasId = canvasIdOf(key, 'segmentation');
+        destroyChart(canvasId);
+
+        var profiles = profilesOf(key);
+        var pairs = segmentationChartPairs(rawPairs, criteria);
+        var totals = SECTIONS.profileTotals(pairs, profiles);
+        var counts = {};
+        pairs.forEach(function (p) { counts[p.value] = p.count; });
+        state.profileCounts[key] = counts;
+
+        var colorOf = function (p) { var i = profiles.indexOf(p.value); return i === -1 ? OTHER_COLOR : PROFILE_COLORS[i % PROFILE_COLORS.length]; };
+        var clickable = function (p) { return profiles.indexOf(p.value) !== -1 && p.count > 0 && isOfferedSegmentation(p.value); };
+        var labelOf = function (p) { return p.label || displayValue(p.value); };
+
+        var plotted = totals.classified + totals.unclassified;
+        renderTableFocus();
+
+        setChartMessage(canvasId, plotted ? null : CHART_EMPTY);
+        if (!plotted) return;
+        chartPairs[canvasId] = pairs;
+        // At least 40 px per bar: the 6 profiles (+ the unclassified bar) never
+        // squeeze. A floor, not a height: the comparative grid (custom.css)
+        // stretches the Prepaid chart to the height of the two Postpaid cards.
+        var wrap = document.getElementById(canvasId).parentNode;
+        if (wrap && wrap.style) wrap.style.minHeight = Math.max(240, pairs.length * 40 + 40) + 'px';
+        state.charts[canvasId] = new Chart(document.getElementById(canvasId).getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: pairs.map(labelOf),
+                datasets: [{
+                    data: pairs.map(function (p) { return p.count; }),
+                    backgroundColor: pairs.map(colorOf),
+                    borderRadius: 3, maxBarThickness: key === 'prepaid' ? 44 : 28
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true, maintainAspectRatio: false,
+                onClick: function (e, hit) { if (hit.length && clickable(pairs[hit[0].index])) selectProfile(key, pairs[hit[0].index].value); },
+                onHover: function (e, hit) {
+                    if (e.native && e.native.target) e.native.target.style.cursor = hit.length && clickable(pairs[hit[0].index]) ? 'pointer' : 'default';
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: function (ctx) { return fmt(ctx.parsed.x); } } }
+                },
+                scales: {
+                    x: { ticks: { maxRotation: 0, callback: function (v) { return fmt(v); } } }, // upright: skip ticks rather than tilt them
+                    y: { ticks: { autoSkip: false, font: { size: key === 'prepaid' ? 13 : 12, weight: '600' } } }
+                }
+            }
+        });
+    }
+
     // Loading / empty / error message in place of a chart (CSS shows
     // data-chart-msg over a hidden canvas). null = show the chart.
     var CHART_EMPTY = t('common.noData');
@@ -933,7 +1011,7 @@
     // New filter set: the previous charts are removed right away — never
     // left on screen as if they matched the new filters.
     function setChartsLoading(text, onlyKey) {
-        eachSection(function (key, root) {
+        eachSection(function (key) {
             if (onlyKey && key !== onlyKey) return;
             CHART_KINDS.forEach(function (kind) {
                 var id = canvasIdOf(key, kind);
@@ -941,103 +1019,20 @@
                 destroyChart(id);
                 setChartMessage(id, text);
             });
-            var totalEl = root.querySelector('[data-metertype="total"]');
-            var listEl = root.querySelector('[data-metertype="list"]');
-            if (totalEl) totalEl.innerHTML = '<span class="bscd-skeleton bscd-skeleton--text"></span>';
-            if (listEl) listEl.innerHTML = '<li class="bscd-metertype__empty">' + escapeHtml(text) + '</li>';
-            chartExport(key + '-meterType', null);
-            var failureStats = root.querySelector('[data-failure-stats]');
-            if (failureStats) failureStats.innerHTML = '';
         });
     }
 
-    function bar(canvasId, pairs, horizontal) {
-        destroyChart(canvasId);
-        var canvas = document.getElementById(canvasId);
-        pairs = pairs || [];
-        var total = pairs.reduce(function (s, p) { return s + p.count; }, 0);
-        setChartMessage(canvasId, total ? null : CHART_EMPTY);
-        if (!total) return;
-        chartPairs[canvasId] = pairs;
-        state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
-            type: 'bar',
-            data: {
-                labels: pairs.map(function (p) { return p.label || displayValue(p.value); }),
-                datasets: [{
-                    data: pairs.map(function (p) { return p.count; }),
-                    backgroundColor: pairs.map(function (p, i) { return p.value === 'Autres' ? OTHER_COLOR : colorFor(i); }),
-                    borderRadius: 3, maxBarThickness: 26
-                }]
-            },
-            options: {
-                indexAxis: horizontal ? 'y' : 'x',
-                responsive: true, maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: { callbacks: { label: function (ctx) {
-                        return fmt(horizontal ? ctx.parsed.x : ctx.parsed.y);
-                    } } }
-                },
-                scales: (function () {
-                    var s = {};
-                    s[horizontal ? 'x' : 'y'] = { ticks: { callback: function (v) { return fmt(v); } } };
-                    return s;
-                })()
-            }
-        });
-    }
-
-    function donut(canvasId, pairs) {
-        destroyChart(canvasId);
-        var canvas = document.getElementById(canvasId);
-        pairs = foldTail(pairs || [], 6);
-        var total = pairs.reduce(function (s, p) { return s + p.count; }, 0);
-        setChartMessage(canvasId, total ? null : CHART_EMPTY);
-        if (!total) return;
-        chartPairs[canvasId] = pairs;
-        state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
-            type: 'doughnut',
-            data: {
-                labels: pairs.map(function (p) { return p.label || displayValue(p.value); }),
-                datasets: [{ data: pairs.map(function (p) { return p.count; }),
-                    backgroundColor: pairs.map(function (p, i) { return p.value === 'Autres' ? OTHER_COLOR : colorFor(i); }), borderWidth: 0 }]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false, cutout: '62%',
-                plugins: {
-                    legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } },
-                    tooltip: { callbacks: { label: function (ctx) {
-                        return ctx.label + ': ' + fmt(ctx.parsed);
-                    } } }
-                }
-            }
-        });
-    }
-
-    // "Décomposition du profil Défaillant" (Postpaid only): doughnut + 4 cards,
-    // both from the same answer. Clicking a component opens its customers in
-    // "Détail des clients".
+    // "Décomposition du profil Défaillant" (Postpaid only): doughnut, the
+    // count of each component in its legend. Clicking a slice or a legend
+    // item opens that component's customers in "Détail des clients".
     function failureBreakdown(root, canvasId, data) {
         var canvas = document.getElementById(canvasId);
-        var statsEl = root.querySelector('[data-failure-stats]');
         destroyChart(canvasId);
 
         var view = SECTIONS.failureBreakdown(data);
         var rows = view.rows;
         var plotted = rows.reduce(function (s, r) { return s + r.count; }, 0);
         state.failureView = view;
-
-        var noteEl = root.querySelector('[data-failure-note]');
-        if (noteEl) {
-            noteEl.hidden = !view.unassigned;
-            noteEl.textContent = view.unassigned ? t('dashboard.failure.unassigned', { n: fmt(view.unassigned) }) : '';
-        }
-        statsEl.innerHTML = plotted ? rows.map(function (r) {
-            return '<button type="button" class="bscd-failure__stat" data-failure-value="' + escapeAttr(r.value) + '" style="--bscd-failure-color:' + FAILURE_COLORS[r.value] + '">' +
-                '<span class="bscd-failure__name">' + escapeHtml(dimLabel('failure_subcategory', r.value)) + '</span>' +
-                '<span class="bscd-failure__count">' + fmt(r.count) + '</span></button>';
-        }).join('') : '';
-        renderFailureFilter();
 
         setChartMessage(canvasId, plotted ? null : CHART_EMPTY);
         if (!plotted) return;
@@ -1054,7 +1049,24 @@
                 onClick: function (e, hit) { if (hit.length) selectFailure(rows[hit[0].index].value); },
                 onHover: function (e, hit) { if (e.native && e.native.target) e.native.target.style.cursor = hit.length ? 'pointer' : 'default'; },
                 plugins: {
-                    legend: { position: 'right', labels: { boxWidth: 10, font: { size: 11 } } },
+                    // Under the doughnut: a side legend would squeeze it in a half-width column.
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            boxWidth: 10, padding: 12, font: { size: 12 },
+                            // Chart.js's own doughnut items, each followed by its count.
+                            generateLabels: function (chart) {
+                                return Chart.overrides.doughnut.plugins.legend.labels.generateLabels(chart).map(function (item) {
+                                    item.text = item.text + ' : ' + fmt(rows[item.index].count);
+                                    return item;
+                                });
+                            }
+                        },
+                        // A legend item selects its component (instead of hiding the slice).
+                        onClick: function (e, item) { selectFailure(rows[item.index].value); },
+                        onHover: function (e) { if (e.native && e.native.target) e.native.target.style.cursor = 'pointer'; },
+                        onLeave: function (e) { if (e.native && e.native.target) e.native.target.style.cursor = 'default'; }
+                    },
                     tooltip: { callbacks: { label: function (ctx) {
                         return ctx.label + ': ' + fmt(ctx.parsed);
                     } } },
@@ -1064,68 +1076,51 @@
         });
     }
 
-    // Selected component: highlighted card + a removable chip above the table.
-    function renderFailureFilter() {
-        document.querySelectorAll('[data-failure-value]').forEach(function (b) {
-            var on = b.dataset.failureValue === state.failureFilter;
-            b.classList.toggle('is-active', on);
-            b.setAttribute('aria-pressed', on ? 'true' : 'false');
-        });
+    // What narrows "Détail des clients" beyond its scope — a clicked profile or
+    // a clicked Défaillant component (never both): one removable chip above
+    // the table.
+    function renderTableFocus() {
+        var pf = state.profileFilter;
         var box = document.getElementById('bscdFailureFilter');
         if (!box) return;
-        box.innerHTML = state.failureFilter
-            ? '<span class="bscd-chip">' + escapeHtml(FILTER_LABELS.failure_subcategory) + ' : ' + escapeHtml(dimLabel('failure_subcategory', state.failureFilter)) +
-              '<button type="button" data-failure-clear aria-label="' + escapeAttr(t('common.remove')) + '">&times;</button></span>'
-            : '';
+        var remove = ' aria-label="' + escapeAttr(t('common.remove')) + '">&times;</button></span>';
+        if (pf) {
+            box.innerHTML = '<span class="bscd-chip">' + escapeHtml(FILTER_LABELS.segmentation) + ' : ' + escapeHtml(pf.value) +
+                '<button type="button" data-profile-clear' + remove;
+        } else if (state.failureFilter) {
+            box.innerHTML = '<span class="bscd-chip">' + escapeHtml(FILTER_LABELS.failure_subcategory) + ' : ' + escapeHtml(dimLabel('failure_subcategory', state.failureFilter)) +
+                '<button type="button" data-failure-clear' + remove;
+        } else {
+            box.innerHTML = '';
+        }
+    }
+
+    function showDetail() {
+        var detail = document.getElementById('bscdSection-detail');
+        if (detail && detail.scrollIntoView) detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     function selectFailure(value) {
         state.failureFilter = state.failureFilter === value ? null : value;
-        if (state.failureFilter) setTableScope('postpaid');
+        if (state.failureFilter) { state.profileFilter = null; setTableScope('postpaid'); }
         state.table.page = 1;
-        renderFailureFilter();
+        renderTableFocus();
         loadRows().catch(handleError);
-        var detail = document.getElementById('bscdSection-detail');
-        if (state.failureFilter && detail && detail.scrollIntoView) detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (state.failureFilter) showDetail();
     }
 
-    // "Type de compteurs" — total + one row per METER value, counts from
-    // Oracle (GROUP BY METER). No hardcoded type list: whatever buckets the
-    // backend returns are rendered, in descending-count order, blank -> the
-    // "Non renseigné" bucket the backend already labels.
-    function meterTypeSummary(root, key, pairs) {
-        pairs = pairs || [];
-        var totalEl = root.querySelector('[data-metertype="total"]');
-        var listEl = root.querySelector('[data-metertype="list"]');
-        if (!totalEl || !listEl) return;
-
-        var total = pairs.reduce(function (s, p) { return s + (Number(p.count) || 0); }, 0);
-        totalEl.textContent = fmt(total);
-
-        listEl.innerHTML = '';
-        pairs.forEach(function (p, i) {
-            var li = document.createElement('li');
-            li.className = 'bscd-metertype__row';
-            li.innerHTML =
-                '<span class="bscd-metertype__swatch" style="background:' + colorFor(i) + '"></span>' +
-                '<span class="bscd-metertype__name">' + escapeHtml(displayValue(p.value)) + '</span>' +
-                '<span class="bscd-metertype__count">' + fmt(p.count) + '</span>';
-            listEl.appendChild(li);
-        });
-
-        if (pairs.length === 0) {
-            listEl.innerHTML = '<li class="bscd-metertype__empty">' + escapeHtml(CHART_EMPTY) + '</li>';
-        }
-        chartExport(key + '-meterType', pairs.length ? {
-            rows: pairs.map(function (p, i) { return { label: p.value, value: p.value, count: p.count, color: colorFor(i) }; })
-        } : null);
-    }
-
-    function foldTail(pairs, topN) {
-        if (pairs.length <= topN) return pairs;
-        var head = pairs.slice(0, topN - 1);
-        var rest = pairs.slice(topN - 1).reduce(function (s, p) { return s + p.count; }, 0);
-        return head.concat([{ value: 'Autres', label: t('dashboard.groups.others'), count: rest }]);
+    // A profile of a section's segmentation: the table (and its export) switch
+    // to that section, narrowed to the profile. Same profile again = back to
+    // the whole section.
+    function selectProfile(key, value) {
+        var pf = state.profileFilter;
+        var same = !!pf && pf.section === key && pf.value === value;
+        state.profileFilter = same || !value ? null : { section: key, value: value };
+        if (state.profileFilter) { state.failureFilter = null; setTableScope(key); }
+        state.table.page = 1;
+        renderTableFocus();
+        loadRows().catch(handleError);
+        if (state.profileFilter) showDetail();
     }
 
     function visibleColumns() {
@@ -1235,6 +1230,11 @@
     // ── apply / errors ────────────────────────────────────────────────
     function apply() {
         state.applied = readForm();
+        updateAdvancedCount(); // programmatic changes (chip ×, reset) fire no `change`
+        // A clicked profile the new filters exclude is dropped: the table never
+        // shows more than the page filters allow.
+        var pf = state.profileFilter;
+        if (pf && !SECTIONS.profileInScope(criteriaFor(pf.section), pf.value)) { state.profileFilter = null; renderTableFocus(); }
         state.table.page = 1;
         renderChips();
         hideGlobalError();
@@ -1416,21 +1416,21 @@
     function selectTableScope(scope) {
         if (scope === state.tableScope) return;
         setTableScope(scope);
-        if (scope !== 'postpaid') { state.failureFilter = null; renderFailureFilter(); } // a Postpaid-only narrowing
+        if (scope !== 'postpaid') state.failureFilter = null; // a Postpaid-only narrowing
+        if (state.profileFilter && state.profileFilter.section !== scope) state.profileFilter = null; // a profile of another view
+        renderTableFocus();
         state.table.page = 1;
         loadRows().catch(handleError);
     }
     document.querySelectorAll('[data-table-scope]').forEach(function (b) {
         b.addEventListener('click', function () { selectTableScope(b.dataset.tableScope); });
     });
-    // Cards and chip of the Défaillant breakdown are redrawn with each answer.
+    // The chip of a clicked profile / Défaillant component (redrawn with each answer).
     document.addEventListener('click', function (e) {
-        var el = e.target && e.target.closest ? e.target.closest('[data-failure-value], [data-failure-clear]') : null;
-        if (el) selectFailure(el.hasAttribute('data-failure-clear') ? state.failureFilter : el.dataset.failureValue);
-    });
-    // "Total clients" link: its anchor scrolls to the table, here set on "Tous".
-    document.querySelectorAll('[data-table-scope-link]').forEach(function (a) {
-        a.addEventListener('click', function () { selectTableScope(a.dataset.tableScopeLink); });
+        var el = e.target && e.target.closest ? e.target.closest('[data-failure-clear], [data-profile-clear]') : null;
+        if (!el) return;
+        if (el.hasAttribute('data-profile-clear')) selectProfile(null, null);
+        else selectFailure(state.failureFilter);
     });
 
     // Language switch (layout's [data-locale-switch] links): the page is
@@ -1442,7 +1442,7 @@
             try {
                 sessionStorage.setItem(RESTORE_KEY, JSON.stringify({
                     applied: state.applied,
-                    table: { sort: state.table.sort, dir: state.table.dir, perPage: state.table.perPage, search: state.table.search, page: state.table.page, scope: state.tableScope, failure: state.failureFilter }
+                    table: { sort: state.table.sort, dir: state.table.dir, perPage: state.table.perPage, search: state.table.search, page: state.table.page, scope: state.tableScope, failure: state.failureFilter, profile: state.profileFilter }
                 }));
             } catch (e) { /* private mode: the defaults apply */ }
         });
@@ -1477,13 +1477,16 @@
         if (tb.perPage) { state.table.perPage = tb.perPage; els.perPage.value = String(tb.perPage); }
         if (tb.search) { state.table.search = tb.search; els.search.value = tb.search; }
         if (tb.scope) setTableScope(tb.scope);
-        if (tb.failure) { state.failureFilter = tb.failure; renderFailureFilter(); }
+        if (tb.failure) state.failureFilter = tb.failure;
+        if (tb.profile && tb.profile.section && tb.profile.value) state.profileFilter = { section: tb.profile.section, value: tb.profile.value };
+        renderTableFocus();
         return tb.page || 1;
     }
 
     function resetFilters() {
         state.failureFilter = null;
-        renderFailureFilter();
+        state.profileFilter = null;
+        renderTableFocus();
         window.frdate.clear(els.dateFrom); window.frdate.clear(els.dateTo);
         MS_DIMS.forEach(function (d) { ms[d].clear(); }); // STATUT: reset leaves it empty, like every other filter
         refreshSegmentationOptions(); // meter now empty -> all options, label "Postpaid | Compteurs communicants"
@@ -1507,6 +1510,7 @@
         loadFilterOptions().then(function () {
             if (restore) state.table.page = applyRestore(restore);
             state.applied = readForm();
+            updateAdvancedCount();
             renderChips();
             loadSegmentationCounts();
             return Promise.all([loadStats().catch(handleError), loadRows().catch(handleError)]);

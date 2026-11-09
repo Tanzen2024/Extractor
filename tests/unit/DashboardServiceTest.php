@@ -308,7 +308,8 @@ final class DashboardServiceTest extends TestCase
 
         $this->assertSame(10, $charts['failureBreakdown']['total']);
         $this->assertSame(0, $charts['failureBreakdown']['unassigned']);
-        $this->assertSame([3, 0, 7, 0], array_column($charts['failureBreakdown']['components'], 'count'));
+        $this->assertSame(['ALWAYS_LATE', 'NEVER_PAID', 'SOMETIME_PAID'], array_column($charts['failureBreakdown']['components'], 'value'));
+        $this->assertSame([3, 7, 0], array_column($charts['failureBreakdown']['components'], 'count'));
         $this->assertEqualsCanonicalizing(['1 PERFECT', '6 Défaillant'], array_column($charts['segmentation'], 'value'));
     }
 }

@@ -69,9 +69,9 @@
     }
 
     /**
-     * Postpaid + Prepaid: the sum of the section totals already received (a
-     * row has one METER, so the sections never overlap). null while a figure
-     * is missing — a partial sum is never shown as the total.
+     * "Total clients actifs" above the two views: the sum of the section
+     * totals already received (a row has one METER, so the sections never
+     * overlap). null while a figure is missing: a partial sum is never shown.
      */
     function sectionsTotal(sectionTotals) {
         var sum = 0;
@@ -81,17 +81,6 @@
             sum += n;
         }
         return sum;
-    }
-
-    /**
-     * Rows of the page filters that belong to no section (blank METER — no
-     * option can select it): page count minus both section totals. null while
-     * a figure is missing; never negative.
-     */
-    function unassigned(pageTotal, sectionTotals) {
-        if (typeof pageTotal !== 'number') return null;
-        var sum = sectionsTotal(sectionTotals);
-        return sum === null ? null : Math.max(0, pageTotal - sum);
     }
 
     /**
@@ -126,8 +115,54 @@
         return c;
     }
 
+    /**
+     * Criteria of the detail table with one profile of a section's
+     * "Répartition par segmentation" selected: the section's criteria with the
+     * existing Segmentation filter set to that profile — validated and applied
+     * by the server exactly like a ticked segment (no second rule), and kept
+     * out of the page filters. criteria null (no possible row) stays null.
+     */
+    function withSegmentation(criteria, value) {
+        if (!criteria || !value) return criteria;
+        var c = {};
+        Object.keys(criteria).forEach(function (k) { c[k] = criteria[k]; });
+        c.segmentation = [value];
+        return c;
+    }
+
+    /**
+     * Whether a selected profile still lies inside its section after new page
+     * filters: the section has rows and, when the Segmentation filter holds
+     * values, this profile is one of them. Otherwise the selection is dropped
+     * (never a table wider than the page filters).
+     */
+    function profileInScope(criteria, value) {
+        if (!criteria || !value) return false;
+        var segs = criteria.segmentation || [];
+        return !segs.length || segs.indexOf(value) !== -1;
+    }
+
+    /**
+     * Plotted segmentation bars of a section split between its official
+     * profiles and the rest (customers the rule
+     * leaves unclassified, or a value in no official list).
+     *
+     * @param {Array<{value:string,count:number}>} pairs
+     * @param {string[]} profiles the section's official profiles
+     * @return {{classified:number, unclassified:number}}
+     */
+    function profileTotals(pairs, profiles) {
+        var out = { classified: 0, unclassified: 0 };
+        (pairs || []).forEach(function (p) {
+            var n = Number(p.count) || 0;
+            if (profiles.indexOf(p.value) !== -1) out.classified += n; else out.unclassified += n;
+        });
+        return out;
+    }
+
     return {
-        SECTIONS: SECTIONS, universeOf: universeOf, sectionCriteria: sectionCriteria, sectionsTotal: sectionsTotal, unassigned: unassigned,
-        failureBreakdown: failureBreakdown, withFailureFilter: withFailureFilter
+        SECTIONS: SECTIONS, universeOf: universeOf, sectionCriteria: sectionCriteria, sectionsTotal: sectionsTotal,
+        failureBreakdown: failureBreakdown, withFailureFilter: withFailureFilter,
+        withSegmentation: withSegmentation, profileInScope: profileInScope, profileTotals: profileTotals
     };
 }));

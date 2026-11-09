@@ -185,6 +185,54 @@ order_master_meters AS (
 ),
 
 /* ================================================================
+   DATE DE REFERENCE PREPAID
+
+   Une seule date par extraction, appliquee a toutes les lignes :
+   le dernier jour d'achat present dans prepaid_profile_p, qui ne
+   contient que des mois clos.
+   ================================================================= */
+
+prepaid_reference AS (
+    SELECT
+        TRUNC(MAX(LASTPURCHASE_DATE)) AS REF_DATE
+
+    FROM cms_rfc.prepaid_profile_p
+),
+
+/* ================================================================
+   NOUVEAUX ACHETEURS PREPAID
+
+   Premier achat (ORDER_TYPE 01, STATUS 01 = Purchase Code) posterieur
+   a la date de reference : aucun achat avant cette date. Calcule sur
+   la base distante (DRIVING_SITE) pour ne pas rapatrier ORDER_MASTER.
+   ================================================================= */
+
+prepaid_new_buyers AS (
+    SELECT /*+ DRIVING_SITE(o) */ DISTINCT
+
+        o.meterno AS METER_PREP
+
+    FROM prepaid.order_master@powernet_db_link o
+
+    CROSS JOIN prepaid_reference ref
+
+    WHERE o.op_time >= ref.REF_DATE + 1
+      AND o.order_type = '01'
+      AND o.status = '01'
+
+      AND NOT EXISTS (
+          SELECT 1
+
+          FROM prepaid.order_master@powernet_db_link b
+
+          WHERE b.meterno = o.meterno
+            AND b.order_type = '01'
+            AND b.status = '01'
+            AND b.op_time < ref.REF_DATE + 1
+      )
+),
+
+/* ================================================================
    DERNIER PROFIL PREPAID
 
    Dernier profil REEL par METER : prepaid_profile_p contient une
@@ -198,7 +246,7 @@ prepaid_last AS (
     SELECT
         METER,
         VC_DATE,
-        RECENSE,
+        LASTPURCHASE_DATE,
         SEGMENT_RFM_2
 
     FROM (
@@ -206,7 +254,7 @@ prepaid_last AS (
 
             METER,
             VC_DATE,
-            RECENSE,
+            LASTPURCHASE_DATE,
             SEGMENT_RFM_2,
 
             ROW_NUMBER() OVER (
@@ -217,12 +265,32 @@ prepaid_last AS (
         FROM cms_rfc.prepaid_profile_p
 
         WHERE VC_DATE <= (
-            SELECT TRUNC(MAX(LASTPURCHASE_DATE), 'MM')
-            FROM cms_rfc.prepaid_profile_p
+            SELECT TRUNC(REF_DATE, 'MM')
+            FROM prepaid_reference
         )
     )
 
     WHERE RN = 1
+),
+
+/* ================================================================
+   RECENCE PREPAID
+
+   Nombre de jours entiers entre la date de reference et le dernier
+   achat. NULL si le dernier achat est inconnu : aucune date n'est
+   supposee.
+   ================================================================= */
+
+prepaid_recense AS (
+    SELECT
+        l.METER,
+        l.VC_DATE,
+        l.SEGMENT_RFM_2,
+        ref.REF_DATE - TRUNC(l.LASTPURCHASE_DATE) AS RECENSE
+
+    FROM prepaid_last l
+
+    CROSS JOIN prepaid_reference ref
 ),
 
 /* ================================================================
@@ -256,7 +324,7 @@ prepaid_rfm AS (
 
         END AS SEGMENT_RFM_2
 
-    FROM prepaid_last r
+    FROM prepaid_recense r
 ),
 
 /* ================================================================
@@ -584,7 +652,17 @@ SELECT /*+ PARALLEL(8) */
         THEN rfm.SEGMENT_RFM_2
 
         /*
-         * PREPAID sans profil RFM mais présent dans ORDER_MASTER
+         * PREPAID sans profil RFM, premier achat apres la date de
+         * reference : nouvel acheteur
+         */
+        WHEN p.METER_PREP IS NOT NULL
+             AND rfm.METER IS NULL
+             AND nb.METER_PREP IS NOT NULL
+        THEN '1-Stable'
+
+        /*
+         * PREPAID sans profil RFM mais présent dans ORDER_MASTER :
+         * sans achat, ou dernier achat hors de la fenetre du profil
          */
         WHEN p.METER_PREP IS NOT NULL
              AND rfm.METER IS NULL
@@ -601,18 +679,22 @@ SELECT /*+ PARALLEL(8) */
         THEN '6-Never Vending'
 
         /*
-         * POSTPAID / COMPTEURS COMMUNICANTS
-         * NULL si bill_number = 0 (client non classe)
+         * POSTPAID / COMPTEURS COMMUNICANTS : tout client recoit l'un des
+         * six profils, aucun n'est laisse non classe.
+         *
+         * pp.PROFILE = profil calcule par profile_calculation (seuils
+         * inchanges). Il est NULL dans deux cas seulement :
+         *   - derniere ligne de postpaid_profile_p avec bill_number = 0 ;
+         *   - aucune ligne dans postpaid_profile_p (pp.SERVICE_NO NULL,
+         *     POSTPAID_PROFILE_DATE vide dans le snapshot).
+         * Regle de dernier recours (decision metier du 09/11/2026) : ces
+         * clients sans historique de facturation exploitable vont en
+         * 6 Défaillant. C'est une convention de classement pour couvrir
+         * toute la population, pas la preuve qu'une facture a ete emise et
+         * non payee. Controle : control_postpaid_segments.sql.
          */
         WHEN p.METER_PREP IS NULL
-             AND pp.SERVICE_NO IS NOT NULL
-        THEN pp.PROFILE
-
-        /*
-         * POSTPAID / COMPTEURS COMMUNICANTS sans historique de
-         * facturation : non classe
-         */
-        ELSE NULL
+        THEN COALESCE(pp.PROFILE, '6 Défaillant')
 
     END AS SEGMENTATION,
 
@@ -627,14 +709,20 @@ SELECT /*+ PARALLEL(8) */
 
        Attribut d'analyse, distinct de SEGMENTATION : decompose le profil
        6 Défaillant, NULL pour tout autre client. Ce n'est pas un profil.
-       Les conditions se chevauchent (BAD_COUNT = BILL_NUMBER implique en
-       general NO_PAID_COUNT < BILL_NUMBER) : l'ordre est la priorite. Le
-       ELSE garantit une composante a chaque client du profil.
+       Trois composantes exactement. Les conditions se chevauchent
+       (BAD_COUNT = BILL_NUMBER implique en general NO_PAID_COUNT <
+       BILL_NUMBER) : l'ordre est la priorite. Le ELSE range le reste du
+       profil (compteurs incoherents, RATE NULL ou hors 0-1) dans NEVER_PAID,
+       sur decision metier du 09/11/2026 : il n'y a plus de composante
+       OTHER, et chaque client du profil en recoit une seule.
+       Meme condition de profil que SEGMENTATION (dernier recours compris) :
+       un client sans historique exploitable (bill_number = 0 ou aucune
+       ligne) est 6 Défaillant et tombe dans le ELSE, donc NEVER_PAID.
        ============================================================= */
 
     CASE
         WHEN p.METER_PREP IS NULL
-             AND pp.PROFILE = '6 Défaillant'
+             AND COALESCE(pp.PROFILE, '6 Défaillant') = '6 Défaillant'
         THEN
             CASE
                 WHEN pp.RATE = 0
@@ -652,7 +740,7 @@ SELECT /*+ PARALLEL(8) */
                  AND pp.BILL_NUMBER > 0
                 THEN 'SOMETIME_PAID'
 
-                ELSE 'OTHER'
+                ELSE 'NEVER_PAID'
             END
     END AS FAILURE_SUBCATEGORY
 
@@ -671,6 +759,13 @@ LEFT JOIN prep p
 
 LEFT JOIN order_master_meters om
     ON om.METER_PREP = l.METER_NO
+
+/* ================================================================
+   NOUVEAUX ACHETEURS
+   ================================================================= */
+
+LEFT JOIN prepaid_new_buyers nb
+    ON nb.METER_PREP = l.METER_NO
 
 /* ================================================================
    COMPTEURS COMMUNICANTS

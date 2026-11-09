@@ -127,5 +127,5 @@ test('dashboard: plugin loaded after Chart.js, registered with the app fmt, tool
     assert.match(js, /Chart\.register\(window\.bscdChartValueLabels\.plugin\)/);
     assert.match(js, /bscdValueLabels\.formatValue = fmt;/);
     assert.doesNotMatch(js, /formatPercent|\bpct\(|\.percent\(/);
-    assert.equal((js.match(/tooltip: \{ callbacks:/g) || []).length, 3);
+    assert.equal((js.match(/tooltip: \{ callbacks:/g) || []).length, 2); // segmentation + Défaillant
 });

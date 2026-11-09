@@ -8,9 +8,11 @@ namespace App\Services\CustomersList;
  *
  * Extractor does not classify anyone: the rule lives once, in the
  * profile_calculation CTE of docs/snapshot/source/customers_list.sql, and
- * reaches the application through SEGMENTATION. A customer the rule leaves
- * unclassified (bill_number = 0, or no billing history) has a NULL
- * SEGMENTATION: it belongs to no profile and is counted apart ("Non classé").
+ * reaches the application through SEGMENTATION. Every customer gets one of
+ * the six (business rule of 2026-11-09): one with no usable billing history
+ * (bill_number = 0 on the last row, or no row at all) is 6 Défaillant by the
+ * rule's last resort. A blank SEGMENTATION is therefore an anomaly of the
+ * file: it is still counted apart, never hidden, so the totals stay true.
  *
  * Mirrored by POSTPAID_SEGMENTATIONS in public/assets/js/dashboard.js (kept
  * in sync by a test).
@@ -30,22 +32,28 @@ final class PostpaidSegmentations
     public const DEFAILLANT = '6 Défaillant';
 
     /**
-     * Former SEGMENTATION values => what they are now ('' = unclassified).
-     * Snapshots produced before the rule keep them in their CSV, which is
-     * never rewritten: every read of a snapshot goes through this table, so
-     * no screen, filter or export can show them. A snapshot produced by the
-     * rule holds none of them and is left as it is.
+     * Former SEGMENTATION values => what they are now. Snapshots produced
+     * before the rule keep them in their CSV, which is never rewritten (the
+     * source value stays traceable there): every read of a snapshot goes
+     * through this table, so no screen, filter or export can show them. A
+     * snapshot produced by the rule holds none of them and is left as it is.
+     * '8 Autre' = the former unclassified customers (no profile row), now
+     * 6 Défaillant by the last resort of the rule.
      */
     public const LEGACY = [
         '6 Always Late'   => '6 Défaillant',
         '7 sometime Paid' => '6 Défaillant',
         '8 Never Paid'    => '6 Défaillant',
         '10 Other'        => '6 Défaillant',
-        '8 Autre'         => '',
+        '8 Autre'         => '6 Défaillant',
     ];
 
-    /** Mixed into the dashboard cache keys: figures cached before LEGACY are not served. */
-    public const CACHE_TAG = 'seg6p6';
+    /**
+     * Mixed into the dashboard cache keys: figures cached before LEGACY, before
+     * the 3-component Défaillant breakdown (no OTHER), or before the former
+     * unclassified customers joined 6 Défaillant, are not served.
+     */
+    public const CACHE_TAG = 'seg6p6f3d';
 
     /** Every former SEGMENTATION value, both universes. */
     public const ALL_LEGACY = self::LEGACY + PrepaidSegmentations::LEGACY;

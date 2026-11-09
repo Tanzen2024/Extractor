@@ -53,8 +53,10 @@
     <h2 class="bscd-filters__title" id="bscdFiltersTitle">
         <i class="fas fa-sliders" aria-hidden="true"></i> <?= esc(lang('Dashboard.filters.title')) ?>
     </h2>
-    <?php // One 7-column grid, in the business order: line 1 = Région … Tension,
-          // line 2 = Qualité NUI … Date fin abonnement (the dates span 2 columns).
+    <?php // Two levels, same 7-column grid so both line up on desktop:
+          // the 7 main criteria always visible, then the "Filtres avancés"
+          // (collapsed by default, `hidden` only — their values stay in the
+          // form and are sent by Appliquer like any other filter).
           // Narrower screens re-flow the same order. ?>
     <div class="bscd-filters__grid bscd-filters__grid--main">
         <div class="bscd-filter-group" data-ms="region">
@@ -85,45 +87,55 @@
             <label><?= esc(lang('Glossary.voltage')) ?></label>
             <div class="bscd-ms" data-dim="voltage"></div>
         </div>
-        <div class="bscd-filter-group" data-ms="niu_qc">
-            <label><?= esc(lang('Glossary.niuQuality')) ?></label>
-            <div class="bscd-ms" data-dim="niu_qc"></div>
-        </div>
-        <div class="bscd-filter-group" data-ms="contact">
-            <label><?= esc(lang('Glossary.contactFilled')) ?></label>
-            <div class="bscd-ms" data-dim="contact"></div>
-        </div>
-        <div class="bscd-filter-group" data-ms="status">
-            <label><?= esc(lang('Glossary.status')) ?></label>
-            <div class="bscd-ms" data-dim="status"></div>
-        </div>
-        <div class="bscd-filter-group bscd-filter-group--wide">
-            <label for="bscdDateFrom_d"><?= esc(lang('Dashboard.filters.dateFrom')) ?></label>
-            <span class="frdate" data-frdate>
-                <input type="text" class="frdate__input" id="bscdDateFrom_d" placeholder="<?= esc(lang('App.datepicker.placeholder'), 'attr') ?>"
-                       inputmode="numeric" maxlength="10" autocomplete="off" aria-describedby="bscdDateFrom_e">
-                <button type="button" class="frdate__toggle" tabindex="-1" aria-label="<?= esc(lang('App.datepicker.openCalendar'), 'attr') ?>">
-                    <i class="fas fa-calendar-day" aria-hidden="true"></i>
-                </button>
-                <input type="hidden" id="bscdDateFrom" name="date_from">
-                <span class="frdate__error" id="bscdDateFrom_e" role="alert" hidden></span>
-            </span>
-        </div>
-        <div class="bscd-filter-group bscd-filter-group--wide">
-            <label for="bscdDateTo_d"><?= esc(lang('Dashboard.filters.dateTo')) ?></label>
-            <span class="frdate" data-frdate>
-                <input type="text" class="frdate__input" id="bscdDateTo_d" placeholder="<?= esc(lang('App.datepicker.placeholder'), 'attr') ?>"
-                       inputmode="numeric" maxlength="10" autocomplete="off" aria-describedby="bscdDateTo_e">
-                <button type="button" class="frdate__toggle" tabindex="-1" aria-label="<?= esc(lang('App.datepicker.openCalendar'), 'attr') ?>">
-                    <i class="fas fa-calendar-day" aria-hidden="true"></i>
-                </button>
-                <input type="hidden" id="bscdDateTo" name="date_to">
-                <span class="frdate__error" id="bscdDateTo_e" role="alert" hidden></span>
-            </span>
+    </div>
+
+    <div class="bscd-filters__advanced" id="bscdAdvanced" hidden>
+        <div class="bscd-filters__grid bscd-filters__grid--main">
+            <div class="bscd-filter-group" data-ms="niu_qc">
+                <label><?= esc(lang('Glossary.niuQuality')) ?></label>
+                <div class="bscd-ms" data-dim="niu_qc"></div>
+            </div>
+            <div class="bscd-filter-group" data-ms="contact">
+                <label><?= esc(lang('Glossary.contactFilled')) ?></label>
+                <div class="bscd-ms" data-dim="contact"></div>
+            </div>
+            <div class="bscd-filter-group" data-ms="status">
+                <label><?= esc(lang('Glossary.status')) ?></label>
+                <div class="bscd-ms" data-dim="status"></div>
+            </div>
+            <div class="bscd-filter-group bscd-filter-group--wide">
+                <label for="bscdDateFrom_d"><?= esc(lang('Dashboard.filters.dateFrom')) ?></label>
+                <span class="frdate" data-frdate>
+                    <input type="text" class="frdate__input" id="bscdDateFrom_d" placeholder="<?= esc(lang('App.datepicker.placeholder'), 'attr') ?>"
+                           inputmode="numeric" maxlength="10" autocomplete="off" aria-describedby="bscdDateFrom_e">
+                    <button type="button" class="frdate__toggle" tabindex="-1" aria-label="<?= esc(lang('App.datepicker.openCalendar'), 'attr') ?>">
+                        <i class="fas fa-calendar-day" aria-hidden="true"></i>
+                    </button>
+                    <input type="hidden" id="bscdDateFrom" name="date_from">
+                    <span class="frdate__error" id="bscdDateFrom_e" role="alert" hidden></span>
+                </span>
+            </div>
+            <div class="bscd-filter-group bscd-filter-group--wide">
+                <label for="bscdDateTo_d"><?= esc(lang('Dashboard.filters.dateTo')) ?></label>
+                <span class="frdate" data-frdate>
+                    <input type="text" class="frdate__input" id="bscdDateTo_d" placeholder="<?= esc(lang('App.datepicker.placeholder'), 'attr') ?>"
+                           inputmode="numeric" maxlength="10" autocomplete="off" aria-describedby="bscdDateTo_e">
+                    <button type="button" class="frdate__toggle" tabindex="-1" aria-label="<?= esc(lang('App.datepicker.openCalendar'), 'attr') ?>">
+                        <i class="fas fa-calendar-day" aria-hidden="true"></i>
+                    </button>
+                    <input type="hidden" id="bscdDateTo" name="date_to">
+                    <span class="frdate__error" id="bscdDateTo_e" role="alert" hidden></span>
+                </span>
+            </div>
         </div>
     </div>
 
     <div class="bscd-filters__actions">
+        <button type="button" class="bscd-filters__toggle" id="bscdAdvancedToggle" aria-expanded="false" aria-controls="bscdAdvanced">
+            <i class="fas fa-chevron-right bscd-filters__chevron" aria-hidden="true"></i>
+            <span><?= esc(lang('Dashboard.filters.advanced')) ?></span>
+            <span class="bscd-filters__count" id="bscdAdvancedCount" hidden></span>
+        </button>
         <div class="ml-auto d-flex gap-2">
             <button type="button" class="btn btn-outline-secondary btn-sm" id="bscdReset"><?= esc(lang('App.actions.reset')) ?></button>
             <button type="submit" class="btn btn-primary btn-sm" id="bscdApply">
@@ -136,52 +148,29 @@
 <div class="bscd-chips" id="bscdChips"></div>
 
 <!-- ── Vues Postpaid / Prepaid ───────────────────────────────
-     One section per METER universe (public/assets/js/dashboard-sections.js):
-     the same KPI cards and charts, each fed by /dashboard/stats with the
-     page filters narrowed to its universe. -->
+     One comparative grid, one column per METER universe
+     (public/assets/js/dashboard-sections.js), each fed by /dashboard/stats
+     with the page filters narrowed to its universe. The payer-profile
+     segmentation is the subject: Postpaid = Répartition par segmentation
+     then Décomposition du profil Défaillant, Prepaid = Répartition par
+     segmentation, one card as tall as the two Postpaid ones (desktop).
+     The profile figures live in the charts (bar values, doughnut legend);
+     each view header carries its customer count and the band above both
+     columns their sum. /dashboard/stats computes every figure, unchanged. -->
 <?php
-$kpiCards = [
-    // No "Total clients" card: every figure covers active customers only
-    // (App\Services\CustomersList\ActiveCustomers), so it would always equal
-    // "Clients actifs". col-lg (Bootstrap 4 equal flex columns): the 3 cards
-    // share one desktop line; below lg they wrap as before.
-    ['actifs', 'Dashboard.kpi.actifs', 'fa-circle-check', 'green'],
-    ['nuiCorrects', 'Dashboard.kpi.nuiCorrects', 'fa-id-card', 'blue'],
-    ['contacts', 'Dashboard.kpi.contacts', 'fa-address-book', 'orange'],
-];
-// Charts per section. "Type de compteurs" only in Postpaid (POSTPAID vs
-// Compteurs communicants); in Prepaid it would always read 100 % PREPAID.
 $sections = [
-    'postpaid' => ['icon' => 'fa-file-invoice', 'title' => 'Dashboard.sections.postpaid.title', 'subtitle' => 'Dashboard.sections.postpaid.subtitle',
-                   'charts' => ['region', 'status', 'segmentation', 'meterType']],
-    'prepaid'  => ['icon' => 'fa-credit-card', 'title' => 'Dashboard.sections.prepaid.title', 'subtitle' => 'Dashboard.sections.prepaid.subtitle',
-                   'charts' => ['region', 'status', 'segmentation']],
-];
-$chartTitles = [
-    'region'       => 'Dashboard.charts.byRegion',
-    'status'       => 'Dashboard.charts.byStatus',
-    'segmentation' => 'Dashboard.charts.bySegmentation',
-    'meterType'    => 'Dashboard.charts.meterTypes',
+    'postpaid' => ['icon' => 'fa-file-invoice', 'title' => 'Dashboard.sections.postpaid.title', 'subtitle' => 'Dashboard.sections.postpaid.subtitle'],
+    'prepaid'  => ['icon' => 'fa-credit-card', 'title' => 'Dashboard.sections.prepaid.title', 'subtitle' => 'Dashboard.sections.prepaid.subtitle'],
 ];
 ?>
-<nav class="bscd-section-nav" aria-label="<?= esc(lang('Dashboard.sections.nav'), 'attr') ?>">
-    <?php foreach ($sections as $sk => $sec): ?>
-    <a class="bscd-section-nav__link bscd-section-nav__link--<?= $sk ?>" href="#bscdSection-<?= $sk ?>">
-        <i class="fas <?= $sec['icon'] ?>" aria-hidden="true"></i>
-        <span><?= esc(lang($sec['title'])) ?></span>
-        <span class="bscd-section-nav__count" data-section-count="<?= $sk ?>"></span>
-    </a>
-    <?php endforeach; ?>
-    <?php // Postpaid + Prepaid, summed by dashboard.js from the two section totals. Opens the table on "Tous". ?>
-    <a class="bscd-section-nav__link bscd-section-nav__link--total" href="#bscdSection-detail" data-table-scope-link="all"
-       title="<?= esc(lang('Dashboard.sections.totalHint'), 'attr') ?>">
-        <i class="fas fa-users" aria-hidden="true"></i>
-        <span class="bscd-section-nav__total-label"><?= esc(lang('Dashboard.sections.total')) ?></span>
-        <span class="bscd-section-nav__total-value" data-sections-total></span>
-    </a>
-    <span class="bscd-section-nav__note" data-section-unassigned hidden></span>
-</nav>
-
+<div class="bscd-compare">
+<?php // Postpaid + Prepaid, summed by dashboard.js once both views have answered. ?>
+<div class="bscd-grand-total" role="status" aria-live="polite">
+    <span class="bscd-grand-total__icon" aria-hidden="true"><i class="fas fa-users"></i></span>
+    <span class="bscd-grand-total__label"><?= esc(lang('Dashboard.sections.grandTotal')) ?></span>
+    <span class="bscd-grand-total__value" data-grand-total><span class="bscd-skeleton bscd-skeleton--text"></span></span>
+    <span class="bscd-grand-total__hint"><?= esc(lang('Dashboard.sections.grandTotalHint')) ?></span>
+</div>
 <?php foreach ($sections as $sk => $sec): ?>
 <section class="bscd-section bscd-section--<?= $sk ?>" id="bscdSection-<?= $sk ?>" data-section="<?= $sk ?>"
          data-export-label="<?= esc(lang($sec['title']), 'attr') ?>" data-export-prefix="<?= $sk ?>"
@@ -195,67 +184,35 @@ $chartTitles = [
         <span class="bscd-section__badge" data-section-total></span>
     </header>
 
-    <h3 class="bscd-kpi-heading"><?= esc(lang('Dashboard.kpi.heading')) ?></h3>
-    <div class="row bscd-kpi-row">
-    <?php foreach ($kpiCards as [$key, $label, $icon, $color]): ?>
-        <div class="col-12 col-sm-6 col-lg mb-3" data-kpi-col="<?= $key ?>">
-            <div class="bscd-kpi-card" data-kpi-card="<?= $key ?>">
-                <div class="bscd-kpi-icon bscd-kpi-icon--<?= $color ?>"><i class="fas <?= $icon ?>"></i></div>
-                <div class="bscd-kpi-body">
-                    <div class="bscd-kpi-label"><?= esc(lang($label)) ?></div>
-                    <div class="bscd-kpi-value" data-kpi="<?= $key ?>"><span class="bscd-skeleton bscd-skeleton--text"></span></div>
-                    <div class="bscd-kpi-sub" data-kpi-sub="<?= $key ?>">&nbsp;</div>
-                </div>
+    <div class="bscd-section__body">
+        <?php // 1. Répartition par segmentation: the section's 6 official profiles
+              // (business order), counts on the bars. A bar opens its customers
+              // in "Détail des clients". ?>
+        <div class="bscd-chart-card bscd-viz">
+            <div class="bscd-chart-card__header">
+                <h3 class="bscd-chart-card__title"><?= esc(lang('Dashboard.charts.bySegmentation')) ?></h3>
+                <div class="bscd-chart-card__subtitle"><?= esc(lang('Dashboard.charts.segmentationHint')) ?></div>
+                <div class="bscd-cx" data-chart-export="<?= $sk ?>-segmentation"></div>
             </div>
+            <div class="bscd-chart-card__body bscd-viz__chart bscd-viz__chart--bars" data-chart-wrap="segmentation"><canvas id="bscdChart_<?= $sk ?>_segmentation"></canvas></div>
         </div>
-    <?php endforeach; ?>
-    </div>
 
-    <div class="row">
-    <?php foreach ($sec['charts'] as $i => $ck):
-        // An odd last chart takes the whole line.
-        $wide = $i === count($sec['charts']) - 1 && count($sec['charts']) % 2 === 1; ?>
-        <div class="col-12<?= $wide ? '' : ' col-lg-6' ?> mb-3">
-            <div class="bscd-chart-card">
-                <div class="bscd-chart-card__header">
-                    <h3 class="bscd-chart-card__title"><?= esc(lang($chartTitles[$ck])) ?></h3>
-                    <?php if ($ck === 'meterType'): ?>
-                    <div class="bscd-chart-card__subtitle"><?= esc(lang('Dashboard.charts.meterTypesHint')) ?></div>
-                    <?php endif; ?>
-                    <div class="bscd-cx" data-chart-export="<?= $sk ?>-<?= $ck ?>"></div>
-                </div>
-                <?php if ($ck === 'meterType'): ?>
-                <div class="bscd-chart-card__body" data-chart-wrap="meterType">
-                    <div class="bscd-metertype">
-                        <div class="bscd-metertype__total">
-                            <span class="bscd-metertype__total-label"><?= esc(lang('Dashboard.charts.meterTotal')) ?></span>
-                            <span class="bscd-metertype__total-value" data-metertype="total"><span class="bscd-skeleton bscd-skeleton--text"></span></span>
-                        </div>
-                        <ul class="bscd-metertype__list" data-metertype="list"></ul>
-                    </div>
-                </div>
-                <?php else: ?>
-                <div class="bscd-chart-card__body<?= $ck === 'status' ? ' bscd-donut-wrap' : '' ?>" data-chart-wrap="<?= $ck ?>"><canvas id="bscdChart_<?= $sk ?>_<?= $ck ?>" height="240"></canvas></div>
-                <?php endif; ?>
+        <?php if ($sk === 'postpaid'): ?>
+        <?php // 2. Décomposition du profil Défaillant: 4 analytic components, never
+              // profiles; counts in the legend, a slice or legend item opens its customers. ?>
+        <div class="bscd-chart-card bscd-viz bscd-failure">
+            <div class="bscd-chart-card__header">
+                <h3 class="bscd-chart-card__title"><?= esc(lang('Dashboard.failure.title')) ?></h3>
+                <div class="bscd-chart-card__subtitle"><?= esc(lang('Dashboard.failure.subtitle')) ?></div>
+                <div class="bscd-cx" data-chart-export="postpaid-failure"></div>
             </div>
+            <div class="bscd-chart-card__body bscd-viz__chart bscd-viz__chart--doughnut" data-chart-wrap="failure"><canvas id="bscdChart_postpaid_failure"></canvas></div>
         </div>
-    <?php endforeach; ?>
+        <?php endif; ?>
     </div>
-
-    <?php if ($sk === 'postpaid'): ?>
-    <div class="bscd-chart-card bscd-failure mb-3">
-        <div class="bscd-chart-card__header">
-            <h3 class="bscd-chart-card__title"><?= esc(lang('Dashboard.failure.title')) ?></h3>
-            <div class="bscd-chart-card__subtitle"><?= esc(lang('Dashboard.failure.subtitle')) ?></div>
-            <div class="bscd-cx" data-chart-export="postpaid-failure"></div>
-        </div>
-        <div class="bscd-chart-card__body" data-chart-wrap="failure"><canvas id="bscdChart_postpaid_failure" height="240"></canvas></div>
-        <div class="bscd-failure__stats" data-failure-stats></div>
-        <p class="bscd-failure__note" data-failure-note hidden></p>
-    </div>
-    <?php endif; ?>
 </section>
 <?php endforeach; ?>
+</div>
 
 <!-- ── Détail des clients: one table, scoped (Tous / Postpaid / Prepaid) ── -->
 <section class="bscd-section bscd-section--detail" id="bscdSection-detail" aria-labelledby="bscdSectionTitle-detail">

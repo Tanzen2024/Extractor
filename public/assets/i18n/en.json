@@ -74,16 +74,6 @@
             "unavailable": "Status unavailable",
             "historyEmpty": "No synchronisation recorded."
         },
-        "sections": {
-            "clients": {
-                "one": "{count} customer",
-                "other": "{count} customers"
-            },
-            "unassigned": {
-                "one": "{count} customer with no meter type is in neither view",
-                "other": "{count} customers with no meter type are in neither view"
-            }
-        },
         "columns": {
             "REGION": "Region",
             "DIVISION": "Division",
@@ -124,10 +114,17 @@
         },
         "filters": {
             "date_from": "From",
-            "date_to": "Until"
+            "date_to": "Until",
+            "advancedActive": {
+                "one": "{count} active advanced filter",
+                "other": "{count} active advanced filters"
+            }
         },
-        "kpi": {
-            "nuiCorrectsNote": "Correct NIUs matching the filters"
+        "sections": {
+            "clients": {
+                "one": "{count} customer",
+                "other": "{count} customers"
+            }
         },
         "table": {
             "results": {
@@ -166,11 +163,9 @@
         "failure": {
             "total": "TOTAL DÉFAILLANT",
             "filter": "Défaillant component",
-            "unassigned": "{n} Défaillant customers without a component: this snapshot does not carry the information.",
             "alwaysLate": "Always Late",
             "sometimePaid": "Sometime Paid",
-            "neverPaid": "Never Paid",
-            "other": "Other"
+            "neverPaid": "Never Paid"
         }
     },
     "export": {

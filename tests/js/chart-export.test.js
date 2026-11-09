@@ -113,8 +113,10 @@ test('every UI string exists in fr and en', () => {
 
 test('dashboard: one export menu per chart card, script loaded before dashboard.js', () => {
     // Keys are "{section}-{chart}", built by the PHP loop of the sections.
-    assert.ok(view.includes('data-chart-export="<?= $sk ?>-<?= $ck ?>"'));
-    assert.ok(view.includes('data-chart-wrap="<?= $ck ?>"') && view.includes('data-chart-wrap="meterType"'));
+    // Only the segmentation of each section + the Défaillant breakdown (Postpaid) remain.
+    assert.ok(view.includes('data-chart-export="<?= $sk ?>-segmentation"') && view.includes('data-chart-export="postpaid-failure"'));
+    assert.ok(view.includes('data-chart-wrap="segmentation"') && view.includes('data-chart-wrap="failure"'));
+    assert.ok(!view.includes('data-chart-wrap="meterType"'), 'Type de compteurs no longer displayed');
     assert.match(view, /data-export-label="[^"]*" data-export-prefix="<\?= \$sk \?>"/);
     assert.ok(view.indexOf("base_url('assets/js/chart-export.js')") < view.indexOf("base_url('assets/js/dashboard.js')"));
     assert.ok(view.includes('assets/css/chart-export.css'));
@@ -125,6 +127,6 @@ test('dashboard.js registers the plotted charts after rendering and clears them 
     assert.match(render, /exportFilters\[key\] = Object\.keys\(criteria/);
     assert.match(render, /chart: state\.charts\[id\]/);
     assert.match(js, /function destroyChart\(id\) \{[\s\S]*?chartExport\(chartKey\(id\), null\);/);
-    assert.match(js, /chartExport\(key \+ '-meterType', null\);/);
-    assert.equal((js.match(/chartPairs\[canvasId\] = pairs;/g) || []).length, 2);
+    assert.doesNotMatch(js, /-meterType'/);
+    assert.equal((js.match(/chartPairs\[canvasId\] = pairs;/g) || []).length, 1); // segmentation (the failure doughnut maps its rows)
 });
