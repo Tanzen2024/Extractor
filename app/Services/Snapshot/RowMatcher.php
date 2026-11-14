@@ -2,6 +2,7 @@
 
 namespace App\Services\Snapshot;
 
+use App\Services\CustomersList\BillingValue;
 use App\Services\CustomersList\FailureSubcategories;
 use App\Services\CustomersList\FilterCriteria;
 
@@ -25,6 +26,9 @@ use App\Services\CustomersList\FilterCriteria;
  *     (QueryBuilder::contactCondition(), the "Contacts renseignés" KPI rule);
  *   - FailureSubcategories::COLUMN (detail list of the Postpaid breakdown):
  *     needs a reader built with ActiveSnapshot::reader(true);
+ *   - Value (BillingValue::SEGMENT_COLUMN, optional column): trimmed value in
+ *     the selection; a snapshot without the column matches no row (SQL twin:
+ *     FALSE), never every row;
  *   - all active dimensions are ANDed; no filter = every in-perimeter row.
  * The export has no free-text search (QueryBuilder::withSearch is table-only).
  */
@@ -60,6 +64,12 @@ final class RowMatcher
     /** @var array<string, true> */
     private array $failures = [];
 
+    private ?int $valueIdx   = null;
+    private bool $valueNever = false;
+
+    /** @var array<string, true> */
+    private array $valueAccepted = [];
+
     /**
      * @param array<string, int> $index Column name => field index.
      */
@@ -80,6 +90,15 @@ final class RowMatcher
         if ($criteria->failureSubcategories !== []) {
             $this->failureIdx = $index[FailureSubcategories::COLUMN];
             $this->failures   = array_fill_keys($criteria->failureSubcategories, true);
+        }
+
+        if ($criteria->values !== []) {
+            $this->valueAccepted = array_fill_keys($criteria->values, true);
+            if (isset($index[BillingValue::SEGMENT_COLUMN])) {
+                $this->valueIdx = $index[BillingValue::SEGMENT_COLUMN];
+            } else {
+                $this->valueNever = true;
+            }
         }
 
         if ($criteria->dateFrom !== null || $criteria->dateTo !== null) {
@@ -105,6 +124,10 @@ final class RowMatcher
         }
 
         if ($this->failureIdx !== null && ! isset($this->failures[trim($fields[$this->failureIdx])])) {
+            return false;
+        }
+
+        if ($this->valueNever || ($this->valueIdx !== null && ! isset($this->valueAccepted[trim($fields[$this->valueIdx])]))) {
             return false;
         }
 

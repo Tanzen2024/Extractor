@@ -3,7 +3,9 @@
 namespace App\Services\Refresh;
 
 use App\Services\CustomerListExportService;
+use App\Services\CustomersList\BillingValue;
 use App\Services\CustomersList\FailureSubcategories;
+use App\Services\CustomersList\PrepaidRecency;
 use App\Services\OracleExtractionService;
 use App\Services\Snapshot\SnapshotException;
 use Config\Oracle as OracleConfig;
@@ -68,22 +70,29 @@ final class OracleSnapshotExtractor
     }
 
     /**
-     * Columns of the source table that are not exported: read when the table
-     * has them, left out otherwise, so a refresh works before and after the
-     * source side adds them.
-     *
-     * @return list<string>
+     * Analysis columns of the source table, never exported: read when the
+     * table has them, left out otherwise, so a refresh works before and
+     * after the source side adds them. Always in this order.
      */
+    public const OPTIONAL_COLUMNS = [
+        FailureSubcategories::COLUMN,
+        PrepaidRecency::DAYS_COLUMN, PrepaidRecency::STATUS_COLUMN,
+        BillingValue::AMOUNT_COLUMN, BillingValue::SEGMENT_COLUMN,
+    ];
+
+    /** @return list<string> the OPTIONAL_COLUMNS the table has, in OPTIONAL_COLUMNS order */
     private function optionalColumns(): array
     {
         $found = $this->oracle->select(
             "SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER || '.' || TABLE_NAME = '" . CustomerListExportService::SQL_TABLE . "'"
-            . " AND COLUMN_NAME = '" . FailureSubcategories::COLUMN . "'",
+            . " AND COLUMN_NAME IN ('" . implode("', '", self::OPTIONAL_COLUMNS) . "')",
             [],
-            1,
+            count(self::OPTIONAL_COLUMNS),
         )['rows'] ?? [];
 
-        return ($found[0]['COLUMN_NAME'] ?? null) === FailureSubcategories::COLUMN ? [FailureSubcategories::COLUMN] : [];
+        $names = array_map(static fn (array $r): string => (string) ($r['COLUMN_NAME'] ?? ''), $found);
+
+        return array_values(array_filter(self::OPTIONAL_COLUMNS, static fn (string $c): bool => in_array($c, $names, true)));
     }
 
     /** @param list<string> $optional what optionalColumns() found */

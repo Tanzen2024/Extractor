@@ -2,6 +2,7 @@
 
 namespace App\Services\Snapshot;
 
+use App\Services\CustomersList\BillingValue;
 use App\Services\CustomersList\QueryBuilder;
 
 /**
@@ -13,7 +14,8 @@ use App\Services\CustomersList\QueryBuilder;
  *   search     the table's free text: case-insensitive substring of
  *              CUST_NAME or METER_NO, or substring of CONTRACT / COD_CLI —
  *              literal, no wildcard (same as QueryBuilder::withSearch())
- *   sort       CONTRACT / COD_CLI numerically (non-numeric after), dates
+ *   sort       CONTRACT / COD_CLI numerically (non-numeric after),
+ *              AMOUNT_BILLED_12M as a signed whole number (blank = null), dates
  *              chronologically, text by byte order; ascending puts blanks /
  *              nulls last, descending first (Oracle's default)
  *   tableRow   every QueryBuilder::ALL_COLUMNS key, '' for a column the
@@ -38,7 +40,7 @@ final class SnapshotSort
         foreach ($index as $column => $i) {
             $r[$column] = $fields[$i];
         }
-        foreach (array_keys(RowMatcher::LIST_FILTERS) as $column) {
+        foreach ([...array_keys(RowMatcher::LIST_FILTERS), ...BillingValue::COLUMNS] as $column) {
             if (isset($r[$column])) {
                 $r[$column] = trim($r[$column]);
             }
@@ -82,7 +84,11 @@ final class SnapshotSort
     /** -1 / 0 / 1 for two values of $column in the requested direction. */
     public static function compare(string $column, ?string $a, ?string $b, bool $desc): int
     {
-        if (in_array($column, self::NUMERIC_COLUMNS, true)) {
+        if ($column === BillingValue::AMOUNT_COLUMN) {
+            $na = BillingValue::amount($a);
+            $nb = BillingValue::amount($b);
+            $c  = self::nullsLast($na === null ? null : (string) $na, $nb === null ? null : (string) $nb) ?? ($na <=> $nb);
+        } elseif (in_array($column, self::NUMERIC_COLUMNS, true)) {
             $na = $a !== null && ctype_digit($a) ? ltrim($a, '0') : null;
             $nb = $b !== null && ctype_digit($b) ? ltrim($b, '0') : null;
             $c  = self::nullsLast($na, $nb) ?? (strlen($na) <=> strlen($nb) ?: strcmp($na, $nb) <=> 0);

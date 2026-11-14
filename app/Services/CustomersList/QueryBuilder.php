@@ -30,7 +30,11 @@ final class QueryBuilder
         'METER_NO', 'CUST_NAME', 'PHONE_NUMBERS', 'E_MAIL', 'REF_GEO', 'DATE_AB',
         'DATE_RESILIATION', 'VOLTAGE', 'SEGMENT_TRESOR', 'METER', 'NIU_RIGHT', 'XCOORD',
         'YCOORD', 'NIU_TO_RECLASS', 'NUI_QC', 'LAST_VC_DATE', 'SEGMENT_RFM_2',
-        'POSTPAID_PROFILE_DATE', 'SEGMENTATION', 'UPDATED_AT',
+        'POSTPAID_PROFILE_DATE', 'SEGMENTATION',
+        // Optional source columns 31-32 (BillingValue): '' in a snapshot without them.
+        'AMOUNT_BILLED_12M', 'VALUE_SEGMENT',
+        // "Mis à jour le" is always the last column of the table (user request 2026-11-13).
+        'UPDATED_AT',
     ];
 
     /**
@@ -43,13 +47,15 @@ final class QueryBuilder
     public const DEFAULT_VISIBLE_COLUMNS = [
         'REGION', 'DIVISION', 'AGENCE', 'COD_CLI', 'CONTRACT', 'STATUS', 'METER_NO',
         'CUST_NAME', 'PHONE_NUMBERS', 'E_MAIL', 'DATE_AB', 'DATE_RESILIATION', 'SEGMENTATION',
-        'UPDATED_AT', 'NIU_RIGHT', 'NUI_QC',
+        'NIU_RIGHT', 'NUI_QC', 'AMOUNT_BILLED_12M', 'VALUE_SEGMENT', 'UPDATED_AT',
     ];
 
     /** Columns the table may be sorted by (must be a safe, indexed-or-not real column). */
     public const SORTABLE = [
         'REGION', 'DIVISION', 'AGENCE', 'COD_CLI', 'CONTRACT', 'STATUS',
         'CUST_NAME', 'DATE_AB', 'DATE_RESILIATION', 'SEGMENTATION',
+        // Numeric order (SnapshotSort::compare / SnapshotDuckDbEngine::orderBy).
+        'AMOUNT_BILLED_12M',
     ];
 
     /** LIKE pattern on UPPER(NUI_QC) for a "NUI correct" row — see kpiStatement(). */
@@ -117,6 +123,7 @@ final class QueryBuilder
             // ('NUI correct' / 'NUI ... RECLASSER') with no numeric flag.
             'NUI_QC'         => $c->niuQualities,
             FailureSubcategories::COLUMN => $c->failureSubcategories,
+            BillingValue::SEGMENT_COLUMN => $c->values,
         ] as $column => $values) {
             if ($values === []) {
                 continue;

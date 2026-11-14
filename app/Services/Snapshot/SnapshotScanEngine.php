@@ -4,6 +4,7 @@ namespace App\Services\Snapshot;
 
 use App\Services\CustomersList\ActiveCustomers;
 use App\Services\CustomersList\FailureSubcategories;
+use App\Services\CustomersList\PrepaidRecency;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\QueryBuilder;
 
@@ -96,14 +97,22 @@ final class SnapshotScanEngine implements SnapshotQueryEngine
 
     public function distributions(FilterCriteria $criteria): array
     {
-        $d = ['region' => [], 'status' => [], 'segmentation' => [], 'meterType' => [], 'failure' => []];
-        $this->scan($criteria, '', static function (array $r) use (&$d): void {
+        $header  = (string) ($this->snapshot->meta['header'] ?? '');
+        $recency = PrepaidRecency::availableIn($header !== '' ? explode($this->snapshot->delimiter(), $header) : []);
+
+        $d = ['region' => [], 'status' => [], 'segmentation' => [], 'meterType' => [], 'failure' => [], 'recency' => $recency ? [] : null];
+        $this->scan($criteria, '', static function (array $r) use (&$d, $recency): void {
             foreach (['region' => 'REGION', 'status' => 'STATUS', 'segmentation' => 'SEGMENTATION', 'meterType' => 'METER'] as $key => $column) {
                 $d[$key][$r[$column]] = ($d[$key][$r[$column]] ?? 0) + 1;
             }
             $failure = trim($r[FailureSubcategories::COLUMN]);
             if ($failure !== '') {
                 $d['failure'][$failure] = ($d['failure'][$failure] ?? 0) + 1;
+            }
+            // PREPAID rows only: one class each (PrepaidRecency, same rule as the DuckDB CASE).
+            if ($recency && $r['METER'] === PrepaidRecency::METER) {
+                $class = PrepaidRecency::classify($r[PrepaidRecency::STATUS_COLUMN], $r[PrepaidRecency::DAYS_COLUMN]);
+                $d['recency'][$class] = ($d['recency'][$class] ?? 0) + 1;
             }
         });
 
@@ -138,6 +147,10 @@ final class SnapshotScanEngine implements SnapshotQueryEngine
     public function page(FilterCriteria $criteria, string $search, ?string $sort, string $dir, int $offset, int $limit): array
     {
         $sort = in_array($sort, QueryBuilder::SORTABLE, true) ? $sort : 'CONTRACT';
+        $header = (string) ($this->snapshot->meta['header'] ?? '');
+        if (! in_array($sort, $header !== '' ? explode($this->snapshot->delimiter(), $header) : [], true)) {
+            $sort = 'CONTRACT'; // an optional column this version does not carry (BillingValue)
+        }
         $rows = [];
         $this->scan($criteria, $search, static function (array $r) use (&$rows): void {
             $rows[] = $r;

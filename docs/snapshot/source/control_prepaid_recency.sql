@@ -1,0 +1,97 @@
+/* Contrôles « Ancienneté du dernier achat » PREPAID, en lecture seule, à
+   lancer après un chargement de TB_CUSTOMERS_LIST par customers_list.sql
+   (colonnes 29 PREPAID_RECENCY_DAYS et 30 PREPAID_RECENCY_STATUS).
+   Aucune écriture. Périmètre : les 4 statuts actifs d'Extractor. Les
+   requêtes marquées « aucune ligne » doivent revenir vides. */
+
+/* 1. Effectifs par classe (bornes incluses, sans chevauchement), part du
+      total PREPAID actif (dénominateur : tous les PREPAID actifs, dates
+      inconnues comprises) et total réconcilié (ligne TOTAL). */
+WITH t AS (
+    SELECT
+        CASE
+            WHEN PREPAID_RECENCY_STATUS = 'KNOWN' AND PREPAID_RECENCY_DAYS BETWEEN 0 AND 29    THEN '1 0-29 jours'
+            WHEN PREPAID_RECENCY_STATUS = 'KNOWN' AND PREPAID_RECENCY_DAYS BETWEEN 30 AND 59   THEN '2 30-59 jours'
+            WHEN PREPAID_RECENCY_STATUS = 'KNOWN' AND PREPAID_RECENCY_DAYS BETWEEN 60 AND 89   THEN '3 60-89 jours'
+            WHEN PREPAID_RECENCY_STATUS = 'KNOWN' AND PREPAID_RECENCY_DAYS BETWEEN 90 AND 179  THEN '4 90-179 jours'
+            WHEN PREPAID_RECENCY_STATUS = 'KNOWN' AND PREPAID_RECENCY_DAYS BETWEEN 180 AND 359 THEN '5 180-359 jours'
+            WHEN PREPAID_RECENCY_STATUS = 'KNOWN' AND PREPAID_RECENCY_DAYS >= 360               THEN '6 360 jours et plus'
+            WHEN PREPAID_RECENCY_STATUS = 'NO_PURCHASE'    AND PREPAID_RECENCY_DAYS IS NULL     THEN '7 Aucun achat'
+            WHEN PREPAID_RECENCY_STATUS = 'POST_REFERENCE' AND PREPAID_RECENCY_DAYS IS NULL     THEN '8 Achat apres la reference'
+            WHEN PREPAID_RECENCY_STATUS = 'UNKNOWN'        AND PREPAID_RECENCY_DAYS IS NULL     THEN '9 Date inconnue'
+            ELSE 'X INCOHERENT'
+        END AS CLASSE
+    FROM CMS_RFC.TB_CUSTOMERS_LIST
+    WHERE METER = 'PREPAID'
+      AND TRIM(STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.')
+)
+SELECT NVL(CLASSE, 'TOTAL') AS CLASSE,
+       COUNT(*) AS CLIENTS,
+       ROUND(100 * RATIO_TO_REPORT(COUNT(*)) OVER (PARTITION BY GROUPING(CLASSE)), 2) AS PCT
+FROM t
+GROUP BY ROLLUP (CLASSE)
+ORDER BY GROUPING(CLASSE), CLASSE;
+
+/* 2. Cohérence des deux colonnes — aucune ligne : jours renseignés si et
+      seulement si KNOWN, jours >= 0, statut connu, rien hors PREPAID. */
+SELECT METER, PREPAID_RECENCY_STATUS,
+       CASE WHEN PREPAID_RECENCY_DAYS IS NULL THEN 'NULL' WHEN PREPAID_RECENCY_DAYS < 0 THEN 'NEGATIF' ELSE 'RENSEIGNE' END AS JOURS,
+       COUNT(*) AS LIGNES
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE NOT (
+        (METER <> 'PREPAID' AND PREPAID_RECENCY_STATUS IS NULL AND PREPAID_RECENCY_DAYS IS NULL)
+     OR (METER = 'PREPAID' AND PREPAID_RECENCY_STATUS = 'KNOWN' AND PREPAID_RECENCY_DAYS >= 0)
+     OR (METER = 'PREPAID' AND PREPAID_RECENCY_STATUS IN ('NO_PURCHASE', 'POST_REFERENCE', 'UNKNOWN') AND PREPAID_RECENCY_DAYS IS NULL)
+      )
+GROUP BY METER, PREPAID_RECENCY_STATUS,
+         CASE WHEN PREPAID_RECENCY_DAYS IS NULL THEN 'NULL' WHEN PREPAID_RECENCY_DAYS < 0 THEN 'NEGATIF' ELSE 'RENSEIGNE' END;
+
+/* 3. Unicité — aucune ligne : chaque contrat une seule fois (les jointures
+      prepaid_recense / prepaid_om_last_purchase ne multiplient rien). */
+SELECT CONTRACT, COUNT(*) AS LIGNES
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+GROUP BY CONTRACT
+HAVING COUNT(*) > 1;
+
+/* 4. Compteurs partagés par plusieurs contrats : comptés une fois par
+      contrat ; ils portent la même ancienneté (achat rattaché au compteur). */
+SELECT METER_NO, COUNT(*) AS CONTRATS,
+       COUNT(DISTINCT PREPAID_RECENCY_STATUS || '/' || PREPAID_RECENCY_DAYS) AS VALEURS
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE METER = 'PREPAID'
+GROUP BY METER_NO
+HAVING COUNT(*) > 1
+ORDER BY 2 DESC;
+
+/* 5. Source de la date : profil RFM prioritaire. Pour chaque client avec une
+      date de profil, PREPAID_RECENCY_DAYS = RECENSE du profil — aucune ligne. */
+WITH ref AS (
+    SELECT TRUNC(MAX(LASTPURCHASE_DATE)) AS REF_DATE FROM CMS_RFC.PREPAID_PROFILE_P
+),
+last_row AS (
+    SELECT METER, LASTPURCHASE_DATE FROM (
+        SELECT METER, LASTPURCHASE_DATE,
+               ROW_NUMBER() OVER (PARTITION BY METER ORDER BY VC_DATE DESC NULLS LAST) AS RN
+        FROM CMS_RFC.PREPAID_PROFILE_P
+        WHERE VC_DATE <= (SELECT TRUNC(REF_DATE, 'MM') FROM ref)
+    ) WHERE RN = 1
+)
+SELECT t.CONTRACT, t.PREPAID_RECENCY_STATUS, t.PREPAID_RECENCY_DAYS, ref.REF_DATE - TRUNC(l.LASTPURCHASE_DATE) AS RECENSE_PROFIL
+FROM CMS_RFC.TB_CUSTOMERS_LIST t
+JOIN last_row l ON l.METER = t.METER_NO
+CROSS JOIN ref
+WHERE t.METER = 'PREPAID'
+  AND l.LASTPURCHASE_DATE IS NOT NULL
+  AND (t.PREPAID_RECENCY_STATUS <> 'KNOWN' OR t.PREPAID_RECENCY_DAYS <> ref.REF_DATE - TRUNC(l.LASTPURCHASE_DATE))
+FETCH FIRST 50 ROWS ONLY;
+
+/* 6. Concordance avec la segmentation (information, pas une règle) :
+      POST_REFERENCE = clients sans profil dont le premier achat suit la date
+      de référence, classés 1-Stable par prepaid_new_buyers ; NO_PURCHASE /
+      UNKNOWN sans profil sont 5-Dormant ou 6-Never Vending. */
+SELECT PREPAID_RECENCY_STATUS, SEGMENTATION, COUNT(*) AS CLIENTS
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE METER = 'PREPAID'
+  AND TRIM(STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.')
+GROUP BY PREPAID_RECENCY_STATUS, SEGMENTATION
+ORDER BY 1, 2;

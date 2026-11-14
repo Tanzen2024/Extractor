@@ -211,7 +211,8 @@ final class FailureSubcategoriesTest extends CIUnitTestCase
                 $exported[] = $row;
             });
             $this->assertCount(3, $exported, $name);
-            $this->assertSame(CustomerListExportService::COLUMNS, array_keys($exported[0]), $name . ': no analytic column in the export');
+            $this->assertSame(CustomerListExportService::EXPORT_COLUMNS, array_keys($exported[0]), $name . ': no analytic column in the export');
+            $this->assertNotContains(FailureSubcategories::COLUMN, array_keys($exported[0]));
             $this->assertSame(PostpaidSegmentations::DEFAILLANT, trim($exported[0]['SEGMENTATION']), $name);
         }
     }

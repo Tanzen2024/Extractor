@@ -84,7 +84,7 @@ function makeEl(dataset = {}) {
 }
 
 // `parked` = a sessionStorage restore payload (filters parked before a reload).
-function bootDashboard(overrides = {}, extraEndpoints = {}, parked = null) {
+function bootDashboard(overrides = {}, extraEndpoints = {}, parked = null, bootExtra = {}) {
     const byId = {};
     const bySel = {};
     const requests = [];
@@ -92,6 +92,7 @@ function bootDashboard(overrides = {}, extraEndpoints = {}, parked = null) {
     const boot = {
         endpoints: { stats: '/dashboard/stats', count: '/dashboard/count', rows: '/dashboard/rows', filterOptions: '/dashboard/filter-options', export: '/dashboard/export', jobStatus: '/exports', ...extraEndpoints },
         sortable: ['CONTRACT'], tableColumns: ['CONTRACT', 'STATUS'], defaultVisibleColumns: ['CONTRACT', 'STATUS'], perPageOptions: [20, 50, 100, 200],
+        ...bootExtra,
     };
     const document = {
         getElementById(id) {
@@ -166,6 +167,70 @@ test('first load: STATUT offers the 4 active statuses, none pre-checked, no "Con
     assert.ok(!/Contrats inactifs|Contrats actifs/.test(statusList.innerHTML));
 });
 
+// ── Ancienneté du dernier achat (Prepaid only) ──
+
+const RECENCY_CLASSES = ['D0_29', 'D30_59', 'D60_89', 'D90_179', 'D180_359', 'D360_PLUS', 'NO_PURCHASE', 'POST_REFERENCE', 'UNKNOWN'];
+const recencyAnswer = (counts, total, extra = {}) => {
+    const classes = RECENCY_CLASSES.map((value, i) => ({ value, count: counts[i] }));
+    const sum = counts.reduce((a, b) => a + b, 0);
+    return { available: true, total, classes, sum, difference: total - sum, inconsistent: 0, ...extra };
+};
+const statsWithRecency = (prepaidRecency) => (url) => ({
+    totalRows: prepaidRecency.total, kpis: { total: prepaidRecency.total },
+    charts: { region: [], status: [], segmentation: [], meterType: [], prepaidRecency },
+});
+
+test('recency: Prepaid only, every class in order (zeros too), count + share of the filtered PREPAID total on each bar', async () => {
+    const answer = recencyAnswer([600, 100, 50, 40, 30, 80, 60, 0, 40], 1000);
+    const ctx = bootDashboard({ '/dashboard/stats': statsWithRecency(answer) });
+    await settle();
+    const chart = ctx.charts.bscdChart_prepaid_recency;
+    const plain = (v) => JSON.parse(JSON.stringify(v));
+    assert.equal(chart.type, 'bar');
+    assert.equal(chart.options.indexAxis, 'y', 'horizontal');
+    assert.deepEqual(plain(chart.data.datasets[0].data), [600, 100, 50, 40, 30, 80, 60, 0, 40], 'nine classes, the zero one kept');
+    assert.equal(ctx.charts.bscdChart_postpaid_recency, undefined, 'never in the Postpaid view');
+
+    const colors = plain(chart.data.datasets[0].backgroundColor);
+    assert.equal(new Set(colors).size, 9, 'one colour per class');
+    assert.equal(colors[8], '#c7ccd6', 'unknown date: light grey');
+
+    const fr = (n) => n.toLocaleString('fr-FR');
+    assert.equal(chart.options.plugins.bscdValueLabels.formatValue(600), fr(600) + ' · 60,0 %');
+    assert.equal(chart.options.plugins.bscdValueLabels.formatValue(0), '0 · 0,0 %');
+    assert.deepEqual(plain(chart.options.scales.y.ticks.callback(0, 0)), ['0 à 29 jours', 'Activité récente'], 'range + meaning, two lines');
+    assert.deepEqual(plain(chart.options.scales.y.ticks.callback(0, 6)), ['Aucun achat retrouvé', 'Jamais acheté']);
+    assert.equal(plain(chart.data.labels)[8], 'Date inconnue — Date indisponible', 'one readable text per class (exports, tooltips)');
+    assert.equal(chart.options.plugins.tooltip.callbacks.label({ parsed: { x: 100 }, dataIndex: 1 }), '100 clients · 10,0 % du total PREPAID filtré');
+    assert.equal(chart.options.onClick, undefined, 'not a filter: no click');
+
+    const note = inSection(ctx.document, 'prepaid', '[data-recency-note]');
+    assert.equal(note.hidden, true, 'reconciled: nothing to say');
+    assert.equal(note.textContent, '');
+});
+
+test('recency: a snapshot without the source columns shows the "not available" message, never zeros', async () => {
+    const ctx = bootDashboard({ '/dashboard/stats': statsWithRecency({ available: false, total: 1000, classes: [], sum: 0, difference: 0, inconsistent: 0 }) });
+    ctx.document.getElementById('bscdChart_prepaid_recency').parentNode = makeEl(); // the chart wrap, where the message goes
+    await settle();
+    assert.equal(ctx.charts.bscdChart_prepaid_recency, undefined, 'no chart drawn');
+    assert.equal(ctx.byId.bscdChart_prepaid_recency.parentNode.dataset.chartMsg,
+        "Donnée non disponible — la source amont ne fournit pas encore l'ancienneté des achats.");
+    assert.equal(inSection(ctx.document, 'prepaid', '[data-recency-note]').hidden, true);
+});
+
+test('recency: a reconciliation gap and unusable source pairs are stated under the chart, never hidden', async () => {
+    const answer = recencyAnswer([5, 0, 0, 0, 0, 2, 1, 0, 1], 10, { inconsistent: 1 }); // 9 classified for 10
+    const ctx = bootDashboard({ '/dashboard/stats': statsWithRecency(answer) });
+    await settle();
+    assert.ok(ctx.charts.bscdChart_prepaid_recency, 'the chart is still drawn');
+    const note = inSection(ctx.document, 'prepaid', '[data-recency-note]');
+    assert.equal(note.hidden, false);
+    assert.ok(note.classList.contains('is-warning'));
+    assert.match(note.textContent, /^Écart de réconciliation : 9 clients répartis pour 10 clients PREPAID \(écart 1\)\./);
+    assert.match(note.textContent, /1 clients ont une ancienneté incohérente/);
+});
+
 test('Défaillant breakdown: Postpaid only, one doughnut, counts in its legend, a slice or legend item opens its customers', async () => {
     const failureBreakdown = { total: 8, unassigned: 0, components: [
         { value: 'ALWAYS_LATE', count: 2 }, { value: 'NEVER_PAID', count: 4 }, { value: 'SOMETIME_PAID', count: 2 },
@@ -211,6 +276,75 @@ test('Défaillant breakdown: Postpaid only, one doughnut, counts in its legend, 
     legend.onClick(null, { index: 0 }); // a legend item selects its component (never hides the slice)
     await settle();
     assert.deepEqual(new URLSearchParams(ctx.requests[ctx.requests.length - 1].split('?')[1]).getAll('failure_subcategory[]'), ['ALWAYS_LATE']);
+});
+
+// 2026-11-13 real figures: the corrupted "6 D��faillant" folded into 6 Défaillant
+// (PostpaidSegmentations::DEFAILLANT_CORRUPTED) brings 366 864 customers without a component.
+test('Défaillant breakdown: exactly the 3 components (zeros shown), real total in the centre, customers without a component on one line outside the chart', async () => {
+    const failureBreakdown = { total: 492776, unassigned: 366864, components: [
+        { value: 'ALWAYS_LATE', count: 0 }, { value: 'NEVER_PAID', count: 125912 }, { value: 'SOMETIME_PAID', count: 0 },
+    ] };
+    const ctx = bootDashboard({
+        '/dashboard/stats': { totalRows: 1342920, kpis: { total: 1342920 }, charts: { region: [], status: [], segmentation: [], meterType: [], failureBreakdown } },
+    });
+    await settle();
+    const chart = ctx.charts.bscdChart_postpaid_failure;
+    const plain = (v) => JSON.parse(JSON.stringify(v));
+    const fr = (n) => n.toLocaleString('fr-FR');
+
+    // Exactly three categories, fixed order, zeros kept, the three business colours.
+    assert.deepEqual(plain(chart.data.labels), ['Always Late', 'Never Paid', 'Sometime Paid']);
+    assert.deepEqual(plain(chart.data.datasets[0].data), [0, 125912, 0]);
+    assert.deepEqual(plain(chart.data.datasets[0].backgroundColor), ['#d97706', '#c0392b', '#1f6fb2']);
+    const items = plain(chart.options.plugins.legend.labels.generateLabels({ data: chart.data }));
+    assert.deepEqual(items.map((i) => i.text), ['Always Late : 0', 'Never Paid : ' + fr(125912), 'Sometime Paid : 0']);
+
+    // Centre = the real Défaillant total, the customers without a component included.
+    assert.deepEqual(plain(chart.options.plugins.bscdValueLabels.center), { label: 'TOTAL DÉFAILLANT', value: fr(492776) });
+    assert.equal(chart.options.plugins.tooltip.callbacks.label({ label: 'Never Paid', parsed: 125912, dataIndex: 1 }), 'Never Paid: ' + fr(125912));
+
+    // The customers without a component: one secondary line outside the chart, not a 4th entry.
+    const note = inSection(ctx.document, 'postpaid', '[data-failure-unassigned]');
+    assert.equal(note.textContent, 'Dont ' + fr(366864) + ' clients non décomposés (sous-catégorie non renseignée), inclus dans le total.');
+    assert.equal(note.classList.contains('d-none'), false);
+
+    // Interactions unchanged: a slice / legend item still opens its component.
+    chart.options.onClick(null, [{ index: 1 }]);
+    await settle();
+    assert.deepEqual(new URLSearchParams(ctx.requests[ctx.requests.length - 1].split('?')[1]).getAll('failure_subcategory[]'), ['NEVER_PAID']);
+    chart.options.plugins.legend.onClick(null, { index: 0 });
+    await settle();
+    assert.deepEqual(new URLSearchParams(ctx.requests[ctx.requests.length - 1].split('?')[1]).getAll('failure_subcategory[]'), ['ALWAYS_LATE']);
+});
+
+test('Défaillant breakdown: the three components stay drawn at zero; no line when every customer has a component; empty message only without Défaillant', async () => {
+    const plain = (v) => JSON.parse(JSON.stringify(v));
+    const stats = (failureBreakdown) => ({ '/dashboard/stats': { totalRows: 10, kpis: { total: 10 }, charts: { region: [], status: [], segmentation: [], meterType: [], failureBreakdown } } });
+
+    // Only customers without a component: the chart is still drawn with its 3 components at 0.
+    let ctx = bootDashboard(stats({ total: 5, unassigned: 5, components: [
+        { value: 'ALWAYS_LATE', count: 0 }, { value: 'NEVER_PAID', count: 0 }, { value: 'SOMETIME_PAID', count: 0 },
+    ] }));
+    await settle();
+    assert.deepEqual(plain(ctx.charts.bscdChart_postpaid_failure.data.labels), ['Always Late', 'Never Paid', 'Sometime Paid']);
+    assert.deepEqual(plain(ctx.charts.bscdChart_postpaid_failure.data.datasets[0].data), [0, 0, 0]);
+    assert.equal(plain(ctx.charts.bscdChart_postpaid_failure.options.plugins.bscdValueLabels.center).value, '5');
+
+    // Everyone has a component: the secondary line is hidden and empty.
+    ctx = bootDashboard(stats({ total: 8, unassigned: 0, components: [
+        { value: 'ALWAYS_LATE', count: 2 }, { value: 'NEVER_PAID', count: 4 }, { value: 'SOMETIME_PAID', count: 2 },
+    ] }));
+    await settle();
+    const note = inSection(ctx.document, 'postpaid', '[data-failure-unassigned]');
+    assert.equal(note.textContent, '');
+    assert.equal(note.classList.contains('d-none'), true);
+
+    // No Défaillant at all: no chart.
+    ctx = bootDashboard(stats({ total: 0, unassigned: 0, components: [
+        { value: 'ALWAYS_LATE', count: 0 }, { value: 'NEVER_PAID', count: 0 }, { value: 'SOMETIME_PAID', count: 0 },
+    ] }));
+    await settle();
+    assert.equal(ctx.charts.bscdChart_postpaid_failure, undefined);
 });
 
 test('first load: stats (one per section), count and rows carry no STATUT filter (= the whole active perimeter, server-side)', async () => {
@@ -864,4 +998,55 @@ test('a slow answer for an older filter set never overwrites the current charts;
     releaseOld(); await settle(); // the old answer lands last
     assert.deepEqual([...ctx.charts.bscdChart_postpaid_segmentation.data.labels], POSTPAID_ORDER, 'still the POSTPAID scope');
     assert.equal(ctx.charts.bscdChart_prepaid_segmentation, undefined, 'the old PREPAID answer is dropped');
+});
+
+// ── Montant facturé 12 mois + Value (App\Services\CustomersList\BillingValue) ──
+
+const VALUE_OPTIONS = [{ value: 'Top 20%', count: 3 }, { value: 'Medium 50%', count: 5 }, { value: 'Bottom 30%', count: 2 }];
+
+test('Value filter: offered when the snapshot carries it, sent as value[] with the other filters, shown as a chip', async () => {
+    const ctx = bootDashboard({ '/dashboard/filter-options': { meters: [{ value: 'POSTPAID', count: 6 }], values: VALUE_OPTIONS } });
+    await settle();
+    assert.equal(ctx.document.querySelector('[data-value-filter]').hidden, false, 'shown');
+    const boxes = msList(ctx, 'value').querySelectorAll('input[type=checkbox]');
+    assert.deepEqual(boxes.map((cb) => cb.value), ['Top 20%', 'Medium 50%', 'Bottom 30%'], 'business order of the server');
+
+    boxes[0].checked = true; boxes[0].fire('change');
+    msList(ctx, 'meter').querySelectorAll('input[type=checkbox]')[0].checked = true;
+    msList(ctx, 'meter').querySelectorAll('input[type=checkbox]')[0].fire('change');
+    const before = ctx.requests.length;
+    ctx.byId.bscdFilters.fire('submit');
+    await settle();
+    const sent = ctx.requests.slice(before).filter((u) => u.startsWith('/dashboard/rows') || u.startsWith('/dashboard/count'));
+    assert.ok(sent.length > 0);
+    sent.forEach((u) => {
+        const q = new URLSearchParams(u.split('?')[1]);
+        assert.deepEqual(q.getAll('value[]'), ['Top 20%'], u);
+        assert.deepEqual(q.getAll('meter[]'), ['POSTPAID'], 'combined with the other filters');
+    });
+    assert.match(ctx.byId.bscdChips.innerHTML, /data-chip="value">Value : Top 20%/);
+});
+
+test('Value filter: hidden and empty when the snapshot does not carry the column', async () => {
+    const ctx = bootDashboard({ '/dashboard/filter-options': { meters: [{ value: 'POSTPAID', count: 6 }] } });
+    await settle();
+    assert.equal(ctx.document.querySelector('[data-value-filter]').hidden, true);
+    assert.deepEqual(msList(ctx, 'value').querySelectorAll('input[type=checkbox]'), []);
+});
+
+test('table: the 12-month amount in FCFA with thousands separators, right-aligned; Value as is; blanks stay blank', async () => {
+    const cols = ['CONTRACT', 'AMOUNT_BILLED_12M', 'VALUE_SEGMENT'];
+    const ctx = bootDashboard({
+        '/dashboard/rows': { data: [
+            { CONTRACT: '1', AMOUNT_BILLED_12M: '1234567', VALUE_SEGMENT: 'Top 20%' },
+            { CONTRACT: '2', AMOUNT_BILLED_12M: '-150', VALUE_SEGMENT: '' },
+            { CONTRACT: '3', AMOUNT_BILLED_12M: '', VALUE_SEGMENT: '' },
+        ], columns: cols, page: 1, perPage: 50, total: 3, sort: 'CONTRACT', dir: 'asc', search: '' },
+    }, {}, null, { tableColumns: cols, defaultVisibleColumns: cols });
+    await settle();
+    const html = ctx.byId.bscdTableBody.innerHTML;
+    assert.ok(html.includes('<td class="bscd-num">' + (1234567).toLocaleString('fr-FR') + ' FCFA</td>'), html);
+    assert.ok(html.includes('<td class="bscd-num">' + (-150).toLocaleString('fr-FR') + ' FCFA</td>'));
+    assert.ok(html.includes('<td class="bscd-num"></td>'), 'no amount: empty, never "0 FCFA"');
+    assert.ok(html.includes('<td>Top 20%</td>'));
 });

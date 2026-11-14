@@ -80,7 +80,7 @@ final class PrepaidSegmentationsTest extends TestCase
     public function testTheSqlProducesOnlyTheOfficialSegments(): void
     {
         $sql = $this->sql();
-        foreach (['6 Old_Dormant', '7 Never Vending'] as $former) {
+        foreach (['6 Old_Dormant', '6 Never Vending', '7 Never Vending'] as $former) {
             $this->assertStringNotContainsString($former, $sql);
         }
         $this->assertSame(1, substr_count($sql, 'prepaid_rfm AS ('));
@@ -179,6 +179,119 @@ final class PrepaidSegmentationsTest extends TestCase
             ['5-Dormant' => 15, '6-Never Vending' => 3, '1 PERFECT' => 7],
             array_column($out['segmentations'], 'count', 'value'),
         );
+    }
+
+    /**
+     * 2026-11-13: the deployed upstream SQL labels a profile without purchase
+     * date '6 Never Vending' (space) next to '7 Never Vending' -> the chart
+     * showed "6 Never Vending" 1 824 beside "6-Never Vending" 9 192.
+     */
+    public function testTheSpacedNeverVendingLabelMapsToTheCanonicalOne(): void
+    {
+        $this->assertSame('6-Never Vending', PrepaidSegmentations::LEGACY['6 Never Vending']);
+        $this->assertSame([], array_intersect(array_keys(PrepaidSegmentations::LEGACY), self::ALL), 'the 6 canonical values are left as they are');
+        $this->assertArrayNotHasKey('', PrepaidSegmentations::LEGACY, 'blank is not a LEGACY value');
+        $this->assertSame('5-Dormant', PrepaidSegmentations::BLANK_TO, 'blank PREPAID = 5-Dormant (RECENSE >= 60), never Never Vending');
+        $this->assertNotContains('6-Never Vending', PostpaidSegmentations::LEGACY, 'no POSTPAID profile maps to Never Vending');
+        $this->assertNotSame('seg6p6f3dU', PostpaidSegmentations::CACHE_TAG, 'figures cached with the duplicate are not served');
+
+        // Filter options: one entry, the two counts added.
+        $out = PostpaidSegmentations::foldOptions(['segmentations' => [
+            ['value' => '6-Never Vending', 'count' => 9192], ['value' => '6 Never Vending', 'count' => 1824],
+            ['value' => '5-Dormant', 'count' => 315317], ['value' => '1 PERFECT', 'count' => 29448],
+        ]]);
+        $this->assertSame(
+            ['6-Never Vending' => 11016, '5-Dormant' => 315317, '1 PERFECT' => 29448],
+            array_column($out['segmentations'], 'count', 'value'),
+        );
+    }
+
+    public function testBothNeverVendingSpellingsAreOneCategoryEverywhere(): void
+    {
+        if ((new DuckDb())->version() === null) {
+            $this->markTestSkipped('DuckDB CLI absent (Config\Snapshot::$duckdbBinary).');
+        }
+
+        $rows   = [];
+        $prepaid = [
+            '1-Stable', '2-InStable', '3-At Risk', '4-Suspect Dormant', '5-Dormant',
+            '6-Never Vending', '6-Never Vending', '6-Never Vending', // canonical spelling
+            '6 Never Vending', '6 Never Vending',                   // upstream spelling
+            '', '', '', '',                                         // blank -> 5-Dormant (BLANK_TO)
+        ];
+        foreach ($prepaid as $segment) {
+            $rows[] = SnapshotFixture::row(count($rows) + 1, ['METER' => 'PREPAID', 'SEGMENTATION' => $segment, 'SEGMENT_RFM_2' => $segment]);
+        }
+        foreach (['1 PERFECT', '6 Défaillant', ''] as $profile) {
+            $rows[] = SnapshotFixture::row(count($rows) + 1, ['METER' => 'POSTPAID', 'SEGMENTATION' => $profile, 'SEGMENT_RFM_2' => '']);
+        }
+
+        $fx = new SnapshotFixture();
+
+        try {
+            $result = $fx->install($rows);
+            $this->assertSame(SnapshotInstaller::RESULT_ACTIVATED, $result['result'], (string) $result['message']);
+
+            $snapshot = $fx->store->active();
+            $duck     = (new SnapshotIndex($fx->config))->engine($snapshot);
+            $scan     = new SnapshotScanEngine($snapshot);
+            $export   = new SnapshotRowSource(snapshot: $snapshot, store: $fx->store);
+            $scope    = FilterCriteria::fromArray(['meters' => ['PREPAID']]);
+            $expected = [
+                '1-Stable' => 1, '2-InStable' => 1, '3-At Risk' => 1,
+                '4-Suspect Dormant' => 1, '5-Dormant' => 5, '6-Never Vending' => 5,
+            ];
+
+            // Chart: one Never Vending category = 3 + 2; no Non renseigné, the 4 blanks in 5-Dormant (1 + 4), never in Never Vending.
+            foreach ([$duck->segmentationCounts($scope), $scan->segmentationCounts($scope), $duck->distributions($scope)['segmentation']] as $counts) {
+                ksort($counts);
+                $this->assertSame($expected, $counts);
+            }
+
+            // Click / filter on the canonical value: both populations, in every path.
+            $never = FilterCriteria::fromArray(['meters' => ['PREPAID'], 'segmentations' => ['6-Never Vending']]);
+            foreach ([$duck, $scan, $export] as $source) {
+                $this->assertSame(5, $source->count($never), $source::class);
+            }
+            $page = $duck->page($never, '', null, 'asc', 0, 50);
+            $this->assertCount(5, $page);
+            $this->assertSame(['6-Never Vending'], array_values(array_unique(array_column($page, 'SEGMENTATION'))));
+
+            // Filter options: one entry, no spaced spelling offered.
+            foreach ([$duck->filterOptions(), $scan->filterOptions(), $snapshot->filterOptions()] as $options) {
+                $offered = array_column($options['segmentations'], 'count', 'value');
+                $this->assertSame(5, $offered['6-Never Vending']);
+                $this->assertArrayNotHasKey('6 Never Vending', $offered);
+            }
+
+            // Export: canonical label in both columns, nobody lost.
+            $exported = [];
+            $export->stream($scope, static function (array $row) use (&$exported): void {
+                $exported[] = $row;
+            });
+            $this->assertCount(count($prepaid), $exported);
+            $this->assertSame(5, array_count_values(array_column($exported, 'SEGMENTATION'))['6-Never Vending']);
+            $this->assertNotContains('6 Never Vending', array_column($exported, 'SEGMENTATION'));
+            $this->assertNotContains('6 Never Vending', array_column($exported, 'SEGMENT_RFM_2'));
+            $this->assertNotContains('', array_column($exported, 'SEGMENTATION'), 'no blank PREPAID segment exported');
+            $this->assertSame(5, array_count_values(array_column($exported, 'SEGMENTATION'))['5-Dormant']);
+
+            // Click / filter on 5-Dormant: the former blanks are in it, in every path.
+            $dormant = FilterCriteria::fromArray(['meters' => ['PREPAID'], 'segmentations' => ['5-Dormant']]);
+            foreach ([$duck, $scan, $export] as $source) {
+                $this->assertSame(5, $source->count($dormant), $source::class);
+            }
+            $this->assertSame(count($prepaid), $duck->count($scope), 'no PREPAID customer lost or added');
+
+            // POSTPAID untouched, its blank profile stays blank.
+            $postScope = FilterCriteria::fromArray(['meters' => ['POSTPAID']]);
+            foreach ([$duck->segmentationCounts($postScope), $scan->segmentationCounts($postScope)] as $post) {
+                ksort($post);
+                $this->assertSame(['' => 1, '1 PERFECT' => 1, '6 Défaillant' => 1], $post);
+            }
+        } finally {
+            $fx->cleanup();
+        }
     }
 
     public function testAFormerSnapshotReadsTheSameEverywhereAndLeavesPostpaidAlone(): void

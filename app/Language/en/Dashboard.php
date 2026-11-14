@@ -68,6 +68,12 @@ return [
         'neverPaid'    => 'Never Paid',
     ],
 
+    // Analysis of the PREPAID rows (Prepaid section): not segments.
+    'recency' => [
+        'title'    => 'Time since last purchase',
+        'subtitle' => 'PREPAID customers by number of days since their last purchase.',
+    ],
+
     'charts' => [
         'bySegmentation'    => 'Breakdown by segmentation',
         'segmentationHint'  => 'Customers per payer profile. Click a profile to list its customers.',

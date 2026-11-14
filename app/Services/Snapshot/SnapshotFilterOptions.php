@@ -35,6 +35,34 @@ final class SnapshotFilterOptions
         'niuQualities'   => 'NUI_QC',
     ];
 
+    /**
+     * Flat lists read only when the version carries the column (optional
+     * source columns): output key => column. A version without it offers
+     * an empty list, so the filter is not shown.
+     */
+    public const OPTIONAL_FLAT = [
+        'values' => 'VALUE_SEGMENT', // BillingValue::SEGMENT_COLUMN
+    ];
+
+    /**
+     * FLAT + the OPTIONAL_FLAT entries whose column is in $columns.
+     *
+     * @param list<string> $columns
+     *
+     * @return array<string, string>
+     */
+    public static function flatColumns(array $columns): array
+    {
+        $out = self::FLAT;
+        foreach (self::OPTIONAL_FLAT as $key => $column) {
+            if (in_array($column, $columns, true)) {
+                $out[$key] = $column;
+            }
+        }
+
+        return $out;
+    }
+
     /** @var array<string, int> key => field index */
     private array $flatIdx = [];
 
@@ -52,7 +80,7 @@ final class SnapshotFilterOptions
      */
     public function __construct(private readonly array $index)
     {
-        foreach (self::FLAT as $key => $column) {
+        foreach (self::flatColumns(array_keys($index)) as $key => $column) {
             $this->flatIdx[$key] = $index[$column];
             $this->flat[$key]    = [];
         }
@@ -108,9 +136,11 @@ final class SnapshotFilterOptions
     public static function build(array $flat, array $geo, ?string $minDate, ?string $maxDate): array
     {
         $out = [];
-        foreach (array_keys(self::FLAT) as $key) {
+        foreach (array_keys(self::FLAT + self::OPTIONAL_FLAT) as $key) {
             $out[$key] = self::pairs($flat[$key] ?? []);
         }
+        // Value: the business order of BillingValue::VALUES, not by count.
+        usort($out['values'], static fn (array $a, array $b): int => self::valueRank($a['value']) <=> self::valueRank($b['value']));
 
         ksort($geo, SORT_STRING);
         $tree      = [];
@@ -138,9 +168,17 @@ final class SnapshotFilterOptions
             'meters'         => $out['meters'],
             'voltages'       => $out['voltages'],
             'niuQualities'   => $out['niuQualities'],
+            'values'         => $out['values'],
             'geoTree'        => $tree,
             'dateBounds'     => ['min' => $min, 'max' => $maxDate],
         ];
+    }
+
+    private static function valueRank(string $value): int
+    {
+        $i = array_search($value, \App\Services\CustomersList\BillingValue::VALUES, true);
+
+        return $i === false ? PHP_INT_MAX : $i;
     }
 
     public static function label(string $value): string

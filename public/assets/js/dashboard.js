@@ -29,7 +29,7 @@
     // boot.tableColumns but not here starts hidden — see loadHiddenColumns().
     var DEFAULT_VISIBLE_COLUMNS = boot.defaultVisibleColumns || boot.tableColumns;
 
-    var MS_DIMS = ['region', 'division', 'agence', 'status', 'meter', 'segmentation', 'segment_tresor', 'voltage', 'niu_qc', 'contact'];
+    var MS_DIMS = ['region', 'division', 'agence', 'status', 'meter', 'segmentation', 'segment_tresor', 'voltage', 'niu_qc', 'contact', 'value'];
 
     // STATUT: the application only knows active customers — the server
     // (App\Services\CustomersList\ActiveCustomers) offers, accepts and
@@ -77,6 +77,40 @@
     };
     var FAILURE_COLORS = { ALWAYS_LATE: '#d97706', NEVER_PAID: '#c0392b', SOMETIME_PAID: '#1f6fb2' };
 
+    // "Ancienneté du dernier achat" classes (PrepaidRecency::CLASSES, in that
+    // order) — analysis of the PREPAID rows, never segments. Each label is a
+    // day range + its meaning (two tick lines). Colours: green (recent) to
+    // dark red (360 days and more); no purchase dark grey; post-reference
+    // buyers blue; unknown date light grey (OTHER_COLOR).
+    var RECENCY_LABELS = {
+        D0_29: function () { return [t('dashboard.recency.classes.D0_29.range'), t('dashboard.recency.classes.D0_29.meaning')]; },
+        D30_59: function () { return [t('dashboard.recency.classes.D30_59.range'), t('dashboard.recency.classes.D30_59.meaning')]; },
+        D60_89: function () { return [t('dashboard.recency.classes.D60_89.range'), t('dashboard.recency.classes.D60_89.meaning')]; },
+        D90_179: function () { return [t('dashboard.recency.classes.D90_179.range'), t('dashboard.recency.classes.D90_179.meaning')]; },
+        D180_359: function () { return [t('dashboard.recency.classes.D180_359.range'), t('dashboard.recency.classes.D180_359.meaning')]; },
+        D360_PLUS: function () { return [t('dashboard.recency.classes.D360_PLUS.range'), t('dashboard.recency.classes.D360_PLUS.meaning')]; },
+        NO_PURCHASE: function () { return [t('dashboard.recency.classes.NO_PURCHASE.range'), t('dashboard.recency.classes.NO_PURCHASE.meaning')]; },
+        POST_REFERENCE: function () { return [t('dashboard.recency.classes.POST_REFERENCE.range'), t('dashboard.recency.classes.POST_REFERENCE.meaning')]; },
+        UNKNOWN: function () { return [t('dashboard.recency.classes.UNKNOWN.range'), t('dashboard.recency.classes.UNKNOWN.meaning')]; }
+    };
+    var RECENCY_COLORS = {
+        D0_29: '#1a7f4d', D30_59: '#7aa63a', D60_89: '#d4a017', D90_179: '#d97706', D180_359: '#e0605a', D360_PLUS: '#991b1b',
+        NO_PURCHASE: '#4b5563', POST_REFERENCE: '#1f6fb2', UNKNOWN: '#c7ccd6'
+    };
+    function recencyLines(value) { return RECENCY_LABELS[value] ? RECENCY_LABELS[value]() : [value]; }
+    // Axis lines of a class: range + meaning; on a narrow chart (phone) the
+    // range alone, word-wrapped, so Chart.js never cuts it (meaning in the tooltip).
+    var RECENCY_NARROW_PX = 480;
+    function recencyTickLines(value, chartWidth) {
+        var lines = recencyLines(value);
+        if (!(chartWidth < RECENCY_NARROW_PX)) return lines;
+        return lines[0].split(' ').reduce(function (out, word) {
+            var last = out.length - 1;
+            if (last >= 0 && (out[last] + ' ' + word).length <= 16) out[last] += ' ' + word; else out.push(word);
+            return out;
+        }, []);
+    }
+
     var DIM_LABELS = {
         // Only two real NUI_QC values exist (see QueryBuilder::TABLE_COLUMNS
         // comment). The "reclasser" one carries an upstream encoding
@@ -110,6 +144,12 @@
     // Table columns that carry a date — displayed dd/mm/yyyy (the wire value
     // stays ISO: filters/sort/SQL are untouched).
     var DATE_COLUMNS = ['DATE_AB', 'DATE_RESILIATION', 'LAST_VC_DATE', 'POSTPAID_PROFILE_DATE'];
+    // Whole FCFA billed over 12 months (BillingValue::AMOUNT_COLUMN): "1 234 567 FCFA".
+    var AMOUNT_COLUMNS = ['AMOUNT_BILLED_12M'];
+    function fcfa(raw) {
+        var s = String(raw == null ? '' : raw).trim();
+        return /^-?\d{1,15}$/.test(s) ? fmt(Number(s)) + ' FCFA' : s;
+    }
 
     var state = {
         options: null,
@@ -599,6 +639,7 @@
         status: t('glossary.status'), segmentation: t('glossary.segmentation'),
         segment_tresor: t('glossary.treasurySegment'), meter: t('glossary.meter'),
         voltage: t('glossary.voltage'), niu_qc: t('glossary.niuQuality'), contact: t('glossary.contactFilled'),
+        value: t('glossary.value'),
         failure_subcategory: t('dashboard.failure.filter')
     };
 
@@ -648,6 +689,15 @@
             ms.meter.setOptions(data.meters);
             ms.voltage.setOptions(data.voltages);
             ms.niu_qc.setOptions(data.niuQualities);
+            // Value: offered only when the snapshot carries VALUE_SEGMENT
+            // (an older version has no option: the filter stays hidden).
+            var values = data.values || [];
+            if (ms.value) {
+                ms.value.setOptions(values);
+                if (!values.length) ms.value.clear();
+            }
+            var valueGroup = document.querySelector('[data-value-filter]');
+            if (valueGroup) valueGroup.hidden = !values.length;
             refreshCascade();
         });
     }
@@ -659,7 +709,7 @@
     var SECTIONS = window.bscdDashboardSections;
     // Only the segmentation is drawn in a section (+ the Défaillant breakdown
     // in Postpaid). The other figures of /dashboard/stats are not displayed.
-    var CHART_KINDS = ['segmentation', 'failure'];
+    var CHART_KINDS = ['segmentation', 'failure', 'recency'];
 
     function sectionRoot(key) { return document.querySelector('[data-section="' + key + '"]'); }
     function eachSection(fn) { SECTIONS.SECTIONS.forEach(function (sec) { fn(sec.key, sectionRoot(sec.key)); }); }
@@ -855,6 +905,7 @@
         applyChartTheme();
         segmentationBreakdown(key, ch.segmentation, criteria || {});
         if (key === 'postpaid') failureBreakdown(sectionRoot(key), canvasIdOf(key, 'failure'), ch.failureBreakdown);
+        if (key === 'prepaid') recencyBreakdown(sectionRoot(key), canvasIdOf(key, 'recency'), ch.prepaidRecency);
         CHART_KINDS.forEach(function (kind) {
             var id = canvasIdOf(key, kind);
             if (!state.charts[id]) return;
@@ -1030,12 +1081,23 @@
         destroyChart(canvasId);
 
         var view = SECTIONS.failureBreakdown(data);
+        // Exactly the three components, zeros included, in their fixed order.
         var rows = view.rows;
-        var plotted = rows.reduce(function (s, r) { return s + r.count; }, 0);
         state.failureView = view;
 
-        setChartMessage(canvasId, plotted ? null : CHART_EMPTY);
-        if (!plotted) return;
+        // Défaillant customers without a component (FAILURE_SUBCATEGORY empty)
+        // are never a fourth category nor put in a component: they stay in the
+        // centre total and are mentioned on one line outside the chart.
+        var note = root && root.querySelector('[data-failure-unassigned]');
+        if (note) {
+            note.textContent = view.unassigned > 0 ? t('dashboard.failure.unassigned', { count: fmt(view.unassigned) }) : '';
+            note.classList.toggle('d-none', !(view.unassigned > 0));
+        }
+
+        // Drawn whenever the profile has customers, so the three components
+        // always show (at zero too); empty message only without any Défaillant.
+        setChartMessage(canvasId, view.total > 0 ? null : CHART_EMPTY);
+        if (!(view.total > 0)) return;
         chartPairs[canvasId] = rows.map(function (r) { return { value: dimLabel('failure_subcategory', r.value), count: r.count }; });
         state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
             type: 'doughnut',
@@ -1071,6 +1133,75 @@
                         return ctx.label + ': ' + fmt(ctx.parsed);
                     } } },
                     bscdValueLabels: { center: { label: t('dashboard.failure.total'), value: fmt(view.total) } }
+                }
+            }
+        });
+    }
+
+    // "Ancienneté du dernier achat" (Prepaid only): horizontal bars, every
+    // class drawn (zeros too), count and share of the filtered PREPAID total
+    // on each bar. A snapshot without the source columns shows a message,
+    // never zeros; a reconciliation gap or unusable source pairs are stated
+    // under the chart, never hidden. No click: these are not filter values.
+    function recencyBreakdown(root, canvasId, data) {
+        var canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+        destroyChart(canvasId);
+
+        var view = SECTIONS.recencyView(data);
+        var note = root && root.querySelector('[data-recency-note]');
+        var notes = [];
+        if (view.available && view.difference !== 0) {
+            notes.push(t('dashboard.recency.gap', { sum: fmt(view.sum), total: fmt(view.total), diff: fmt(view.difference) }));
+        }
+        if (view.available && view.inconsistent > 0) {
+            notes.push(t('dashboard.recency.inconsistent', { count: fmt(view.inconsistent) }));
+        }
+        if (note) {
+            note.textContent = notes.join(' ');
+            note.hidden = notes.length === 0;
+            note.classList.toggle('is-warning', view.available && view.difference !== 0);
+        }
+
+        if (!view.available) { setChartMessage(canvasId, t('dashboard.recency.unavailable')); return; }
+        setChartMessage(canvasId, view.total > 0 ? null : CHART_EMPTY);
+        if (!(view.total > 0)) return;
+
+        var rows = view.rows;
+        var total = view.total;
+        var pct = function (n) { return I18N.decimal(total ? n / total * 100 : 0, 1); };
+        var labelOf = function (r) { return recencyLines(r.value).join(' — '); };
+        chartPairs[canvasId] = rows.map(function (r) { return { value: labelOf(r), count: r.count }; });
+        // Two tick lines per class: a little more room per bar than the segments.
+        var wrap = canvas.parentNode;
+        if (wrap && wrap.style) wrap.style.minHeight = Math.max(240, rows.length * 46 + 40) + 'px';
+        state.charts[canvasId] = new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: rows.map(labelOf),
+                datasets: [{
+                    data: rows.map(function (r) { return r.count; }),
+                    backgroundColor: rows.map(function (r) { return RECENCY_COLORS[r.value] || OTHER_COLOR; }),
+                    borderRadius: 3, maxBarThickness: 30
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: {
+                        title: function (items) { return items.length ? recencyLines(rows[items[0].dataIndex].value) : ''; },
+                        label: function (ctx) { return t('dashboard.recency.tooltip', { count: fmt(ctx.parsed.x), pct: pct(ctx.parsed.x) }); }
+                    } },
+                    // "696 386 · 62,5 %" past each bar (share of the filtered PREPAID total).
+                    bscdValueLabels: { formatValue: function (v) { return fmt(v) + ' · ' + pct(v) + ' %'; } }
+                },
+                scales: {
+                    x: { ticks: { maxRotation: 0, callback: function (v) { return fmt(v); } } },
+                    y: { ticks: { autoSkip: false, font: { size: 12 }, callback: function (v, i) {
+                        return recencyTickLines(rows[i].value, this && this.chart ? this.chart.width : undefined);
+                    } } }
                 }
             }
         });
@@ -1161,6 +1292,7 @@
             els.tableBody.innerHTML = data.data.map(function (row) {
                 return '<tr>' + cols.map(function (col) {
                     var raw = row[col] == null ? '' : row[col];
+                    if (AMOUNT_COLUMNS.indexOf(col) >= 0) return '<td class="bscd-num">' + escapeHtml(fcfa(raw)) + '</td>';
                     var val = DATE_COLUMNS.indexOf(col) >= 0 ? frDate(raw) : raw;
                     return '<td>' + escapeHtml(val) + '</td>';
                 }).join('') + '</tr>';
@@ -1468,7 +1600,7 @@
         // status saved before the active-customers perimeter) is dropped.
         var offeredStatuses = ((state.options && state.options.statuses) || []).map(function (o) { return o.value; });
         ms.status.setValues((a.status || []).filter(function (v) { return offeredStatuses.indexOf(v) !== -1; }));
-        ['segment_tresor', 'voltage', 'niu_qc', 'contact', 'meter'].forEach(function (d) { ms[d].setValues(a[d]); });
+        ['segment_tresor', 'voltage', 'niu_qc', 'contact', 'meter', 'value'].forEach(function (d) { if (ms[d]) ms[d].setValues(a[d]); });
         refreshSegmentationOptions();
         ms.segmentation.setValues(a.segmentation);
         var tb = saved.table || {};

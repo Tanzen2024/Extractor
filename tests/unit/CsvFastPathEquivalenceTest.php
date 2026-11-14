@@ -73,7 +73,7 @@ final class CsvFastPathEquivalenceTest extends TestCase
 
         $this->assertCount(40, $exact['all']);
         $this->assertSame($wide['all'], $exact['all']);
-        $this->assertSame(CustomerListExportService::COLUMNS, array_keys($exact['all'][0]));
+        $this->assertSame(CustomerListExportService::EXPORT_COLUMNS, array_keys($exact['all'][0]), 'the optional columns appended, empty');
         $this->assertSame($wide['filtered'], $exact['filtered']);
         $this->assertCount(13, $exact['filtered']);
     }

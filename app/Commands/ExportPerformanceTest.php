@@ -362,7 +362,7 @@ class ExportPerformanceTest extends BaseCommand
         }
         fclose($handle);
 
-        if ($header !== CustomerListExportService::COLUMNS) {
+        if ($header !== CustomerListExportService::EXPORT_COLUMNS) {
             $problems[] = 'en-tête CSV inattendu';
         }
 

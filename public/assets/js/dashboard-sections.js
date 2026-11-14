@@ -160,9 +160,35 @@
         return out;
     }
 
+    /**
+     * The /dashboard/stats "prepaidRecency" answer (PrepaidRecency::breakdown),
+     * each class with its share of the filtered PREPAID total — unknown dates,
+     * customers without purchase and post-reference buyers included in the
+     * denominator. reconciled = every PREPAID customer is in exactly one class.
+     *
+     * @param {?{available:boolean, total:number, classes:Array<{value:string,count:number}>, sum:number, difference:number, inconsistent:number}} data
+     * @return {{available:boolean, total:number, sum:number, difference:number, inconsistent:number, reconciled:boolean, rows:Array<{value:string,count:number,share:number}>}}
+     */
+    function recencyView(data) {
+        var available = !!(data && data.available);
+        var total = (data && Number(data.total)) || 0;
+        var rows = available ? (data.classes || []).map(function (c) {
+            var count = Number(c.count) || 0;
+            return { value: c.value, count: count, share: total ? count / total * 100 : 0 };
+        }) : [];
+        var sum = rows.reduce(function (s, r) { return s + r.count; }, 0);
+        return {
+            available: available, total: total, sum: sum,
+            difference: total - sum,
+            inconsistent: (data && Number(data.inconsistent)) || 0,
+            reconciled: available && total === sum,
+            rows: rows
+        };
+    }
+
     return {
         SECTIONS: SECTIONS, universeOf: universeOf, sectionCriteria: sectionCriteria, sectionsTotal: sectionsTotal,
-        failureBreakdown: failureBreakdown, withFailureFilter: withFailureFilter,
+        failureBreakdown: failureBreakdown, withFailureFilter: withFailureFilter, recencyView: recencyView,
         withSegmentation: withSegmentation, profileInScope: profileInScope, profileTotals: profileTotals
     };
 }));

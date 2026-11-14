@@ -53,7 +53,7 @@ interface SnapshotQueryEngine
      *
      * @param list<string> $meteredMeters
      *
-     * @return array{kpis: array{total:int, actifs:int, avecCompteur:int, nuiCorrect:int, contactOk:int}, distributions: array{region: array<string,int>, status: array<string,int>, segmentation: array<string,int>, meterType: array<string,int>, failure: array<string,int>}}
+     * @return array{kpis: array{total:int, actifs:int, avecCompteur:int, nuiCorrect:int, contactOk:int}, distributions: array{region: array<string,int>, status: array<string,int>, segmentation: array<string,int>, meterType: array<string,int>, failure: array<string,int>, recency: array<string,int>|null}}
      */
     public function summary(FilterCriteria $criteria, array $meteredMeters): array;
 
@@ -68,9 +68,10 @@ interface SnapshotQueryEngine
     /**
      * Row counts per raw value of REGION, STATUS, SEGMENTATION and METER,
      * and per component of the 6 Défaillant profile (FailureSubcategories;
-     * rows without one are not listed).
+     * rows without one are not listed), and per PrepaidRecency class of the
+     * PREPAID rows (null when the version does not carry the two columns).
      *
-     * @return array{region: array<string,int>, status: array<string,int>, segmentation: array<string,int>, meterType: array<string,int>, failure: array<string,int>}
+     * @return array{region: array<string,int>, status: array<string,int>, segmentation: array<string,int>, meterType: array<string,int>, failure: array<string,int>, recency: array<string,int>|null}
      */
     public function distributions(FilterCriteria $criteria): array;
 

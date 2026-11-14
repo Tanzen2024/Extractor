@@ -233,6 +233,68 @@ prepaid_new_buyers AS (
 ),
 
 /* ================================================================
+   DERNIER ACHAT PREPAID DANS ORDER_MASTER (ANCIENNETE, ANALYSE)
+
+   Attribut d'analyse, jamais une regle de segment : alimente
+   PREPAID_RECENCY_DAYS / PREPAID_RECENCY_STATUS pour les compteurs sans
+   date d'achat dans le profil RFM (aucun profil, ou profil sans
+   LASTPURCHASE_DATE). Meme definition d'un achat que
+   prepaid_new_buyers : ORDER_TYPE 01, STATUS 01 (Purchase Code). Tout
+   l'historique de ORDER_MASTER, sans la fenetre de 36 mois du profil.
+
+   Une ligne par compteur (GROUP BY meterno) : la jointure ne multiplie
+   aucune ligne de la liste clients. Plusieurs achats a la meme date
+   donnent la meme date maximale.
+
+   Meme date de reference que RECENSE (prepaid_reference) :
+     LAST_PURCHASE_REF  dernier achat dont la date est <= REF_DATE ;
+     RECENCY_DAYS       REF_DATE - TRUNC(LAST_PURCHASE_REF), entier >= 0 ;
+     N_AFTER_REF        achats apres REF_DATE et au plus tard aujourd'hui.
+   Un achat date d'apres aujourd'hui (date incoherente) n'est compte
+   nulle part : un compteur qui n'a que de tels achats, ou des achats
+   sans date, ressort UNKNOWN.
+   ================================================================= */
+
+prepaid_om_last_purchase AS (
+    SELECT /*+ DRIVING_SITE(o) */
+
+        o.meterno AS METER_PREP,
+
+        MAX(
+            CASE
+                WHEN o.op_time < ref.REF_DATE + 1
+                THEN o.op_time
+            END
+        ) AS LAST_PURCHASE_REF,
+
+        ref.REF_DATE - TRUNC(
+            MAX(
+                CASE
+                    WHEN o.op_time < ref.REF_DATE + 1
+                    THEN o.op_time
+                END
+            )
+        ) AS RECENCY_DAYS,
+
+        COUNT(
+            CASE
+                WHEN o.op_time >= ref.REF_DATE + 1
+                 AND o.op_time < TRUNC(SYSDATE) + 1
+                THEN 1
+            END
+        ) AS N_AFTER_REF
+
+    FROM prepaid.order_master@powernet_db_link o
+
+    CROSS JOIN prepaid_reference ref
+
+    WHERE o.order_type = '01'
+      AND o.status = '01'
+
+    GROUP BY o.meterno, ref.REF_DATE
+),
+
+/* ================================================================
    DERNIER PROFIL PREPAID
 
    Dernier profil REEL par METER : prepaid_profile_p contient une
@@ -472,10 +534,65 @@ coms AS (
                 AND a.TOT_KWH IS NOT NULL
             )
         )
+),
+
+/* ================================================================
+   MONTANT FACTURE SUR 12 MOIS (colonne 31, base de VALUE_SEGMENT)
+
+   Source officielle des factures : CMSADMIN.RECIBOS (une ligne par
+   facture, NUM_REC unique ; vue ICSVIEWS.BILL_HEAD : NIS_RAD =
+   service_no, F_FACT = billing_date, IMP_TOT_REC = bill_amount,
+   EST_ACT = bill_status, TIP_REC = bill_type).
+
+   Fenetre commune a toute l'extraction : les 12 derniers mois CLOS
+   avant le mois de l'execution, F_FACT dans
+   [ ADD_MONTHS(TRUNC(SYSDATE,'MM'), -12) ; TRUNC(SYSDATE,'MM') [
+   (SYSDATE est le meme pour toute l'instruction ; la table est
+   partitionnee par F_FACT : seules ces partitions sont lues).
+
+   Factures retenues :
+     EST_ACT  hors ER600 (CANCELLED) et ER900 (CANCELLED DUE TO CREATION
+              OF MORE THAN ONE RECEIVABLE) : une facture corrigee est
+              annulee puis refacturee ; seule la refacturation compte,
+              donc aucun double comptage. Il n'existe pas d'avoir separe
+              (194 montants negatifs sur 19 M de factures, gardes : le
+              montant est un net).
+     TIP_REC  facturation de la consommation et des frais :
+                TR010 COMMODITY - USAGE INVOICE
+                TR020 COMMODITY - CONNECTION FEES
+                TR030 RECONNECTION CHARGES
+                TR040 MISCELLANEOUS CHARGES
+                TR050 FRAUD INVOICE
+              exclus : TR022 SECURITY DEPOSIT (depot remboursable),
+              TR060 / TR063 INSTALLMENT AGREEMENT (reechelonnement d'une
+              dette deja facturee : double comptage), TR071 / TR072
+              ADVANCE PAYMENT (avance, pas une facture), TR021 CAPITAL
+              CONTRIBUTION. LISTE A VALIDER PAR LE METIER (une ligne).
+   Montant TTC (IMP_TOT_REC), en FCFA, arrondi a l'unite (le FCFA n'a
+   pas de subdivision ; evite aussi le separateur decimal de la session).
+   Cle : NIS_RAD = CONTRACT. Une ligne par contrat (GROUP BY).
+   ================================================================= */
+
+billing_12m AS (
+    SELECT /*+ PARALLEL(8) */
+
+        r.NIS_RAD,
+
+        ROUND(SUM(r.IMP_TOT_REC)) AS AMOUNT_BILLED_12M
+
+    FROM cmsadmin.recibos r
+
+    WHERE r.F_FACT >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -12)
+      AND r.F_FACT <  TRUNC(SYSDATE, 'MM')
+      AND r.EST_ACT NOT IN ('ER600', 'ER900')
+      AND r.TIP_REC IN ('TR010', 'TR020', 'TR030', 'TR040', 'TR050')
+
+    GROUP BY r.NIS_RAD
 )
 
 /* =================================================================
-   RESULTAT FINAL — 27 COLONNES
+   RESULTAT FINAL — 32 COLONNES (28 FAILURE_SUBCATEGORY, 29-30 ANCIENNETE
+   PREPAID, 31-32 MONTANT FACTURE 12 MOIS ET VALUE)
    ================================================================= */
 
 SELECT /*+ PARALLEL(8) */
@@ -742,7 +859,118 @@ SELECT /*+ PARALLEL(8) */
 
                 ELSE 'NEVER_PAID'
             END
-    END AS FAILURE_SUBCATEGORY
+    END AS FAILURE_SUBCATEGORY,
+
+    /* =============================================================
+       29 — PREPAID_RECENCY_DAYS
+       30 — PREPAID_RECENCY_STATUS
+
+       Attributs d'analyse (graphique « Ancienneté du dernier achat ») :
+       ils ne changent ni SEGMENTATION ni aucun seuil. Renseignes pour les
+       compteurs PREPAID seulement (meme condition que METER = 'PREPAID'),
+       NULL pour tout autre client.
+
+       Source de la date du dernier achat, par priorite :
+         1. profil RFM : LASTPURCHASE_DATE de la ligne retenue
+            (prepaid_recense.RECENSE, la recence de la segmentation) ;
+         2. sinon ORDER_MASTER (prepaid_om_last_purchase), tout
+            l'historique, dernier achat <= REF_DATE.
+       Une date de profil valide n'est jamais remplacee.
+
+       Statut (PREPAID_RECENCY_DAYS non NULL si et seulement si KNOWN) :
+         KNOWN           dernier achat connu, <= REF_DATE ; jours >= 0
+         NO_PURCHASE     aucun achat 01/01 dans ORDER_MASTER
+         POST_REFERENCE  aucun achat <= REF_DATE, au moins un achat entre
+                         REF_DATE + 1 et aujourd'hui (nouvel acheteur)
+         UNKNOWN         achats sans date exploitable (sans date, ou dates
+                         posterieures a aujourd'hui seulement)
+       ============================================================= */
+
+    CASE
+        WHEN p.METER_PREP IS NOT NULL
+        THEN COALESCE(rec.RECENSE, olp.RECENCY_DAYS)
+    END AS PREPAID_RECENCY_DAYS,
+
+    CASE
+        WHEN p.METER_PREP IS NULL
+        THEN NULL
+
+        WHEN rec.RECENSE IS NOT NULL
+          OR olp.RECENCY_DAYS IS NOT NULL
+        THEN 'KNOWN'
+
+        WHEN olp.METER_PREP IS NULL
+        THEN 'NO_PURCHASE'
+
+        WHEN olp.N_AFTER_REF > 0
+        THEN 'POST_REFERENCE'
+
+        ELSE 'UNKNOWN'
+    END AS PREPAID_RECENCY_STATUS,
+
+    /* =============================================================
+       31 — AMOUNT_BILLED_12M
+       Montant facture sur les 12 mois clos (billing_12m), FCFA entiers.
+       0 pour un contrat sans facture retenue dans la fenetre (y compris
+       PREPAID : seuls leurs frais sont factures). Jamais NULL.
+       ============================================================= */
+
+    COALESCE(b.AMOUNT_BILLED_12M, 0) AS AMOUNT_BILLED_12M,
+
+    /* =============================================================
+       32 — VALUE_SEGMENT (segmentation commerciale, analyse)
+
+       Population classee (eligible) : contrats aux 4 statuts actifs
+       d'Extractor, factures (POSTPAID ou Compteurs Communicants : non
+       PREPAID, meme condition que METER), avec AMOUNT_BILLED_12M > 0.
+       NULL pour tout autre contrat (sans facturation 12 mois, PREPAID,
+       statut inactif) : il n'est ni Top, ni Medium, ni Bottom.
+
+       Classement sur toute la population eligible de l'extraction (pas
+       sous les filtres de l'ecran), par montant decroissant :
+         n    = nombre de contrats eligibles
+         rang = RANK() : les montants egaux partagent le meme rang
+         Top 20%     rang <= 0,2 x n
+         Medium 50%  0,2 x n < rang <= 0,7 x n
+         Bottom 30%  rang > 0,7 x n
+       Ex aequo : des montants identiques sont toujours dans la meme
+       categorie (celle du premier rang du groupe), quel que soit le
+       numero de contrat ; les effectifs peuvent donc depasser 20 / 50 %
+       de la taille du groupe d'ex aequo a cheval sur un seuil. Les trois
+       categories couvrent exactement la population eligible. Les seuils
+       en FCFA sont ceux des donnees, jamais codes.
+       Teste tel quel sur DuckDB (tests/unit/BillingValueRankingTest.php,
+       entre les marqueurs VALUE_RANK).
+       ============================================================= */
+
+    /* VALUE_RANK_BEGIN */
+    CASE
+        WHEN TRIM(l.STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.')
+         AND p.METER_PREP IS NULL
+         AND b.AMOUNT_BILLED_12M > 0
+        THEN
+            CASE
+                WHEN RANK() OVER (
+                         PARTITION BY CASE WHEN TRIM(l.STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.') AND p.METER_PREP IS NULL AND b.AMOUNT_BILLED_12M > 0 THEN 1 ELSE 0 END
+                         ORDER BY b.AMOUNT_BILLED_12M DESC
+                     ) <= 0.2 * COUNT(*) OVER (
+                         PARTITION BY CASE WHEN TRIM(l.STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.') AND p.METER_PREP IS NULL AND b.AMOUNT_BILLED_12M > 0 THEN 1 ELSE 0 END
+                     )
+                THEN 'Top 20%'
+
+                WHEN RANK() OVER (
+                         PARTITION BY CASE WHEN TRIM(l.STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.') AND p.METER_PREP IS NULL AND b.AMOUNT_BILLED_12M > 0 THEN 1 ELSE 0 END
+                         ORDER BY b.AMOUNT_BILLED_12M DESC
+                     ) <= 0.7 * COUNT(*) OVER (
+                         PARTITION BY CASE WHEN TRIM(l.STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.') AND p.METER_PREP IS NULL AND b.AMOUNT_BILLED_12M > 0 THEN 1 ELSE 0 END
+                     )
+                THEN 'Medium 50%'
+
+                ELSE 'Bottom 30%'
+            END
+    END
+    /* VALUE_RANK_END */
+    AS VALUE_SEGMENT
 
 FROM lister l
 
@@ -782,6 +1010,17 @@ LEFT JOIN prepaid_rfm rfm
     ON rfm.METER = l.METER_NO
 
 /* ================================================================
+   ANCIENNETE DU DERNIER ACHAT PREPAID (analyse, colonnes 29 et 30)
+   Une ligne par compteur dans chaque source : aucune multiplication.
+   ================================================================= */
+
+LEFT JOIN prepaid_recense rec
+    ON rec.METER = l.METER_NO
+
+LEFT JOIN prepaid_om_last_purchase olp
+    ON olp.METER_PREP = l.METER_NO
+
+/* ================================================================
    PROFIL POSTPAID
    ================================================================= */
 
@@ -794,3 +1033,11 @@ LEFT JOIN profile_calculation pp
 
 LEFT JOIN f045_000.temp_xy_coordinate txy
     ON txy.CONTRAT = l.CONTRACT
+
+/* ================================================================
+   MONTANT FACTURE 12 MOIS (colonnes 31-32) : une ligne par contrat
+   dans billing_12m, aucune multiplication.
+   ================================================================= */
+
+LEFT JOIN billing_12m b
+    ON b.NIS_RAD = l.CONTRACT

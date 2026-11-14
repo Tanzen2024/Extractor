@@ -82,10 +82,12 @@ final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsP
         $index   = $reader->index();
         $matcher = new RowMatcher($criteria, $index, $this->snapshot->dateFormat());
 
-        $columns   = CustomerListExportService::COLUMNS;
+        // Every export column; an optional one this version does not carry
+        // (CustomerListExportService::EXPORT_COLUMNS) is written empty.
+        $columns   = CustomerListExportService::EXPORT_COLUMNS;
         $positions = [];
         foreach ($columns as $column) {
-            $positions[$column] = $index[$column];
+            $positions[$column] = $index[$column] ?? null;
         }
 
         // When the snapshot holds exactly the export columns, in export
@@ -97,6 +99,17 @@ final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsP
         // by-name picking. each() guarantees every record has
         // count($index) fields, so array_combine() always gets equal sizes.
         $combine = count($index) === count($columns) && array_values($positions) === array_keys($columns);
+        $hasMissing = in_array(null, $positions, true);
+        // A file holding exactly the 25 required columns, in order (every
+        // customers:refresh file before the optional columns existed): one
+        // array_combine() over the columns before UPDATED_AT, the optional
+        // columns empty, UPDATED_AT last — same keys, EXPORT_COLUMNS order.
+        $base        = CustomerListExportService::COLUMNS;
+        $lastIdx     = count($base) - 1;
+        $head        = array_slice($base, 0, $lastIdx);
+        $blanks      = array_fill_keys(array_values(array_diff($columns, $base)), '');
+        $combineBase = ! $combine && array_keys($index) === $base && $base[$lastIdx] === 'UPDATED_AT'
+            && $columns === [...$head, ...array_keys($blanks), 'UPDATED_AT'];
 
         $max      = $this->maxRows;
         $progress = $this->progress;
@@ -113,7 +126,7 @@ final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsP
                 $progress(0, $total, 0);
             }
 
-            $reader->each(static function (array $fields) use ($matcher, $positions, $columns, $combine, $onRow, $max, $progress, $total, $every, &$emitted, &$read, &$filterNs, &$emitNs): bool {
+            $reader->each(static function (array $fields) use ($matcher, $positions, $columns, $combine, $hasMissing, $head, $lastIdx, $blanks, $combineBase, $onRow, $max, $progress, $total, $every, &$emitted, &$read, &$filterNs, &$emitNs): bool {
                 // Progress follows the scan, not the matches: a selective
                 // filter still moves the bar. One modulo per row, the
                 // listener itself only every $every rows.
@@ -133,10 +146,21 @@ final class SnapshotRowSource implements RowSource, ReportsStreamStats, ReportsP
                 $te = hrtime(true);
                 if ($combine) {
                     $row = array_combine($columns, $fields);
+                } elseif ($combineBase) {
+                    $updatedAt = $fields[$lastIdx];
+                    unset($fields[$lastIdx]);
+                    $row = array_combine($head, $fields) + $blanks;
+                    $row['UPDATED_AT'] = $updatedAt;
                 } else {
                     $row = [];
-                    foreach ($positions as $column => $i) {
-                        $row[$column] = $fields[$i];
+                    if ($hasMissing) {
+                        foreach ($positions as $column => $i) {
+                            $row[$column] = $i === null ? '' : $fields[$i];
+                        }
+                    } else {
+                        foreach ($positions as $column => $i) {
+                            $row[$column] = $fields[$i];
+                        }
                     }
                 }
                 $onRow($row);

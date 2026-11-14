@@ -38,6 +38,9 @@ final class SnapshotReader
     /** @var array<string, string> */
     private array $derivation = [];
 
+    /** @var list<array{int, int, string, string}> field, condition field, condition value, value */
+    private array $blankFills = [];
+
     public function __construct(private readonly string $path, private readonly string $delimiter)
     {
         $handle = @fopen($path, 'rb');
@@ -110,6 +113,20 @@ final class SnapshotReader
     }
 
     /**
+     * Records whose $column is blank (after translate()) while $whenColumn
+     * holds exactly $whenValue (trimmed) are delivered with $value instead.
+     * The file is not changed.
+     */
+    public function fillBlank(string $column, string $whenColumn, string $whenValue, string $value): self
+    {
+        if (isset($this->index[$column], $this->index[$whenColumn])) {
+            $this->blankFills[] = [$this->index[$column], $this->index[$whenColumn], $whenValue, $value];
+        }
+
+        return $this;
+    }
+
+    /**
      * Calls $onRecord(list<string> $fields) for every data record, in file
      * order; stops early when it returns false. Returns the number of
      * records read.
@@ -140,6 +157,12 @@ final class SnapshotReader
 
             foreach ($this->translations as $field => $translation) {
                 $fields[$field] = $translation[trim($fields[$field])] ?? $fields[$field];
+            }
+
+            foreach ($this->blankFills as [$field, $when, $whenValue, $value]) {
+                if (trim($fields[$field]) === '' && trim($fields[$when]) === $whenValue) {
+                    $fields[$field] = $value;
+                }
             }
 
             $read++;

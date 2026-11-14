@@ -19,7 +19,9 @@
         "contactFilled": "Contact on file",
         "activeContracts": "Active contracts",
         "smartMeters": "Smart meters",
-        "notProvided": "Not provided"
+        "notProvided": "Not provided",
+        "value": "Value",
+        "amountBilled12m": "Amount billed (12 months)"
     },
     "common": {
         "loading": "Loading…",
@@ -89,7 +91,9 @@
             "DATE_RESILIATION": "Termin. date",
             "NIU_TO_RECLASS": "NIU to reclassify",
             "SEGMENTATION": "Segmentation",
-            "UPDATED_AT": "Updated on"
+            "UPDATED_AT": "Updated on",
+            "AMOUNT_BILLED_12M": "Amount billed (12 months)",
+            "VALUE_SEGMENT": "Value"
         },
         "multiselect": {
             "all": "All",
@@ -165,7 +169,52 @@
             "filter": "Défaillant component",
             "alwaysLate": "Always Late",
             "sometimePaid": "Sometime Paid",
-            "neverPaid": "Never Paid"
+            "neverPaid": "Never Paid",
+            "unassigned": "Including {count} customers not broken down (no sub-category), counted in the total."
+        },
+        "recency": {
+            "classes": {
+                "D0_29": {
+                    "range": "0 to 29 days",
+                    "meaning": "Recent activity"
+                },
+                "D30_59": {
+                    "range": "30 to 59 days",
+                    "meaning": "Recent inactivity"
+                },
+                "D60_89": {
+                    "range": "60 to 89 days",
+                    "meaning": "Intermediate inactivity"
+                },
+                "D90_179": {
+                    "range": "90 to 179 days",
+                    "meaning": "Prolonged inactivity"
+                },
+                "D180_359": {
+                    "range": "180 to 359 days",
+                    "meaning": "Significant inactivity"
+                },
+                "D360_PLUS": {
+                    "range": "360 days and more",
+                    "meaning": "Very significant inactivity"
+                },
+                "NO_PURCHASE": {
+                    "range": "No purchase found",
+                    "meaning": "Never purchased"
+                },
+                "POST_REFERENCE": {
+                    "range": "Purchase after the reference date",
+                    "meaning": "Purchase after the reference"
+                },
+                "UNKNOWN": {
+                    "range": "Unknown date",
+                    "meaning": "Date unavailable"
+                }
+            },
+            "unavailable": "Data not available — the upstream source does not provide purchase recency yet.",
+            "tooltip": "{count} customers · {pct} % of the filtered PREPAID total",
+            "gap": "Reconciliation gap: {sum} customers broken down for {total} PREPAID customers (gap {diff}).",
+            "inconsistent": "{count} customers have an inconsistent recency in the source: counted as “Unknown date”."
         }
     },
     "export": {

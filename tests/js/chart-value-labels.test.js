@@ -126,6 +126,12 @@ test('dashboard: plugin loaded after Chart.js, registered with the app fmt, tool
     assert.ok(chartjs !== -1 && labels > chartjs && labels < view.indexOf("assets/js/dashboard.js'"));
     assert.match(js, /Chart\.register\(window\.bscdChartValueLabels\.plugin\)/);
     assert.match(js, /bscdValueLabels\.formatValue = fmt;/);
-    assert.doesNotMatch(js, /formatPercent|\bpct\(|\.percent\(/);
-    assert.equal((js.match(/tooltip: \{ callbacks:/g) || []).length, 2); // segmentation + Défaillant
+    // Counts only — except "Ancienneté du dernier achat", whose brief asks for
+    // count + share of the filtered PREPAID total on each bar.
+    const start = js.indexOf('function recencyBreakdown(');
+    const end = js.indexOf('\n    }\n', start);
+    assert.ok(start !== -1 && end > start);
+    const others = js.slice(0, start) + js.slice(end);
+    assert.doesNotMatch(others, /formatPercent|\bpct\(|\.percent\(/);
+    assert.equal((js.match(/tooltip: \{ callbacks:/g) || []).length, 3); // segmentation + Défaillant + ancienneté
 });

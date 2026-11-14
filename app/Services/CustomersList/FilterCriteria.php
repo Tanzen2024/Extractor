@@ -50,6 +50,7 @@ final class FilterCriteria
      * @param bool|null    $hasContact true = contact filled in, false = none, null = no filter
      * @param list<string> $failureSubcategories FailureSubcategories::VALUES — the detail list of the
      *                     Postpaid breakdown, not one of the official filters
+     * @param list<string> $values BillingValue::VALUES — the Value filter (VALUE_SEGMENT)
      */
     private function __construct(
         public readonly ?DateTimeImmutable $dateFrom,
@@ -65,6 +66,7 @@ final class FilterCriteria
         public readonly array $niuQualities,
         public readonly ?bool $hasContact = null,
         public readonly array $failureSubcategories = [],
+        public readonly array $values = [],
     ) {
         // Out-of-perimeter statuses are dropped; a selection made ONLY of
         // such statuses (e.g. an export job stored before the perimeter
@@ -135,6 +137,17 @@ final class FilterCriteria
         }
         $hasContact = count($contact) === 1 ? $contact[0] === self::CONTACT_YES : null;
 
+        // Value: the 3 fixed VALUE_SEGMENT categories. All three ticked = no
+        // restriction, like every other list (the unranked customers are not
+        // selectable, as blanks elsewhere).
+        $values = array_values(array_unique($list(BillingValue::REQUEST_KEY)));
+        if (array_diff($values, BillingValue::VALUES) !== []) {
+            throw new InvalidFilterException(lang('Dashboard.validation.invalidValue', ['label' => lang('Glossary.value')]));
+        }
+        if (count($values) === count(BillingValue::VALUES)) {
+            $values = [];
+        }
+
         $failure = array_values(array_unique($list('failure_subcategory')));
         if (array_diff($failure, FailureSubcategories::VALUES) !== []) {
             throw new InvalidFilterException(lang('Dashboard.validation.invalidValue', ['label' => lang('Dashboard.failure.filter')]));
@@ -160,6 +173,7 @@ final class FilterCriteria
             niuQualities: $pick(lang('Glossary.niuQuality'), $allowed->niuQualities, 'niu_qc'),
             hasContact: $hasContact,
             failureSubcategories: $failure,
+            values: array_values(array_intersect(BillingValue::VALUES, $values)),
         );
     }
 
@@ -186,6 +200,7 @@ final class FilterCriteria
             niuQualities: $data['niuQualities'] ?? [],
             hasContact: isset($data['hasContact']) ? (bool) $data['hasContact'] : null,
             failureSubcategories: $data['failureSubcategories'] ?? [],
+            values: $data['values'] ?? [],
         );
     }
 
@@ -208,6 +223,7 @@ final class FilterCriteria
             'niuQualities'   => $this->niuQualities,
             'hasContact'     => $this->hasContact,
             'failureSubcategories' => $this->failureSubcategories,
+            'values'         => $this->values,
         ], static fn ($v) => $v !== null && $v !== []);
     }
 
@@ -222,6 +238,7 @@ final class FilterCriteria
         return new self(
             $this->dateFrom, $this->dateTo, $this->regions, $this->divisions, $this->agences, $this->statuses,
             [], $this->segmentsTresor, $this->meters, $this->voltages, $this->niuQualities, $this->hasContact, $this->failureSubcategories,
+            $this->values,
         );
     }
 
@@ -266,6 +283,7 @@ final class FilterCriteria
         if ($this->voltages !== [])       { $out[lang('Glossary.voltage')] = $join($this->voltages); }
         if ($this->niuQualities !== [])   { $out[lang('Glossary.niuQuality')] = $join($this->niuQualities); }
         if ($this->hasContact !== null)   { $out[lang('Glossary.contactFilled')] = lang($this->hasContact ? 'App.yes' : 'App.no'); }
+        if ($this->values !== [])         { $out[lang('Glossary.value')] = $join($this->values); }
         if ($this->failureSubcategories !== []) {
             $out[lang('Dashboard.failure.filter')] = $join(array_map(FailureSubcategories::label(...), $this->failureSubcategories));
         }

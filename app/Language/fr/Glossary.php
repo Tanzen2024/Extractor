@@ -26,5 +26,7 @@ return [
     'activeContracts'             => 'Contrats actifs',
     'smartMeters'                 => 'Compteurs communicants',
     'notProvided'                 => 'Non renseigné',
+    'value'                       => 'Value',
+    'amountBilled12m'             => 'Montant facturé 12 mois',
     'subscriptionPeriod'          => 'Période (abonnement)',
 ];

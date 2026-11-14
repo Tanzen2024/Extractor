@@ -22,5 +22,7 @@ return [
     'activeContracts'             => 'Active contracts',
     'smartMeters'                 => 'Smart meters',
     'notProvided'                 => 'Not provided',
+    'value'                       => 'Value',
+    'amountBilled12m'             => 'Amount billed (12 months)',
     'subscriptionPeriod'          => 'Period (subscription)',
 ];

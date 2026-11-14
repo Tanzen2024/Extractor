@@ -32,6 +32,16 @@ final class PostpaidSegmentations
     public const DEFAILLANT = '6 Défaillant';
 
     /**
+     * "6 Défaillant" whose "é" was replaced by two U+FFFD (bytes EF BF BD
+     * EF BF BD) upstream: CMS_RFC.POSTPAID_PROFILE_P.PROFILE already stores it
+     * so (diagnosed 2026-11-13; the database is AL32UTF8 and every other
+     * accented value reaches Extractor intact). Same profile, so it is folded
+     * into DEFAILLANT on read. Only this exact sequence: no accent is
+     * repaired anywhere else. Written with escapes, never as the raw bytes.
+     */
+    public const DEFAILLANT_CORRUPTED = "6 D\u{FFFD}\u{FFFD}faillant";
+
+    /**
      * Former SEGMENTATION values => what they are now. Snapshots produced
      * before the rule keep them in their CSV, which is never rewritten (the
      * source value stays traceable there): every read of a snapshot goes
@@ -46,14 +56,18 @@ final class PostpaidSegmentations
         '8 Never Paid'    => '6 Défaillant',
         '10 Other'        => '6 Défaillant',
         '8 Autre'         => '6 Défaillant',
+        self::DEFAILLANT_CORRUPTED => '6 Défaillant',
     ];
 
     /**
      * Mixed into the dashboard cache keys: figures cached before LEGACY, before
-     * the 3-component Défaillant breakdown (no OTHER), or before the former
-     * unclassified customers joined 6 Défaillant, are not served.
+     * the 3-component Défaillant breakdown (no OTHER), before the former
+     * unclassified customers joined 6 Défaillant, or before the corrupted
+     * Défaillant label was folded in, or before '6 Never Vending' was folded
+     * into 6-Never Vending, or before a blank PREPAID segment was read as
+     * PrepaidSegmentations::BLANK_TO, are not served.
      */
-    public const CACHE_TAG = 'seg6p6f3d';
+    public const CACHE_TAG = 'seg6p6f3dUnvB';
 
     /** Every former SEGMENTATION value, both universes. */
     public const ALL_LEGACY = self::LEGACY + PrepaidSegmentations::LEGACY;

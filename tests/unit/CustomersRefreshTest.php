@@ -1,6 +1,8 @@
 <?php
 
 use App\Services\CustomerListExportService;
+use App\Services\CustomersList\BillingValue;
+use App\Services\CustomersList\PrepaidRecency;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\OracleExtractionService;
 use App\Services\Refresh\CustomersRefresher;
@@ -97,6 +99,71 @@ final class CustomersRefreshTest extends TestCase
         }
     }
 
+    public function testPrepaidRecencyColumnsAreReadWhenTheTableHasThem(): void
+    {
+        $rows = self::oracleRows(4);
+        foreach ($rows as $i => &$row) {
+            $row[PrepaidRecency::DAYS_COLUMN]   = $i === 0 ? '12' : null;  // NUMBER, NULL when not KNOWN
+            $row[PrepaidRecency::STATUS_COLUMN] = $i === 0 ? 'KNOWN' : 'NO_PURCHASE';
+        }
+        unset($row);
+        $oracle = new RefreshFakeOracle($rows, 4);
+        $oracle->tableColumns = [PrepaidRecency::STATUS_COLUMN, PrepaidRecency::DAYS_COLUMN]; // any order in the dictionary
+
+        $r = (new CustomersRefresher($this->fx->store, new OracleSnapshotExtractor($oracle)))->refresh();
+        $this->assertSame(CustomersRefresher::RESULT_ACTIVATED, $r['result'], $r['message']);
+
+        $header = explode('#', (string) $this->fx->store->active()->meta['header']);
+        $this->assertSame([PrepaidRecency::DAYS_COLUMN, PrepaidRecency::STATUS_COLUMN], array_slice($header, -2), 'appended after the exported columns, fixed order');
+        $lines = file($this->fx->store->active()->csvPath, FILE_IGNORE_NEW_LINES);
+        $this->assertStringEndsWith('#12#KNOWN', $lines[1]);
+        $this->assertStringEndsWith('##NO_PURCHASE', $lines[2], 'NULL days stay empty, never a sentinel');
+    }
+
+    public function testAmountBilledAndValueColumnsTravelFromOracleToTheSnapshot(): void
+    {
+        $rows = self::oracleRows(3);
+        $rows[0][BillingValue::AMOUNT_COLUMN]  = '1234567';  // NUMBER, whole FCFA
+        $rows[0][BillingValue::SEGMENT_COLUMN] = 'Top 20%';
+        $rows[1][BillingValue::AMOUNT_COLUMN]  = '0';        // no bill over 12 months
+        $rows[1][BillingValue::SEGMENT_COLUMN] = null;       // not ranked: NULL -> empty
+        $rows[2][BillingValue::AMOUNT_COLUMN]  = '-150';     // negative net
+        $rows[2][BillingValue::SEGMENT_COLUMN] = null;
+        $oracle = new RefreshFakeOracle($rows, 3);
+        $oracle->tableColumns = [BillingValue::SEGMENT_COLUMN, BillingValue::AMOUNT_COLUMN, PrepaidRecency::DAYS_COLUMN];
+
+        $r = (new CustomersRefresher($this->fx->store, new OracleSnapshotExtractor($oracle)))->refresh();
+        $this->assertSame(CustomersRefresher::RESULT_ACTIVATED, $r['result'], $r['message']);
+
+        $header = explode('#', (string) $this->fx->store->active()->meta['header']);
+        $this->assertSame([PrepaidRecency::DAYS_COLUMN, BillingValue::AMOUNT_COLUMN, BillingValue::SEGMENT_COLUMN], array_slice($header, -3), 'OPTIONAL_COLUMNS order');
+        $lines = file($this->fx->store->active()->csvPath, FILE_IGNORE_NEW_LINES);
+        $this->assertStringEndsWith('#1234567#Top 20%', $lines[1]);
+        $this->assertStringEndsWith('#0#', $lines[2]);
+        $this->assertStringEndsWith('#-150#', $lines[3]);
+
+        // Oracle -> CSV -> export: the same values reach the exported file.
+        $out = [];
+        (new SnapshotRowSource(snapshot: $this->fx->store->active(), store: $this->fx->store))->stream(FilterCriteria::none(), static function (array $row) use (&$out): void {
+            $out[$row['CONTRACT']] = [$row[BillingValue::AMOUNT_COLUMN], $row[BillingValue::SEGMENT_COLUMN]];
+        });
+        $this->assertSame(['1234567', 'Top 20%'], $out[$rows[0]['CONTRACT']]);
+        $this->assertSame(['0', ''], $out[$rows[1]['CONTRACT']]);
+    }
+
+    public function testATableWithoutTheRecencyColumnsStillRefreshes(): void
+    {
+        $oracle = new RefreshFakeOracle(self::oracleRows(3), 3);
+        $oracle->tableColumns = [PrepaidRecency::DAYS_COLUMN]; // half-deployed: one column only
+
+        $r = (new CustomersRefresher($this->fx->store, new OracleSnapshotExtractor($oracle)))->refresh();
+        $this->assertSame(CustomersRefresher::RESULT_ACTIVATED, $r['result'], $r['message']);
+        $header = explode('#', (string) $this->fx->store->active()->meta['header']);
+        $this->assertContains(PrepaidRecency::DAYS_COLUMN, $header, 'what exists is read');
+        $this->assertNotContains(PrepaidRecency::STATUS_COLUMN, $header);
+        $this->assertFalse(PrepaidRecency::availableIn($header), 'and the chart says "not available"');
+    }
+
     public function testSmallVolumeBecomesTheActiveWorkingFile(): void
     {
         $logs = [];
@@ -124,7 +191,7 @@ final class CustomersRefreshTest extends TestCase
         $source->stream(FilterCriteria::none(), static function (array $row) use (&$out): void {
             $out[] = $row;
         });
-        $this->assertSame(CustomerListExportService::COLUMNS, array_keys($out[0]));
+        $this->assertSame(CustomerListExportService::EXPORT_COLUMNS, array_keys($out[0]));
         $this->assertSame('', $out[0]['E_MAIL'], 'NULL becomes an empty field');
 
         // The new version comes with its dashboard index, built from this CSV
@@ -349,10 +416,18 @@ final class RefreshFakeOracle extends OracleExtractionService
         $this->stamp ??= sprintf('2026-09-27 04:%02d:%02d', intdiv(++self::$loads, 60) % 60, self::$loads % 60);
     }
 
+    /** @var list<string> optional analysis columns the fake table has (ALL_TAB_COLUMNS) */
+    public array $tableColumns = [];
+
     public function select(string $sql, array $binds = [], int $maxRows = 5000): array
     {
         if ($this->failCount !== null) {
             throw $this->failCount;
+        }
+        if (str_contains($sql, 'ALL_TAB_COLUMNS')) {
+            $found = array_values(array_filter($this->tableColumns, static fn (string $c): bool => str_contains($sql, "'{$c}'")));
+
+            return ['columns' => ['COLUMN_NAME'], 'rows' => array_map(static fn (string $c): array => ['COLUMN_NAME' => $c], $found)];
         }
 
         return ['columns' => ['N', 'SOURCE_UPDATED_AT'], 'rows' => [['N' => (string) $this->count, 'SOURCE_UPDATED_AT' => $this->stamp]]];

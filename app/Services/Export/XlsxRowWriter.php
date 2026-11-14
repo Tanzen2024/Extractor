@@ -3,6 +3,7 @@
 namespace App\Services\Export;
 
 use OpenSpout\Common\Entity\Cell\EmptyCell;
+use OpenSpout\Common\Entity\Cell\NumericCell;
 use OpenSpout\Common\Entity\Cell\StringCell;
 use OpenSpout\Common\Entity\Row;
 use OpenSpout\Writer\XLSX\Options;
@@ -66,6 +67,8 @@ class XlsxRowWriter
         private readonly int $maxRowsPerSheet,
         private readonly string $sheetBaseName = 'CustomerList',
         ?string $tempFolder = null,
+        // Columns written as numbers when the value is a whole number (else as text).
+        private readonly array $numericColumns = [],
     ) {
         $options = new Options();
         if ($tempFolder !== null) {
@@ -100,9 +103,13 @@ class XlsxRowWriter
         $cells = [];
         foreach ($this->columns as $column) {
             $value    = $row[$column] ?? null;
-            $cells[]  = ($value === null || $value === '')
-                ? new EmptyCell(null, null)
-                : new StringCell((string) $value, null);
+            if ($value === null || $value === '') {
+                $cells[] = new EmptyCell(null, null);
+            } elseif ($this->numericColumns !== [] && in_array($column, $this->numericColumns, true) && preg_match('/^-?\d{1,15}$/', (string) $value) === 1) {
+                $cells[] = new NumericCell((int) $value, null);
+            } else {
+                $cells[] = new StringCell((string) $value, null);
+            }
         }
 
         $this->writer->addRow(new Row($cells));

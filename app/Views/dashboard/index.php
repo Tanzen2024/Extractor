@@ -99,6 +99,12 @@
                 <label><?= esc(lang('Glossary.contactFilled')) ?></label>
                 <div class="bscd-ms" data-dim="contact"></div>
             </div>
+            <?php // Value (VALUE_SEGMENT, App\Services\CustomersList\BillingValue): shown by
+                  // dashboard.js only when the active snapshot carries the column. ?>
+            <div class="bscd-filter-group" data-ms="value" data-value-filter hidden>
+                <label><?= esc(lang('Glossary.value')) ?></label>
+                <div class="bscd-ms" data-dim="value"></div>
+            </div>
             <div class="bscd-filter-group" data-ms="status">
                 <label><?= esc(lang('Glossary.status')) ?></label>
                 <div class="bscd-ms" data-dim="status"></div>
@@ -198,8 +204,10 @@ $sections = [
         </div>
 
         <?php if ($sk === 'postpaid'): ?>
-        <?php // 2. Décomposition du profil Défaillant: 4 analytic components, never
-              // profiles; counts in the legend, a slice or legend item opens its customers. ?>
+        <?php // 2. Décomposition du profil Défaillant: exactly 3 analytic components, never
+              // profiles; counts in the legend, a slice or legend item opens its customers.
+              // data-failure-unassigned: one secondary line, outside the chart, for the
+              // Défaillant customers without a component (filled by dashboard.js). ?>
         <div class="bscd-chart-card bscd-viz bscd-failure">
             <div class="bscd-chart-card__header">
                 <h3 class="bscd-chart-card__title"><?= esc(lang('Dashboard.failure.title')) ?></h3>
@@ -207,6 +215,23 @@ $sections = [
                 <div class="bscd-cx" data-chart-export="postpaid-failure"></div>
             </div>
             <div class="bscd-chart-card__body bscd-viz__chart bscd-viz__chart--doughnut" data-chart-wrap="failure"><canvas id="bscdChart_postpaid_failure"></canvas></div>
+            <p class="bscd-failure-unassigned d-none" data-failure-unassigned></p>
+        </div>
+        <?php endif; ?>
+
+        <?php if ($sk === 'prepaid'): ?>
+        <?php // 2. Ancienneté du dernier achat: an analysis of the PREPAID rows
+              // (App\Services\CustomersList\PrepaidRecency), never segments;
+              // count + share of the filtered PREPAID total on each bar. The
+              // note reports a reconciliation gap or unusable source pairs. ?>
+        <div class="bscd-chart-card bscd-viz bscd-recency">
+            <div class="bscd-chart-card__header">
+                <h3 class="bscd-chart-card__title"><?= esc(lang('Dashboard.recency.title')) ?></h3>
+                <div class="bscd-chart-card__subtitle"><?= esc(lang('Dashboard.recency.subtitle')) ?></div>
+                <div class="bscd-cx" data-chart-export="prepaid-recency"></div>
+            </div>
+            <div class="bscd-chart-card__body bscd-viz__chart bscd-viz__chart--bars" data-chart-wrap="recency"><canvas id="bscdChart_prepaid_recency"></canvas></div>
+            <p class="bscd-recency__note" data-recency-note role="status" hidden></p>
         </div>
         <?php endif; ?>
     </div>
@@ -275,7 +300,9 @@ $sections = [
         </div>
     </div>
 
-    <div class="bscd-table-scroll">
+    <?php // table-hscroll.js: data-hscroll-sticky pins a synchronised horizontal scrollbar to the viewport bottom;
+          // data-sticky-head pins a synchronised copy of the header to the viewport top. ?>
+    <div class="bscd-table-scroll" data-hscroll-sticky data-sticky-head>
         <table class="bscd-datatable" id="bscdTable">
             <thead><tr id="bscdTableHead"></tr></thead>
             <tbody id="bscdTableBody"></tbody>
@@ -365,4 +392,5 @@ $sections = [
       // export-progress.js / export-widget.js: loaded by layout/main.php, before these. ?>
 <script src="<?= base_url('assets/js/dashboard-sections.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/dashboard-sections.js') ?: 0 ?>"></script>
 <script src="<?= base_url('assets/js/dashboard.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/dashboard.js') ?: 0 ?>"></script>
+<script src="<?= base_url('assets/js/table-hscroll.js') ?>?v=<?= @filemtime(FCPATH . 'assets/js/table-hscroll.js') ?: 0 ?>"></script>
 <?= $this->endSection() ?>

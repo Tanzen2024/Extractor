@@ -187,9 +187,22 @@ rangé dans `NEVER_PAID`, et les trois composantes totalisent exactement le prof
 Mise en production, dans cet ordre, sur le serveur source :
 
 0. contrôle à blanc, sans écriture : `./validate_customers_list.sh customers_list.sql CMS_RFC@cmsprod` ;
-1. `ALTER TABLE CMS_RFC.TB_CUSTOMERS_LIST ADD (FAILURE_SUBCATEGORY VARCHAR2(20));`
-2. ajouter le champ à la fin du fichier de contrôle SQL*Loader ;
-3. déployer `customers_list.sql`, puis laisser le rechargement nocturne s'exécuter.
+1. `tb_customers_list_failure_subcategory.sql` : `ALTER TABLE … ADD (FAILURE_SUBCATEGORY VARCHAR2(20))`
+   (au 13/11/2026 la colonne n'existe pas : la table s'arrête à `UPDATED_AT`) ;
+2. ajouter le champ au fichier de contrôle SQL*Loader, après `UPDATED_AT` (extrait dans le script) ;
+3. déployer `customers_list.sql`, puis laisser le rechargement nocturne s'exécuter ;
+4. `control_postpaid_segments.sql` : requêtes 3 (composantes = total), 4 (aucune
+   ligne) et 5 (aucune ligne).
+
+Ces étapes font partie du **déploiement groupé** de la section 0 quinquies (même
+`customers_list.sql`, même fichier de contrôle) : y exécuter l'étape 1 ci-dessus
+avant le script des colonnes 29-30.
+
+Ordre de grandeur attendu (règle appliquée en lecture seule aux données du
+13/11/2026, 4 statuts actifs, POSTPAID + Compteurs Communicants) : Always Late
+48 080, Never Paid 310 096 (dont 128 467 par le dernier recours : aucune ligne
+de profil ou `BILL_NUMBER = 0`), Sometime Paid 134 600 ; total 492 776, égal au
+profil `6 Défaillant`.
 
 `customers:refresh` lit la colonne dès qu'elle existe dans la table, sans autre
 changement. Les snapshots antérieurs restent décomposés à partir des anciens
@@ -222,6 +235,138 @@ le dernier jour d'achat de `PREPAID_PROFILE_P`, déterminé une fois par extract
 produit avant la règle ne contient pas `RECENSE` : l'application renomme ses
 anciennes valeurs à la lecture (`PrepaidSegmentations::LEGACY`), et
 `4-Suspect Dormant` reste à 0 jusqu'au premier chargement issu du SQL déployé.
+
+## 0 quinquies. Ancienneté du dernier achat PREPAID (analyse)
+
+Deuxième graphique de la vue Prepaid. C'est une analyse, pas une segmentation :
+`SEGMENTATION`, ses seuils et le filtre Segmentation ne changent pas, les
+exports n'ont pas de colonne pour elle. Le calcul est dans `customers_list.sql`
+(colonnes 29 `PREPAID_RECENCY_DAYS` et 30 `PREPAID_RECENCY_STATUS`, CTE
+`prepaid_om_last_purchase`). Extractor ne calcule aucune date : il répartit
+les couples (statut, jours) en classes (`App\Services\CustomersList\PrepaidRecency`).
+
+`PREPAID_RECENCY_DAYS = REF_DATE − TRUNC(date du dernier achat)`, avec la **même**
+`REF_DATE` que `RECENSE` (CTE `prepaid_reference` : dernier jour d'achat de
+`PREPAID_PROFILE_P`). Aucune date n'est codée en dur.
+
+| Situation (compteurs PREPAID) | Source de la date | Statut | Jours |
+|---|---|---|---|
+| profil RFM avec `LASTPURCHASE_DATE` | profil (prioritaire, jamais remplacé) = `RECENSE` | `KNOWN` | ≥ 0 |
+| sans profil, ou profil sans date, achat ≤ `REF_DATE` dans `ORDER_MASTER` | dernier achat `ORDER_TYPE` 01 / `STATUS` 01 ≤ `REF_DATE`, tout l'historique | `KNOWN` | ≥ 0 |
+| idem, aucun achat ≤ `REF_DATE`, au moins un achat entre `REF_DATE` + 1 et aujourd'hui | `ORDER_MASTER` | `POST_REFERENCE` | NULL |
+| aucun achat 01/01 dans `ORDER_MASTER` | — | `NO_PURCHASE` | NULL |
+| achats sans date exploitable (sans date, ou datés après aujourd'hui seulement) | — | `UNKNOWN` | NULL |
+| client non PREPAID | — | NULL | NULL |
+
+Classes affichées (bornes incluses) : 0–29, 30–59, 60–89, 90–179, 180–359,
+360 jours et plus (non plafonné : l'historique `ORDER_MASTER` peut dépasser la
+fenêtre de 36 mois du profil), Aucun achat retrouvé, Achat après la date de
+référence, Date inconnue. Pourcentages : part du total PREPAID filtré, dates
+inconnues comprises. La somme des classes est comparée au nombre de clients
+PREPAID du même calcul : un écart est affiché sous le graphique, jamais masqué.
+Un couple qui viole la règle (KNOWN sans jours, jours négatifs, statut inconnu)
+est compté en « Date inconnue » et signalé.
+
+L'achat est rattaché au compteur (`METER_NO`) : les quelques contrats qui
+partagent un compteur portent la même ancienneté et sont comptés une fois par
+contrat, comme partout dans Extractor.
+
+**Déploiement groupé** (serveur source, par le DBA / l'exploitation ; Extractor
+d'abord, il tolère l'absence des colonnes) :
+
+0. Extractor : déployer le code (le graphique affiche « Donnée non disponible »
+   tant que le snapshot n'a pas les colonnes) ;
+1. contrôle à blanc, sans écriture : `./validate_customers_list.sh customers_list.sql CMS_RFC@cmsprod`
+   (segments et classes d'ancienneté, en un seul passage) ;
+2. `tb_customers_list_failure_subcategory.sql` (colonne 28, absente au 13/11/2026),
+   **puis** `tb_customers_list_prepaid_recency.sql` (colonnes 29-30) : `ALTER TABLE … ADD` ;
+3. fichier de contrôle SQL*Loader : ajouter les trois champs après `UPDATED_AT`, dans
+   l'ordre 28, 29, 30 (extraits dans les deux scripts), `TRAILING NULLCOLS` ;
+4. déployer `customers_list.sql` (qui contient aussi la version de la segmentation
+   PREPAID non encore déployée), laisser le rechargement nocturne s'exécuter ;
+5. `control_prepaid_recency.sql` : classes, cohérence, unicité, priorité du profil ;
+   `control_postpaid_segments.sql` : six profils, décomposition du Défaillant exhaustive ;
+6. Extractor : `customers:refresh` (05:00) lit les colonnes dès qu'elles existent
+   (`OracleSnapshotExtractor::OPTIONAL_COLUMNS`), sans autre changement ; le
+   cache du tableau de bord est par version de snapshot.
+
+Retour arrière : restaurer l'ancien `customers_list.sql` et l'ancien fichier de
+contrôle, puis (facultatif) supprimer les colonnes (bas du script DDL) ; côté
+Extractor, `php spark snapshot:rollback` revient au snapshot précédent.
+
+## 0 sexies. Montant facturé 12 mois et segmentation VALUE
+
+Deux colonnes calculées par `customers_list.sql` (31 `AMOUNT_BILLED_12M`,
+32 `VALUE_SEGMENT`, CTE `billing_12m`). Extractor n'en calcule aucune : il les
+affiche (tableau, montant en FCFA), les filtre (« Value ») et les exporte
+(`App\Services\CustomersList\BillingValue`). Les règles PREPAID et POSTPAID
+existantes ne changent pas.
+
+**Source** : `CMSADMIN.RECIBOS`, la table des factures (une ligne par facture,
+`NUM_REC` unique ; même lecture que la vue `ICSVIEWS.BILL_HEAD` : `NIS_RAD` =
+contrat, `F_FACT` = date de facture, `IMP_TOT_REC` = montant TTC, `EST_ACT` =
+statut, `TIP_REC` = type). Partitionnée par `F_FACT`.
+
+**Formule** :
+`AMOUNT_BILLED_12M = ROUND(SUM(IMP_TOT_REC))` par `NIS_RAD = CONTRACT`, pour
+`F_FACT` dans les 12 mois clos avant le mois de l'extraction
+(`[ADD_MONTHS(TRUNC(SYSDATE,'MM'), -12) ; TRUNC(SYSDATE,'MM')[`, soit au
+13/11/2026 : 01/11/2025 → 31/10/2026), avec :
+
+| Règle | Valeurs | Raison |
+|---|---|---|
+| statuts exclus | `ER600` CANCELLED, `ER900` CANCELLED DUE TO CREATION OF MORE THAN ONE RECEIVABLE | une facture corrigée est annulée puis refacturée : seule la refacturation compte, pas de double comptage |
+| types retenus | `TR010` consommation, `TR020` frais de branchement, `TR030` reconnexion, `TR040` frais divers, `TR050` fraude | la facturation de la consommation et des frais |
+| types exclus | `TR022` dépôt de garantie, `TR060`/`TR063` échéancier, `TR071`/`TR072` avance, `TR021` contribution | dépôt remboursable ; dette déjà facturée réétalée (double comptage) ; prépaiement ; marginal |
+
+Pas d'avoir distinct (194 montants négatifs sur 19 M de factures sur 12 mois,
+gardés : le montant est un net). FCFA entiers. 0 pour un contrat sans facture
+retenue (jamais NULL). Montant **facturé**, pas encaissé (`IMP_CTA`) ni restant dû.
+**La liste des types est un choix à valider par le métier** (une ligne de la CTE).
+
+**VALUE** : population classée = contrats aux 4 statuts actifs d'Extractor,
+non PREPAID (POSTPAID et Compteurs Communicants, la clientèle facturée) et
+`AMOUNT_BILLED_12M > 0`. Classement unique sur toute cette population à
+l'extraction (pas sous les filtres de l'écran) : `rang = RANK()` par montant
+décroissant, `n` = taille de la population ; Top 20% si `rang ≤ 0,2 n`,
+Medium 50% si `rang ≤ 0,7 n`, sinon Bottom 30%. Des montants égaux sont toujours
+dans la même catégorie (celle du premier rang du groupe), quel que soit le
+numéro de contrat. `VALUE_SEGMENT` est NULL pour tout autre contrat (sans
+facturation, PREPAID — leur consommation n'est pas facturée —, inactif). Les
+seuils en FCFA viennent des données. **À valider : PREPAID hors classement,
+POSTPAID et Compteurs Communicants classés ensemble.**
+
+Mesuré sur Oracle (lecture seule, 13/11/2026) : billing_12m = 1 521 153
+contrats, une ligne chacun, 19 s avec le classement ; 1 224 527 contrats
+classés : Top 20% 244 918 (≥ 152 852 FCFA), Medium 50% 612 593
+(22 600 – 152 851), Bottom 30% 367 016 (1 – 22 599), aucun montant partagé
+entre deux catégories ; 118 372 contrats facturés actifs sans facture sur 12 mois
+(non classés). Un contrat facturé 9,85 Md FCFA n'est pas dans la liste clients.
+
+Tests : `tests/unit/BillingValueRankingTest.php` exécute la CTE et l'expression
+de classement **telles qu'écrites dans ce fichier** sur DuckDB (bornes de la
+fenêtre, annulations, types, arrondi, ex æquo, éligibilité, couverture) ;
+`SnapshotBillingValueTest` (filtre, tri, exports, ancien snapshot, stabilité des
+segmentations) ; contrôles après chargement : `control_billing_value.sql`.
+
+**Déploiement groupé** (serveur source, DBA / exploitation ; Extractor d'abord,
+il tolère l'absence des colonnes : vides dans le tableau et les exports, filtre
+Value masqué) :
+
+1. contrôle à blanc : `./validate_customers_list.sh customers_list.sql CMS_RFC@cmsprod` ;
+2. `tb_customers_list_billing_value.sql` : `ALTER TABLE … ADD` des deux colonnes
+   (après celles des sections 0 quater et 0 quinquies) ;
+3. fichier de contrôle SQL*Loader : deux champs à la fin, `TRAILING NULLCOLS` ;
+4. déployer `customers_list.sql`, laisser le rechargement nocturne s'exécuter ;
+5. `control_billing_value.sql` ;
+6. Extractor : `customers:refresh` lit les colonnes dès qu'elles existent
+   (`OracleSnapshotExtractor::OPTIONAL_COLUMNS`).
+
+Les exports CSV / Excel ont désormais 27 colonnes : les 25 habituelles puis
+`AMOUNT_BILLED_12M` (nombre dans Excel) et `VALUE_SEGMENT`, vides tant que le
+snapshot ne les porte pas. Retour arrière : ancien `customers_list.sql` et ancien
+fichier de contrôle, puis (facultatif) bas du script DDL ; côté Extractor,
+`php spark snapshot:rollback`.
 
 ## 1. Protocole de livraison
 

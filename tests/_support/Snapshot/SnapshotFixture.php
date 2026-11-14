@@ -132,12 +132,13 @@ final class SnapshotFixture
      * Delivers and installs; returns the installer result.
      *
      * @param list<array<string, string>> $rows
+     * @param list<string>|null           $header default HEADER
      *
      * @return array<string, mixed>
      */
-    public function install(array $rows): array
+    public function install(array $rows, ?array $header = null): array
     {
-        $this->deliver(self::csv($rows));
+        $this->deliver(self::csv($rows, $header));
 
         return (new \App\Services\Snapshot\SnapshotInstaller($this->store))->install();
     }

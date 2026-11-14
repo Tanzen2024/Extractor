@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\CustomersList\FailureSubcategories;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\PostpaidSegmentations;
 use App\Services\CustomersList\PrepaidSegmentations;
@@ -356,14 +357,115 @@ final class PostpaidSegmentationsTest extends CIUnitTestCase
             sort($exported);
             $this->assertSame(['1 PERFECT', '6 Défaillant', '6 Défaillant', '6 Défaillant', '6 Défaillant', '6 Défaillant'], $exported);
 
-            foreach ([$duck->filterOptions(), $scan->filterOptions(), $snapshot->filterOptions()] as $options) {
+            // PREPAID 'Other' -> '' -> PrepaidSegmentations::BLANK_TO (5-Dormant) on every live read.
+            foreach ([$duck->filterOptions(), $scan->filterOptions()] as $options) {
                 $offered = array_column($options['segmentations'], 'count', 'value');
                 ksort($offered);
-                $this->assertSame(['1 PERFECT' => 1, '5-Dormant' => 1, '6 Défaillant' => 5], $offered);
+                $this->assertSame(['1 PERFECT' => 1, '5-Dormant' => 2, '6 Défaillant' => 5], $offered);
+            }
+            // Install-time options (export allow-list only, counts never shown): value-level folds only.
+            $offered = array_column($snapshot->filterOptions()['segmentations'], 'count', 'value');
+            ksort($offered);
+            $this->assertSame(['1 PERFECT' => 1, '5-Dormant' => 1, '6 Défaillant' => 5], $offered);
+
+            $this->assertSame(['5-Dormant' => 2], $this->sorted($duck->segmentationCounts(FilterCriteria::fromArray(['meters' => ['PREPAID']]))));
+            $this->assertSame(count($rows), $duck->count(FilterCriteria::none()), 'no customer lost or counted twice');
+        } finally {
+            $fx->cleanup();
+        }
+    }
+
+    /**
+     * 2026-11-13: CMS_RFC.POSTPAID_PROFILE_P stores "6 Défaillant" with its "é"
+     * replaced by two U+FFFD. Same profile: one category everywhere, its count
+     * the sum of both spellings, nothing else touched (other accents, other
+     * profiles, PREPAID, total), and its customers left without a component
+     * (counted as unassigned, never put in one).
+     */
+    public function testTheCorruptedDefaillantLabelIsFoldedIntoTheProfile(): void
+    {
+        // Exactly the bytes found in Oracle (DUMP: 36,20,44,ef,bf,bd,ef,bf,bd,66,...).
+        $this->assertSame('362044efbfbdefbfbd6661696c6c616e74', bin2hex(PostpaidSegmentations::DEFAILLANT_CORRUPTED));
+        $this->assertSame(PostpaidSegmentations::DEFAILLANT, PostpaidSegmentations::LEGACY[PostpaidSegmentations::DEFAILLANT_CORRUPTED]);
+        $this->assertNotSame('seg6p6f3d', PostpaidSegmentations::CACHE_TAG, 'figures cached before the fold are not served');
+
+        // Filter options: the two spellings become one entry, counts added.
+        $folded = PostpaidSegmentations::foldOptions(['segmentations' => [
+            ['value' => '6 Défaillant', 'count' => 125912],
+            ['value' => PostpaidSegmentations::DEFAILLANT_CORRUPTED, 'count' => 366864],
+            ['value' => '4 At-Risk', 'count' => 229809],
+        ]]);
+        $this->assertSame([['value' => '6 Défaillant', 'count' => 492776], ['value' => '4 At-Risk', 'count' => 229809]], $folded['segmentations']);
+
+        if ((new DuckDb())->version() === null) {
+            $this->markTestSkipped('DuckDB CLI absent (Config\Snapshot::$duckdbBinary).');
+        }
+
+        $bad  = PostpaidSegmentations::DEFAILLANT_CORRUPTED;
+        $rows = [];
+        // Production shape: '8 Autre' (former unclassified) -> 6 Défaillant / NEVER_PAID; the corrupted label -> no component.
+        foreach ([['POSTPAID', $bad], ['POSTPAID', $bad], ['POSTPAID', $bad], ['Compteurs Communicants', $bad],
+            ['POSTPAID', '8 Autre'], ['Compteurs Communicants', '8 Autre'], ['POSTPAID', '1 PERFECT'], ['POSTPAID', '4 At-Risk']] as [$meter, $seg]) {
+            $rows[] = SnapshotFixture::row(count($rows) + 1, ['METER' => $meter, 'SEGMENTATION' => $seg, 'NUI_QC' => 'NUI à RECLASSER']);
+        }
+        $rows[] = SnapshotFixture::row(count($rows) + 1, ['METER' => 'PREPAID', 'SEGMENTATION' => '3-At Risk', 'CUST_NAME' => 'Hélène Éa']);
+
+        $fx = new SnapshotFixture();
+
+        try {
+            $result = $fx->install($rows);
+            $this->assertSame(SnapshotInstaller::RESULT_ACTIVATED, $result['result'], (string) $result['message']);
+
+            $snapshot = $fx->store->active();
+            $duck     = (new SnapshotIndex($fx->config))->engine($snapshot);
+            $scan     = new SnapshotScanEngine($snapshot);
+            $export   = new SnapshotRowSource(snapshot: $snapshot, store: $fx->store);
+            $scope    = FilterCriteria::fromArray(['meters' => ['POSTPAID', 'Compteurs Communicants']]);
+            $failing  = FilterCriteria::fromArray(['meters' => ['POSTPAID', 'Compteurs Communicants'], 'segmentations' => ['6 Défaillant']]);
+            $expected = ['1 PERFECT' => 1, '4 At-Risk' => 1, '6 Défaillant' => 6];
+
+            // Chart and counts: one category, sum of both spellings; the other profiles as they were.
+            $this->assertSame($expected, $this->sorted($duck->segmentationCounts($scope)));
+            $this->assertSame($expected, $this->sorted($scan->segmentationCounts($scope)));
+            $this->assertSame($expected, $this->sorted($duck->distributions($scope)['segmentation']));
+
+            // Clicking / filtering 6 Défaillant: same 6 customers in every path.
+            foreach ([$duck->count($failing), $scan->count($failing), $export->count($failing)] as $count) {
+                $this->assertSame(6, $count);
             }
 
-            $this->assertSame(['' => 1, '5-Dormant' => 1], $this->sorted($duck->segmentationCounts(FilterCriteria::fromArray(['meters' => ['PREPAID']]))));
-            $this->assertSame(count($rows), $duck->count(FilterCriteria::none()), 'no customer lost or counted twice');
+            // Breakdown: the corrupted rows have no component -> unassigned, not NEVER_PAID.
+            $breakdown = FailureSubcategories::breakdown(
+                $duck->distributions($scope)['segmentation'],
+                $duck->distributions($scope)['failure'],
+            );
+            $this->assertSame(6, $breakdown['total']);
+            $this->assertSame([['value' => 'ALWAYS_LATE', 'count' => 0], ['value' => 'NEVER_PAID', 'count' => 2], ['value' => 'SOMETIME_PAID', 'count' => 0]], $breakdown['components']);
+            $this->assertSame(4, $breakdown['unassigned']);
+
+            // Filter options: one entry, no corrupted value offered.
+            foreach ([$duck->filterOptions(), $scan->filterOptions(), $snapshot->filterOptions()] as $options) {
+                $offered = array_column($options['segmentations'], 'count', 'value');
+                $this->assertSame(6, $offered['6 Défaillant']);
+                $this->assertArrayNotHasKey($bad, $offered);
+            }
+
+            // Export: canonical label, every other accented value byte-identical.
+            $exported = [];
+            $export->stream(FilterCriteria::none(), static function (array $row) use (&$exported): void {
+                $exported[] = $row;
+            });
+            $this->assertCount(count($rows), $exported, 'no customer lost or added');
+            $labels = array_count_values(array_column($exported, 'SEGMENTATION'));
+            $this->assertSame(6, $labels['6 Défaillant']);
+            $this->assertArrayNotHasKey($bad, $labels);
+            $this->assertSame(array_fill(0, 8, 'NUI à RECLASSER'), array_slice(array_column($exported, 'NUI_QC'), 0, 8));
+            $this->assertContains('Hélène Éa', array_column($exported, 'CUST_NAME'));
+
+            // PREPAID and the grand total are untouched.
+            $this->assertSame(['3-At Risk' => 1], $duck->segmentationCounts(FilterCriteria::fromArray(['meters' => ['PREPAID']])));
+            $this->assertSame(count($rows), $duck->count(FilterCriteria::none()));
+            $this->assertSame(count($rows), $scan->count(FilterCriteria::none()));
         } finally {
             $fx->cleanup();
         }

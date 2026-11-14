@@ -1,0 +1,81 @@
+/* Contrôles « Montant facturé 12 mois » et VALUE, en lecture seule, à lancer
+   après un chargement de TB_CUSTOMERS_LIST par customers_list.sql
+   (colonnes 31 AMOUNT_BILLED_12M et 32 VALUE_SEGMENT). Aucune écriture.
+   Les requêtes marquées « aucune ligne » doivent revenir vides. */
+
+/* 1. Effectifs, parts et seuils réels par catégorie (population classée :
+      4 statuts actifs, non PREPAID, montant > 0). Parts attendues proches
+      de 20 / 50 / 30 % ; seuls les ex æquo à cheval sur un seuil les écartent. */
+SELECT NVL(VALUE_SEGMENT, '(non classé)') AS VALUE_SEGMENT,
+       COUNT(*) AS CLIENTS,
+       ROUND(100 * RATIO_TO_REPORT(COUNT(*)) OVER (PARTITION BY CASE WHEN VALUE_SEGMENT IS NULL THEN 0 ELSE 1 END), 2) AS PCT_CLASSES,
+       MIN(AMOUNT_BILLED_12M) AS MONTANT_MIN, MAX(AMOUNT_BILLED_12M) AS MONTANT_MAX, SUM(AMOUNT_BILLED_12M) AS MONTANT_TOTAL
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE TRIM(STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.')
+  AND METER <> 'PREPAID'
+GROUP BY VALUE_SEGMENT
+ORDER BY DECODE(VALUE_SEGMENT, 'Top 20%', 1, 'Medium 50%', 2, 'Bottom 30%', 3, 4);
+
+/* 2. Couverture exacte — aucune ligne : tout contrat éligible a une
+      catégorie, aucun contrat non éligible n'en a. */
+SELECT CASE WHEN VALUE_SEGMENT IS NULL THEN 'ELIGIBLE SANS CATEGORIE' ELSE 'CATEGORIE HORS POPULATION' END AS ANOMALIE, COUNT(*) AS LIGNES
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE (VALUE_SEGMENT IS NULL
+       AND TRIM(STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.')
+       AND METER <> 'PREPAID' AND AMOUNT_BILLED_12M > 0)
+   OR (VALUE_SEGMENT IS NOT NULL
+       AND NOT (TRIM(STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.')
+                AND METER <> 'PREPAID' AND NVL(AMOUNT_BILLED_12M, 0) > 0))
+GROUP BY CASE WHEN VALUE_SEGMENT IS NULL THEN 'ELIGIBLE SANS CATEGORIE' ELSE 'CATEGORIE HORS POPULATION' END;
+
+/* 3. Ordre et ex æquo — aucune ligne : un même montant n'est jamais dans
+      deux catégories, et les seuils ne se chevauchent pas. */
+SELECT AMOUNT_BILLED_12M, COUNT(DISTINCT VALUE_SEGMENT) AS CATEGORIES
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE VALUE_SEGMENT IS NOT NULL
+GROUP BY AMOUNT_BILLED_12M
+HAVING COUNT(DISTINCT VALUE_SEGMENT) > 1;
+
+/* 4. Valeurs — aucune ligne : montant toujours renseigné, catégorie connue. */
+SELECT 'MONTANT NULL' AS ANOMALIE, COUNT(*) AS LIGNES FROM CMS_RFC.TB_CUSTOMERS_LIST WHERE AMOUNT_BILLED_12M IS NULL HAVING COUNT(*) > 0
+UNION ALL
+SELECT 'CATEGORIE INCONNUE', COUNT(*) FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE VALUE_SEGMENT IS NOT NULL AND VALUE_SEGMENT NOT IN ('Top 20%', 'Medium 50%', 'Bottom 30%') HAVING COUNT(*) > 0;
+
+/* 5. Unicité — aucune ligne : la jointure billing_12m ne multiplie rien. */
+SELECT CONTRACT, COUNT(*) AS LIGNES
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+GROUP BY CONTRACT
+HAVING COUNT(*) > 1;
+
+/* 6. Recoupement avec la source : pour 50 contrats tirés au hasard, le
+      montant chargé = somme des factures retenues de RECIBOS sur la même
+      fenêtre — aucune ligne (à lancer le mois du chargement : la fenêtre
+      dépend du mois de l'exécution). */
+WITH s AS (
+    SELECT CONTRACT, AMOUNT_BILLED_12M FROM (
+        SELECT CONTRACT, AMOUNT_BILLED_12M FROM CMS_RFC.TB_CUSTOMERS_LIST
+        WHERE AMOUNT_BILLED_12M <> 0 ORDER BY DBMS_RANDOM.VALUE
+    ) WHERE ROWNUM <= 50
+)
+SELECT s.CONTRACT, s.AMOUNT_BILLED_12M,
+       (SELECT ROUND(SUM(r.IMP_TOT_REC)) FROM CMSADMIN.RECIBOS r
+         WHERE r.NIS_RAD = TO_NUMBER(s.CONTRACT)
+           AND r.F_FACT >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -12) AND r.F_FACT < TRUNC(SYSDATE, 'MM')
+           AND r.EST_ACT NOT IN ('ER600', 'ER900')
+           AND r.TIP_REC IN ('TR010', 'TR020', 'TR030', 'TR040', 'TR050')) AS RECIBOS
+FROM s
+WHERE s.AMOUNT_BILLED_12M <> NVL((SELECT ROUND(SUM(r.IMP_TOT_REC)) FROM CMSADMIN.RECIBOS r
+         WHERE r.NIS_RAD = TO_NUMBER(s.CONTRACT)
+           AND r.F_FACT >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -12) AND r.F_FACT < TRUNC(SYSDATE, 'MM')
+           AND r.EST_ACT NOT IN ('ER600', 'ER900')
+           AND r.TIP_REC IN ('TR010', 'TR020', 'TR030', 'TR040', 'TR050')), 0);
+
+/* 7. Stabilité des segmentations existantes (information) : effectifs par
+      SEGMENTATION, à comparer au chargement précédent — les colonnes 31-32
+      ne les modifient pas. */
+SELECT CASE WHEN METER = 'PREPAID' THEN 'PREPAID' ELSE 'POSTPAID' END AS UNIVERS, SEGMENTATION, COUNT(*) AS CLIENTS
+FROM CMS_RFC.TB_CUSTOMERS_LIST
+WHERE TRIM(STATUS) IN ('ACTIVE', 'ACTIVE (PENDING BILLING)', 'SUSPENDED (DELINQUENT ACCOUNT)', 'INACTIVATION IN PROCESS.')
+GROUP BY CASE WHEN METER = 'PREPAID' THEN 'PREPAID' ELSE 'POSTPAID' END, SEGMENTATION
+ORDER BY 1, 2;

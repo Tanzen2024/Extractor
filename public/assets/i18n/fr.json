@@ -19,7 +19,9 @@
         "contactFilled": "Contact renseigné",
         "activeContracts": "Contrats actifs",
         "smartMeters": "Compteurs communicants",
-        "notProvided": "Non renseigné"
+        "notProvided": "Non renseigné",
+        "value": "Value",
+        "amountBilled12m": "Montant facturé 12 mois"
     },
     "common": {
         "loading": "Chargement…",
@@ -89,7 +91,9 @@
             "DATE_RESILIATION": "Date résil.",
             "NIU_TO_RECLASS": "NIU à reclasser",
             "SEGMENTATION": "Segmentation",
-            "UPDATED_AT": "Mis à jour le"
+            "UPDATED_AT": "Mis à jour le",
+            "AMOUNT_BILLED_12M": "Montant facturé 12 mois",
+            "VALUE_SEGMENT": "Value"
         },
         "multiselect": {
             "all": "Toutes",
@@ -165,7 +169,52 @@
             "filter": "Composante Défaillant",
             "alwaysLate": "Always Late",
             "sometimePaid": "Sometime Paid",
-            "neverPaid": "Never Paid"
+            "neverPaid": "Never Paid",
+            "unassigned": "Dont {count} clients non décomposés (sous-catégorie non renseignée), inclus dans le total."
+        },
+        "recency": {
+            "classes": {
+                "D0_29": {
+                    "range": "0 à 29 jours",
+                    "meaning": "Activité récente"
+                },
+                "D30_59": {
+                    "range": "30 à 59 jours",
+                    "meaning": "Inactivité récente"
+                },
+                "D60_89": {
+                    "range": "60 à 89 jours",
+                    "meaning": "Inactivité intermédiaire"
+                },
+                "D90_179": {
+                    "range": "90 à 179 jours",
+                    "meaning": "Inactivité prolongée"
+                },
+                "D180_359": {
+                    "range": "180 à 359 jours",
+                    "meaning": "Inactivité importante"
+                },
+                "D360_PLUS": {
+                    "range": "360 jours et plus",
+                    "meaning": "Inactivité très importante"
+                },
+                "NO_PURCHASE": {
+                    "range": "Aucun achat retrouvé",
+                    "meaning": "Jamais acheté"
+                },
+                "POST_REFERENCE": {
+                    "range": "Achat après la date de référence",
+                    "meaning": "Achat postérieur à la référence"
+                },
+                "UNKNOWN": {
+                    "range": "Date inconnue",
+                    "meaning": "Date indisponible"
+                }
+            },
+            "unavailable": "Donnée non disponible — la source amont ne fournit pas encore l'ancienneté des achats.",
+            "tooltip": "{count} clients · {pct} % du total PREPAID filtré",
+            "gap": "Écart de réconciliation : {sum} clients répartis pour {total} clients PREPAID (écart {diff}).",
+            "inconsistent": "{count} clients ont une ancienneté incohérente dans la source : comptés en « Date inconnue »."
         }
     },
     "export": {

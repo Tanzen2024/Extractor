@@ -108,6 +108,22 @@ class CustomerListExportService
         'LAST_VC_DATE', 'SEGMENT_RFM_2', 'POSTPAID_PROFILE_DATE', 'SEGMENTATION', 'UPDATED_AT',
     ];
 
+    /**
+     * Columns of an exported file: COLUMNS (required in every snapshot,
+     * SnapshotValidator) then the optional source columns 31-32
+     * (BillingValue), written empty for a snapshot that does not carry them
+     * — the file layout never depends on the version.
+     */
+    public const EXPORT_COLUMNS = [
+        'REGION', 'DIVISION', 'AGENCE', 'COD_UNICOM', 'COD_CLI', 'CONTRACT', 'STATUS',
+        'METER_NO', 'CUST_NAME', 'PHONE_NUMBERS', 'E_MAIL', 'REF_GEO', 'DATE_AB',
+        'DATE_RESILIATION', 'VOLTAGE', 'SEGMENT_TRESOR', 'METER', 'NIU_RIGHT', 'NIU_TO_RECLASS', 'NUI_QC',
+        'LAST_VC_DATE', 'SEGMENT_RFM_2', 'POSTPAID_PROFILE_DATE', 'SEGMENTATION',
+        CustomersList\BillingValue::AMOUNT_COLUMN, CustomersList\BillingValue::SEGMENT_COLUMN,
+        // UPDATED_AT ("Mis à jour le") always last, as in the table.
+        'UPDATED_AT',
+    ];
+
     private const LOG_CHECKPOINT_EVERY = 100_000;
 
     /**
@@ -234,7 +250,7 @@ class CustomerListExportService
                 throw new RuntimeException("Impossible de créer le fichier d'export CSV.");
             }
 
-            $writer = new CsvRowWriter($handle, self::COLUMNS, true, self::CSV_WRITE_BUFFER_BYTES);
+            $writer = new CsvRowWriter($handle, self::EXPORT_COLUMNS, true, self::CSV_WRITE_BUFFER_BYTES);
 
             $reportsProgress = $onProgress !== null && $this->rowSource instanceof ReportsProgress;
             if ($reportsProgress) {
@@ -377,10 +393,11 @@ class CustomerListExportService
             try {
                 $writer = new XlsxRowWriter(
                     $path,
-                    self::COLUMNS,
+                    self::EXPORT_COLUMNS,
                     $this->config->xlsxMaxRowsPerSheet,
                     'CustomerList',
                     $scratchDir,
+                    [CustomersList\BillingValue::AMOUNT_COLUMN], // a number in Excel (sums, sorts)
                 );
             } catch (\Throwable $e) {
                 if (is_file($path)) {

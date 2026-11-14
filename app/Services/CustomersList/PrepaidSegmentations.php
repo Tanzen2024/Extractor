@@ -34,14 +34,34 @@ final class PrepaidSegmentations
      * every read: a snapshot produced before the rule keeps them in its CSV,
      * which is never rewritten. It holds no RECENSE, so its customers keep
      * their former segment under the new name until the next load.
+     *
+     * '6 Never Vending' (space, no hyphen) = the label the deployed upstream
+     * SQL still gives a profile without purchase date (1 824 on 13/11, next to
+     * 9 192 '7 Never Vending'): same business segment, folded into the
+     * canonical '6-Never Vending' so the chart, filters and exports show one
+     * category. Blank / unclassified values are never folded into it.
      */
     public const LEGACY = [
         '6 Old_Dormant'   => '5-Dormant',
+        '6 Never Vending' => '6-Never Vending',
         '7 Never Vending' => '6-Never Vending',
         'Other'           => '',
     ];
 
     public const METER = 'PREPAID';
+
+    /**
+     * Segment given on read to a PREPAID customer whose SEGMENTATION is blank
+     * (after LEGACY): never "Non renseigné" in the PREPAID universe.
+     *
+     * Validated 2026-11-13: the 30 005 blank ones of the 13/11 load are
+     * customers with an RFM profile but a NULL upstream segment, all with a
+     * last purchase 60+ days old, i.e. 5-Dormant by the official rule
+     * (RECENSE >= 60) — exactly where the rule puts them once deployed
+     * (Dormant 315 317 in the simulation). Other universes are not touched:
+     * a blank POSTPAID / Compteurs Communicants profile stays blank.
+     */
+    public const BLANK_TO = '5-Dormant';
 
     /** @return list<string> */
     public static function values(): array

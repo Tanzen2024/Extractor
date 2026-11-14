@@ -1,0 +1,66 @@
+# control_load.sql execute le 2026-11-13 ~11:50 depuis Extractor (lecture seule), AVANT deploiement
+# Chargement TB_CUSTOMERS_LIST du 13/11 04:32 (SQL 01/10 en place, table a 27 colonnes : sections 8-9 en ORA-00904, normal)
+== 0. Chargement : date, volume, structure
+  2026-11-13 04:32:21 | 3331822
+  27
+  2026-10-31 | 2026-10-01
+== 1. PREPAID actifs par segment (+ total)
+   Reference 13/11 apres deploiement (simulation) : 1-Stable 254096 / 2-InStable 234747 /
+   3-At Risk 212146 / 4-Suspect Dormant 86075 / 5-Dormant 315317 / 6-Never Vending 11016 / total 1113397
+  (NON CLASSE) | 30005
+  1-Stable | 261395
+  2-InStable | 260942
+  3-At Risk | 434988
+  6 Never Vending | 1824
+  6 Old_Dormant | 115051
+  7 Never Vending | 9192
+  NULL | 1113397
+== 2. PREPAID hors nomenclature (apres deploiement : aucune ligne attendue)
+  7 Never Vending | 9192
+  (NON CLASSE) | 30005
+  6 Never Vending | 1824
+  6 Old_Dormant | 115051
+== 3. Doublons par contrat (aucune ligne attendue)
+  (aucune ligne)
+== 4. Recence 30-59 jours (comptage independant) x segment affecte
+   Apres deploiement : 30-59 => 4-Suspect Dormant uniquement ; >= 60 => 5-Dormant ; < 30 => 1/2/3
+  SANS DATE | 6 Never Vending | 1824
+  0-29 | 1-Stable | 249493
+  0-29 | 2-InStable | 234747
+  0-29 | 3-At Risk | 212146
+  30-59 | 1-Stable | 8775
+  30-59 | 2-InStable | 17593
+  30-59 | 3-At Risk | 59707
+  60+ | (NON CLASSE) | 30005
+  60+ | 1-Stable | 3127
+  60+ | 2-InStable | 8602
+  60+ | 3-At Risk | 163135
+== 5. PREPAID sans profil RFM : nouveaux acheteurs / sans achat (via SEGMENT_RFM_2 vide)
+  6 Old_Dormant | 115051
+  7 Never Vending | 9192
+== 6. POSTPAID / Compteurs Communicants : doit rester comparable a la reference (regle inchangee)
+  Compteurs Communicants | 1 PERFECT | 1352
+  Compteurs Communicants | 2 RELIABLE | 7227
+  Compteurs Communicants | 3 Occasionnal | 8985
+  Compteurs Communicants | 4 At-Risk | 7073
+  Compteurs Communicants | 5 Delinquant | 4695
+  Compteurs Communicants | 6 D��faillant | 11886
+  Compteurs Communicants | 8 Autre | 1823
+  POSTPAID | 1 PERFECT | 29448
+  POSTPAID | 2 RELIABLE | 152684
+  POSTPAID | 3 Occasionnal | 194769
+  POSTPAID | 4 At-Risk | 222736
+  POSTPAID | 5 Delinquant | 221175
+  POSTPAID | 6 D��faillant | 354978
+  POSTPAID | 8 Autre | 124089
+== 7. Nombre de lignes par univers (tous statuts)
+  Compteurs Communicants | 43048
+  POSTPAID | 2030212
+  PREPAID | 1258562
+  NULL | 3331822
+== 8. Decomposition du profil Defaillant (colonne 28, apres etape 1 seulement : ORA-00904 avant = normal)
+   Population = non PREPAID actifs en '6 D...faillant' (libelle amont) ou '8 Autre' (rattache au Defaillant par Extractor)
+   Reference 13/11 : ALWAYS_LATE 48080 / NEVER_PAID 310096 / SOMETIME_PAID 134600 / total 492776, aucun <NULL>
+  ERR ORA-00904: "FAILURE_SUBCATEGORY" : identificateur non valide
+== 9. Composante hors Defaillant ou hors nomenclature (aucune ligne attendue)
+  ERR ORA-00904: "FAILURE_SUBCATEGORY" : identificateur non valide

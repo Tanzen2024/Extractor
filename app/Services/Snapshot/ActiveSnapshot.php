@@ -58,6 +58,7 @@ final class ActiveSnapshot
         }
 
         return $reader->translate('SEGMENTATION', PostpaidSegmentations::ALL_LEGACY)
-            ->translate('SEGMENT_RFM_2', PrepaidSegmentations::LEGACY);
+            ->translate('SEGMENT_RFM_2', PrepaidSegmentations::LEGACY)
+            ->fillBlank('SEGMENTATION', 'METER', PrepaidSegmentations::METER, PrepaidSegmentations::BLANK_TO);
     }
 }

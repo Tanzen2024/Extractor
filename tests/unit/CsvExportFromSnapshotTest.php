@@ -110,7 +110,7 @@ final class CsvExportFromSnapshotTest extends TestCase
         $out  = $this->readExport($meta['path']);
 
         $this->assertTrue($out['bom'], 'UTF-8 BOM kept for Excel');
-        $this->assertSame(CustomerListExportService::COLUMNS, $out['header']);
+        $this->assertSame(CustomerListExportService::EXPORT_COLUMNS, $out['header']);
         $this->assertSame(['CLI1', 'CLI3', 'CLI4', 'CLI6'], array_column($out['rows'], 'COD_CLI'), 'INACTIVE / SUSPENDED rows are out of the perimeter');
         $this->assertSame([4, 6, 4, 4], [$meta['rows'], $meta['rowsRead'], $meta['rowsMatched'], $meta['rowsExported']]);
         $this->assertSame(filesize($meta['path']), $meta['fileSize']);
@@ -155,7 +155,7 @@ final class CsvExportFromSnapshotTest extends TestCase
 
         $this->assertSame(0, $meta['rowsExported']);
         $this->assertSame(6, $meta['rowsRead']);
-        $this->assertSame(CustomerListExportService::COLUMNS, $out['header']);
+        $this->assertSame(CustomerListExportService::EXPORT_COLUMNS, $out['header']);
         $this->assertSame([], $out['rows']);
     }
 

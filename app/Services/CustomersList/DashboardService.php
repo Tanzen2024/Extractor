@@ -93,12 +93,14 @@ class DashboardService
      * @return array{
      *   totalRows:int,
      *   kpis:array{total:int, totalPct:float, reference:array{totalClients:int, totalNui:int}, nuiCorrects:array{value:int,pct:float}, actifs:array{value:int,pct:float}, avecCompteur:array{value:int,pct:float}, contacts:array{value:int,pct:float}},
-     *   charts:array{region:list<array{value:string,count:int}>, status:list<array{value:string,count:int}>, segmentation:list<array{value:string,count:int}>, meterType:list<array{value:string,count:int}>, failureBreakdown:array{total:int, components:list<array{value:string,count:int}>, unassigned:int}}
+     *   charts:array{region:list<array{value:string,count:int}>, status:list<array{value:string,count:int}>, segmentation:list<array{value:string,count:int}>, meterType:list<array{value:string,count:int}>, failureBreakdown:array{total:int, components:list<array{value:string,count:int}>, unassigned:int}, prepaidRecency:array{available:bool, total:int, classes:list<array{value:string,count:int}>, sum:int, difference:int, inconsistent:int}}
      * }
      */
     public function stats(FilterCriteria $criteria, bool $fresh = false): array
     {
-        return $this->remember('stats_' . $criteria->cacheKey(), $fresh, function () use ($criteria, $fresh): array {
+        // PrepaidRecency::CACHE_TAG: an answer cached before the recency chart
+        // existed (other shape) is never served after the upgrade.
+        return $this->remember('stats_' . PrepaidRecency::CACHE_TAG . '_' . $criteria->cacheKey(), $fresh, function () use ($criteria, $fresh): array {
             // "% du total" of Total clients / Clients actifs / NUI corrects is
             // taken against the unfiltered reference, not the filtered total.
             // Contacts (and the non-displayed cards) keep the filtered total.
@@ -132,6 +134,10 @@ class DashboardService
                     // Analysis of the 6 Défaillant profile, same query: the
                     // profile list above stays the only official one.
                     'failureBreakdown' => FailureSubcategories::breakdown($dist['segmentation'], $dist['failure']),
+                    // Analysis of the PREPAID rows, same query: last-purchase
+                    // recency classes against the PREPAID count of the METER
+                    // distribution (counted independently: the reconciliation).
+                    'prepaidRecency' => PrepaidRecency::breakdown($dist['recency'] ?? null, (int) ($dist['meterType'][PrepaidRecency::METER] ?? 0)),
                 ],
             ];
         });

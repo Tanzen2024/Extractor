@@ -3,9 +3,11 @@
 namespace App\Services\Snapshot;
 
 use App\Services\CustomersList\ActiveCustomers;
+use App\Services\CustomersList\BillingValue;
 use App\Services\CustomersList\FailureSubcategories;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\CustomersList\PostpaidSegmentations;
+use App\Services\CustomersList\PrepaidRecency;
 use App\Services\CustomersList\PrepaidSegmentations;
 use App\Services\CustomersList\QueryBuilder;
 
@@ -30,6 +32,9 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
     /** @var array<string, true> columns the version's index holds */
     private array $columns;
 
+    /** The version carries both PrepaidRecency columns (source columns 29-30). */
+    private bool $hasRecency;
+
     /**
      * @param bool $contractUniqueNumeric verified for this version when its
      *        index was built (SnapshotIndex): every CONTRACT is a distinct
@@ -47,7 +52,8 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
         private readonly bool $indexHasFailure = false,
     ) {
         $header        = (string) ($snapshot->meta['header'] ?? '');
-        $this->columns = array_fill_keys($header !== '' ? explode($snapshot->delimiter(), $header) : [], true);
+        $this->columns    = array_fill_keys($header !== '' ? explode($snapshot->delimiter(), $header) : [], true);
+        $this->hasRecency = PrepaidRecency::availableIn(array_keys($this->columns));
     }
 
     public function version(): string
@@ -66,7 +72,11 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
      */
     private function table(): string
     {
-        $translated = self::translated('SEGMENTATION', PostpaidSegmentations::ALL_LEGACY)
+        // ActiveSnapshot::reader() twin: LEGACY, then a blank PREPAID segment -> BLANK_TO.
+        $segment    = self::translated('SEGMENTATION', PostpaidSegmentations::ALL_LEGACY, false);
+        $translated = "CASE WHEN trim(METER) = " . DuckDb::literal(PrepaidSegmentations::METER)
+            . " AND trim(COALESCE({$segment}, '')) = '' THEN " . DuckDb::literal(PrepaidSegmentations::BLANK_TO)
+            . " ELSE {$segment} END AS SEGMENTATION"
             . ', ' . self::translated('SEGMENT_RFM_2', PrepaidSegmentations::LEGACY);
 
         if ($this->indexHasFailure) {
@@ -83,14 +93,14 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
     }
 
     /** @param array<string, string> $map */
-    private static function translated(string $column, array $map): string
+    private static function translated(string $column, array $map, bool $alias = true): string
     {
         $case = '';
         foreach ($map as $from => $to) {
             $case .= ' WHEN ' . DuckDb::literal($from) . ' THEN ' . DuckDb::literal($to);
         }
 
-        return "CASE {$column}{$case} ELSE {$column} END AS {$column}";
+        return "(CASE {$column}{$case} ELSE {$column} END)" . ($alias ? " AS {$column}" : '');
     }
 
     public function count(FilterCriteria $criteria, string $search = ''): int
@@ -121,7 +131,7 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
             }
         }
 
-        return ['kpis' => self::kpiRow($kpi), 'distributions' => self::distributionRows($dist)];
+        return ['kpis' => self::kpiRow($kpi), 'distributions' => $this->distributionRows($dist)];
     }
 
     /** One scan for every KPI (contracts counted distinctly — see $contractUniqueNumeric). */
@@ -170,32 +180,56 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
 
     public function distributions(FilterCriteria $criteria): array
     {
-        return self::distributionRows($this->run($this->distributionSql($criteria)));
+        return $this->distributionRows($this->run($this->distributionSql($criteria)));
     }
 
-    /** One scan for the four charts (GROUPING SETS, as the Oracle query did). */
+    /**
+     * One scan for every chart (GROUPING SETS, as the Oracle query did) -
+     * the PREPAID recency classes included when the version carries them:
+     * same rows, same filters, no extra query.
+     */
     private function distributionSql(FilterCriteria $criteria): string
     {
-        return 'SELECT
-                CASE WHEN GROUPING(REGION) = 0 THEN \'region\'
-                     WHEN GROUPING(STATUS) = 0 THEN \'status\'
-                     WHEN GROUPING(SEGMENTATION) = 0 THEN \'segmentation\'
-                     WHEN GROUPING(METER) = 0 THEN \'meterType\'
-                     ELSE \'failure\' END AS dim,
-                COALESCE(REGION, STATUS, SEGMENTATION, METER, ' . FailureSubcategories::COLUMN . ') AS val,
+        $failure = FailureSubcategories::COLUMN;
+        $source  = $this->table() . $this->where($criteria);
+        $dim     = "ELSE 'failure'";
+        $val     = "COALESCE(REGION, STATUS, SEGMENTATION, METER, {$failure})";
+        $sets    = "(REGION), (STATUS), (SEGMENTATION), (METER), ({$failure})";
+        if ($this->hasRecency) {
+            $source = '(SELECT *, ' . PrepaidRecency::sqlCase() . ' AS __recency FROM ' . $source . ')';
+            $dim    = "WHEN GROUPING({$failure}) = 0 THEN 'failure' ELSE 'recency'";
+            $val    = "COALESCE(REGION, STATUS, SEGMENTATION, METER, {$failure}, __recency)";
+            $sets  .= ', (__recency)';
+        }
+
+        return "SELECT
+                CASE WHEN GROUPING(REGION) = 0 THEN 'region'
+                     WHEN GROUPING(STATUS) = 0 THEN 'status'
+                     WHEN GROUPING(SEGMENTATION) = 0 THEN 'segmentation'
+                     WHEN GROUPING(METER) = 0 THEN 'meterType'
+                     {$dim} END AS dim,
+                {$val} AS val,
                 COUNT(*) AS n
-            FROM ' . $this->table() . $this->where($criteria) . '
-            GROUP BY GROUPING SETS ((REGION), (STATUS), (SEGMENTATION), (METER), (' . FailureSubcategories::COLUMN . '))';
+            FROM {$source}
+            GROUP BY GROUPING SETS ({$sets})";
     }
 
-    /** @param list<array<string, mixed>> $rows */
-    private static function distributionRows(array $rows): array
+    /**
+     * @param list<array<string, mixed>> $rows
+     *
+     * recency: rows per PrepaidRecency class (PREPAID rows only), null when
+     * the version does not carry the columns.
+     */
+    private function distributionRows(array $rows): array
     {
-        $out = ['region' => [], 'status' => [], 'segmentation' => [], 'meterType' => [], 'failure' => []];
+        $out = ['region' => [], 'status' => [], 'segmentation' => [], 'meterType' => [], 'failure' => [], 'recency' => $this->hasRecency ? [] : null];
         foreach ($rows as $r) {
             $out[$r['dim']][(string) $r['val']] = (int) $r['n'];
         }
         unset($out['failure']['']); // every row outside the 6 Défaillant profile
+        if ($out['recency'] !== null) {
+            unset($out['recency']['']); // every non-PREPAID row
+        }
 
         return $out;
     }
@@ -214,7 +248,7 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
     {
         $scope = $this->where(FilterCriteria::none());
         $flat  = [];
-        foreach (SnapshotFilterOptions::FLAT as $key => $column) {
+        foreach (SnapshotFilterOptions::flatColumns(array_keys($this->columns)) as $key => $column) {
             $flat[] = "SELECT 'flat' AS q, " . DuckDb::literal($key) . " AS k, \"{$column}\" AS val, COUNT(*) AS n FROM " . $this->table()
                 . $scope . " AND \"{$column}\" <> '' GROUP BY \"{$column}\"";
         }
@@ -246,6 +280,9 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
     public function page(FilterCriteria $criteria, string $search, ?string $sort, string $dir, int $offset, int $limit): array
     {
         $sort = in_array($sort, QueryBuilder::SORTABLE, true) ? $sort : 'CONTRACT';
+        if (! isset($this->columns[$sort])) {
+            $sort = 'CONTRACT'; // an optional column this version does not carry (BillingValue)
+        }
         $desc = strtolower($dir) === 'desc';
 
         $select = [];
@@ -283,6 +320,8 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
         $exprs = match ($sort) {
             'CONTRACT' => $this->contractUniqueNumeric ? ["__contract_n {$dir}"] : $byContract($dir),
             'COD_CLI'  => ["__cod_cli_n {$dir}", "COD_CLI {$dir}"],
+            // Signed whole FCFA; blank / unreadable = NULL (SnapshotSort::compare, BillingValue::amount).
+            BillingValue::AMOUNT_COLUMN => ["CASE WHEN regexp_full_match(trim(\"{$sort}\"), '-?[0-9]{1,15}') THEN TRY_CAST(trim(\"{$sort}\") AS BIGINT) END {$dir}"],
             default    => ["\"{$sort}\" {$dir}"],
         };
         if ($sort !== 'CONTRACT') {
@@ -307,6 +346,12 @@ final class SnapshotDuckDbEngine implements SnapshotQueryEngine
         }
         if ($c->failureSubcategories !== []) {
             $conds[] = FailureSubcategories::COLUMN . ' IN (' . $this->list($c->failureSubcategories) . ')';
+        }
+        if ($c->values !== []) {
+            // RowMatcher twin: a version without the column matches no row.
+            $conds[] = isset($this->columns[BillingValue::SEGMENT_COLUMN])
+                ? 'trim(' . BillingValue::SEGMENT_COLUMN . ') IN (' . $this->list($c->values) . ')'
+                : 'FALSE';
         }
         if ($c->dateFrom !== null) {
             $conds[] = 'DATE_AB >= DATE ' . DuckDb::literal($c->dateFrom->format('Y-m-d'));

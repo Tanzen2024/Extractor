@@ -173,8 +173,14 @@ final class CustomersListQueryBuilderTest extends TestCase
     {
         $stmt = $this->qb->pageStatement(['sql' => '', 'binds' => []], 'ORDER BY CONTRACT ASC', 0, 50);
 
-        foreach (QueryBuilder::ALL_COLUMNS as $col) {
+        // The legacy Oracle page reads the 27 columns of CMS_RFC.TB_CUSTOMERS_LIST
+        // as deployed; the optional source columns 31-32 (BillingValue) only
+        // exist after the schema migration and are read from the snapshot.
+        foreach (array_diff(QueryBuilder::ALL_COLUMNS, \App\Services\CustomersList\BillingValue::COLUMNS) as $col) {
             $this->assertStringContainsString($col, $stmt['sql'], "pageStatement() must select {$col}.");
+        }
+        foreach (\App\Services\CustomersList\BillingValue::COLUMNS as $col) {
+            $this->assertStringNotContainsString($col, $stmt['sql'], 'never a column the deployed table may not have yet');
         }
 
         // UPDATED_AT is VARCHAR2(19) in Oracle, already formatted text — NOT
@@ -202,18 +208,24 @@ final class CustomersListQueryBuilderTest extends TestCase
             'METER_NO', 'CUST_NAME', 'PHONE_NUMBERS', 'E_MAIL', 'REF_GEO', 'DATE_AB',
             'DATE_RESILIATION', 'VOLTAGE', 'SEGMENT_TRESOR', 'METER', 'NIU_RIGHT', 'XCOORD',
             'YCOORD', 'NIU_TO_RECLASS', 'NUI_QC', 'LAST_VC_DATE', 'SEGMENT_RFM_2',
-            'POSTPAID_PROFILE_DATE', 'SEGMENTATION', 'UPDATED_AT',
+            'POSTPAID_PROFILE_DATE', 'SEGMENTATION',
+            // 2026-11-13: source columns 31-32 (amount billed 12 months, Value).
+            'AMOUNT_BILLED_12M', 'VALUE_SEGMENT',
+            // "Mis à jour le" always last (2026-11-13).
+            'UPDATED_AT',
         ], QueryBuilder::ALL_COLUMNS);
-        $this->assertCount(27, QueryBuilder::ALL_COLUMNS);
-        $this->assertSame(27, count(array_unique(QueryBuilder::ALL_COLUMNS)), 'ALL_COLUMNS must not contain duplicates.');
+        $this->assertSame('UPDATED_AT', QueryBuilder::DEFAULT_VISIBLE_COLUMNS[array_key_last(QueryBuilder::DEFAULT_VISIBLE_COLUMNS)], 'last of the visible columns too');
+        $this->assertCount(29, QueryBuilder::ALL_COLUMNS);
+        $this->assertSame(29, count(array_unique(QueryBuilder::ALL_COLUMNS)), 'ALL_COLUMNS must not contain duplicates.');
     }
 
     public function testDefaultVisibleColumnsIsTheFourteenHistoricalColumnsPlusNiuRightAndNuiQc(): void
     {
         $default = QueryBuilder::DEFAULT_VISIBLE_COLUMNS;
 
-        $this->assertCount(16, $default, 'DEFAULT_VISIBLE_COLUMNS must total 16.');
-        $this->assertSame(16, count(array_unique($default)), 'DEFAULT_VISIBLE_COLUMNS must not contain duplicates.');
+        // 16 historical columns + the amount billed over 12 months and Value (2026-11-13).
+        $this->assertCount(18, $default, 'DEFAULT_VISIBLE_COLUMNS must total 18.');
+        $this->assertSame(18, count(array_unique($default)), 'DEFAULT_VISIBLE_COLUMNS must not contain duplicates.');
 
         // Every default column must be one of the 27 selectable columns.
         foreach ($default as $col) {

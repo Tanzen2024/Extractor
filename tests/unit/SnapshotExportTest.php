@@ -115,7 +115,7 @@ final class SnapshotExportTest extends TestCase
         $this->assertStringStartsWith('snapshot:', $meta['source']);
         $this->assertSame(5, $meta['rows']);
         $lines = $this->readCsv($meta['path']);
-        $this->assertSame(CustomerListExportService::COLUMNS, $lines[0], 'same 25 columns/order as the Oracle export');
+        $this->assertSame(CustomerListExportService::EXPORT_COLUMNS, $lines[0], 'the 25 columns of the Oracle export, then the optional source columns (empty here)');
         $this->assertCount(6, $lines);
         $first = array_combine($lines[0], $lines[1]);
         $this->assertSame('900001', $first['CONTRACT']);
@@ -179,7 +179,7 @@ final class SnapshotExportTest extends TestCase
         }
         $reader->close();
 
-        $this->assertSame(CustomerListExportService::COLUMNS, $rows[0]);
+        $this->assertSame(CustomerListExportService::EXPORT_COLUMNS, $rows[0]);
         $this->assertCount(6, $rows);
         $this->assertSame('900005', $rows[5][array_search('CONTRACT', CustomerListExportService::COLUMNS, true)]);
     }

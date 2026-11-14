@@ -8,7 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { SECTIONS, universeOf, sectionCriteria, sectionsTotal, failureBreakdown, withFailureFilter, withSegmentation, profileInScope, profileTotals } = require('../../public/assets/js/dashboard-sections.js');
+const { SECTIONS, universeOf, sectionCriteria, sectionsTotal, failureBreakdown, withFailureFilter, recencyView, withSegmentation, profileInScope, profileTotals } = require('../../public/assets/js/dashboard-sections.js');
 
 const ROOT = path.join(__dirname, '../..');
 
@@ -91,6 +91,28 @@ test('view: a badge per view header, the global total in one band above both vie
     assert.ok(view.includes('id="bscdSection-detail"'), 'the detail section itself stays');
 });
 
+test('recencyView: share of the PREPAID total (unknowns included), reconciliation recomputed, unavailable stays empty', () => {
+    const view = recencyView({ available: true, total: 8, inconsistent: 1, classes: [
+        { value: 'D0_29', count: 4 }, { value: 'D360_PLUS', count: 2 }, { value: 'NO_PURCHASE', count: 1 }, { value: 'UNKNOWN', count: 1 },
+    ] });
+    assert.deepEqual(view.rows.map((r) => r.share), [50, 25, 12.5, 12.5]);
+    assert.equal(view.rows.reduce((s, r) => s + r.share, 0), 100);
+    assert.equal(view.sum, 8);
+    assert.equal(view.difference, 0);
+    assert.equal(view.reconciled, true);
+    assert.equal(view.inconsistent, 1);
+
+    const gap = recencyView({ available: true, total: 9, classes: [{ value: 'D0_29', count: 8 }] });
+    assert.equal(gap.difference, 1);
+    assert.equal(gap.reconciled, false);
+
+    const none = recencyView({ available: false, total: 50, classes: [{ value: 'D0_29', count: 50 }] });
+    assert.deepEqual(none.rows, [], 'no figure without the source columns');
+    assert.equal(none.reconciled, false);
+    assert.equal(recencyView(undefined).available, false);
+    assert.equal(recencyView({ available: true, total: 0, classes: [{ value: 'D0_29', count: 0 }] }).rows[0].share, 0, 'no division by zero');
+});
+
 test('sectionsTotal: Postpaid + Prepaid, null until both figures are known, an empty view counts 0', () => {
     assert.equal(sectionsTotal({ postpaid: 1342540, prepaid: 1110571 }), 2453111);
     assert.equal(sectionsTotal({ postpaid: 1342540 }), null);
@@ -143,7 +165,7 @@ test('profileTotals: the six official profiles apart from the rest', () => {
     assert.deepEqual(profileTotals([], profiles), { classified: 0, unclassified: 0 });
 });
 
-test('view: Postpaid = segmentation then Défaillant breakdown, Prepaid = segmentation only; nothing else drawn', () => {
+test('view: Postpaid = segmentation then Défaillant breakdown, Prepaid = segmentation then recency; nothing else drawn', () => {
     const view = fs.readFileSync(path.join(ROOT, 'app/Views/dashboard/index.php'), 'utf8');
     const start = view.indexOf('<?php foreach ($sections as $sk => $sec): ?>\n<section');
     const body = view.slice(start, view.indexOf('</section>', start));
@@ -154,6 +176,8 @@ test('view: Postpaid = segmentation then Défaillant breakdown, Prepaid = segmen
     ['data-kpi', 'bscd-kpi', 'byRegion', 'byStatus', 'meterType', 'data-metertype'].forEach((s) => assert.ok(!body.includes(s), s));
     ['data-profile-total', 'data-profile-stats', 'data-profile-note', 'data-failure-total', 'data-failure-stats', 'data-failure-note',
         'bscd-viz__side', 'bscd-viz__total', 'classifiedTotal'].forEach((s) => assert.ok(!body.includes(s), s));
-    assert.equal((body.match(/<canvas /g) || []).length, 2, 'two charts in the loop body: segmentation + (Postpaid) Défaillant');
-    assert.equal((body.match(/class="bscd-chart-card /g) || []).length, 2);
+    assert.equal((body.match(/<canvas /g) || []).length, 3, 'three charts in the loop body: segmentation + (Postpaid) Défaillant + (Prepaid) ancienneté');
+    assert.equal((body.match(/class="bscd-chart-card /g) || []).length, 3);
+    const recency = body.indexOf('bscdChart_prepaid_recency');
+    assert.ok(recency > seg && body.indexOf("<?php if ($sk === 'prepaid'): ?>") < recency, 'ancienneté after the segmentation, in Prepaid only');
 });
