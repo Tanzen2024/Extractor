@@ -4,7 +4,7 @@ namespace App\Services\CustomersList;
 
 /**
  * "Ancienneté du dernier achat" (Prepaid section): days between the
- * reference date and the last purchase of a PREPAID customer, in 6 bands,
+ * reference date and the last purchase of a PREPAID customer, in 3 bands,
  * plus the 3 situations without a number of days. An ANALYSIS, never a
  * segment: SEGMENTATION, its thresholds and the Segmentation filter are not
  * affected, exports carry no column for it.
@@ -46,17 +46,14 @@ final class PrepaidRecency
     public const BANDS = [
         'D0_29'     => [0, 29],
         'D30_59'    => [30, 59],
-        'D60_89'    => [60, 89],
-        'D90_179'   => [90, 179],
-        'D180_359'  => [180, 359],
-        'D360_PLUS' => [360, null],
+        'D60_PLUS'  => [60, null],
     ];
 
-    /** Display order: the 6 bands, then the situations without days. @var list<string> */
-    public const CLASSES = ['D0_29', 'D30_59', 'D60_89', 'D90_179', 'D180_359', 'D360_PLUS', self::NO_PURCHASE, self::POST_REFERENCE, self::UNKNOWN];
+    /** Display order: the 3 bands, then the situations without days. @var list<string> */
+    public const CLASSES = ['D0_29', 'D30_59', 'D60_PLUS', self::NO_PURCHASE, self::POST_REFERENCE, self::UNKNOWN];
 
     /** Part of the /dashboard/stats cache key: bump when the answer's shape changes. */
-    public const CACHE_TAG = 'recency1';
+    public const CACHE_TAG = 'recency2';
 
     /** The METER value of the population (same as the Prepaid section). */
     public const METER = PrepaidSegmentations::METER;

@@ -169,7 +169,7 @@ test('first load: STATUT offers the 4 active statuses, none pre-checked, no "Con
 
 // ── Ancienneté du dernier achat (Prepaid only) ──
 
-const RECENCY_CLASSES = ['D0_29', 'D30_59', 'D60_89', 'D90_179', 'D180_359', 'D360_PLUS', 'NO_PURCHASE', 'POST_REFERENCE', 'UNKNOWN'];
+const RECENCY_CLASSES = ['D0_29', 'D30_59', 'D60_PLUS', 'NO_PURCHASE', 'POST_REFERENCE', 'UNKNOWN'];
 const recencyAnswer = (counts, total, extra = {}) => {
     const classes = RECENCY_CLASSES.map((value, i) => ({ value, count: counts[i] }));
     const sum = counts.reduce((a, b) => a + b, 0);
@@ -181,26 +181,26 @@ const statsWithRecency = (prepaidRecency) => (url) => ({
 });
 
 test('recency: Prepaid only, every class in order (zeros too), count + share of the filtered PREPAID total on each bar', async () => {
-    const answer = recencyAnswer([600, 100, 50, 40, 30, 80, 60, 0, 40], 1000);
+    const answer = recencyAnswer([600, 100, 200, 60, 0, 40], 1000);
     const ctx = bootDashboard({ '/dashboard/stats': statsWithRecency(answer) });
     await settle();
     const chart = ctx.charts.bscdChart_prepaid_recency;
     const plain = (v) => JSON.parse(JSON.stringify(v));
     assert.equal(chart.type, 'bar');
     assert.equal(chart.options.indexAxis, 'y', 'horizontal');
-    assert.deepEqual(plain(chart.data.datasets[0].data), [600, 100, 50, 40, 30, 80, 60, 0, 40], 'nine classes, the zero one kept');
+    assert.deepEqual(plain(chart.data.datasets[0].data), [600, 100, 200, 60, 0, 40], 'six classes, the zero one kept');
     assert.equal(ctx.charts.bscdChart_postpaid_recency, undefined, 'never in the Postpaid view');
 
     const colors = plain(chart.data.datasets[0].backgroundColor);
-    assert.equal(new Set(colors).size, 9, 'one colour per class');
-    assert.equal(colors[8], '#c7ccd6', 'unknown date: light grey');
+    assert.equal(new Set(colors).size, 6, 'one colour per class');
+    assert.equal(colors[5], '#c7ccd6', 'unknown date: light grey');
 
     const fr = (n) => n.toLocaleString('fr-FR');
     assert.equal(chart.options.plugins.bscdValueLabels.formatValue(600), fr(600) + ' · 60,0 %');
     assert.equal(chart.options.plugins.bscdValueLabels.formatValue(0), '0 · 0,0 %');
     assert.deepEqual(plain(chart.options.scales.y.ticks.callback(0, 0)), ['0 à 29 jours', 'Activité récente'], 'range + meaning, two lines');
-    assert.deepEqual(plain(chart.options.scales.y.ticks.callback(0, 6)), ['Aucun achat retrouvé', 'Jamais acheté']);
-    assert.equal(plain(chart.data.labels)[8], 'Date inconnue — Date indisponible', 'one readable text per class (exports, tooltips)');
+    assert.deepEqual(plain(chart.options.scales.y.ticks.callback(0, 3)), ['Aucun achat', 'Jamais acheté']);
+    assert.equal(plain(chart.data.labels)[5], 'Date inconnue — Date indisponible', 'one readable text per class (exports, tooltips)');
     assert.equal(chart.options.plugins.tooltip.callbacks.label({ parsed: { x: 100 }, dataIndex: 1 }), '100 clients · 10,0 % du total PREPAID filtré');
     assert.equal(chart.options.onClick, undefined, 'not a filter: no click');
 
@@ -220,7 +220,7 @@ test('recency: a snapshot without the source columns shows the "not available" m
 });
 
 test('recency: a reconciliation gap and unusable source pairs are stated under the chart, never hidden', async () => {
-    const answer = recencyAnswer([5, 0, 0, 0, 0, 2, 1, 0, 1], 10, { inconsistent: 1 }); // 9 classified for 10
+    const answer = recencyAnswer([5, 0, 2, 1, 0, 1], 10, { inconsistent: 1 }); // 9 classified for 10
     const ctx = bootDashboard({ '/dashboard/stats': statsWithRecency(answer) });
     await settle();
     assert.ok(ctx.charts.bscdChart_prepaid_recency, 'the chart is still drawn');

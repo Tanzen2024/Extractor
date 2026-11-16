@@ -93,7 +93,7 @@ test('view: a badge per view header, the global total in one band above both vie
 
 test('recencyView: share of the PREPAID total (unknowns included), reconciliation recomputed, unavailable stays empty', () => {
     const view = recencyView({ available: true, total: 8, inconsistent: 1, classes: [
-        { value: 'D0_29', count: 4 }, { value: 'D360_PLUS', count: 2 }, { value: 'NO_PURCHASE', count: 1 }, { value: 'UNKNOWN', count: 1 },
+        { value: 'D0_29', count: 4 }, { value: 'D60_PLUS', count: 2 }, { value: 'NO_PURCHASE', count: 1 }, { value: 'UNKNOWN', count: 1 },
     ] });
     assert.deepEqual(view.rows.map((r) => r.share), [50, 25, 12.5, 12.5]);
     assert.equal(view.rows.reduce((s, r) => s + r.share, 0), 100);
@@ -180,4 +180,15 @@ test('view: Postpaid = segmentation then Défaillant breakdown, Prepaid = segmen
     assert.equal((body.match(/class="bscd-chart-card /g) || []).length, 3);
     const recency = body.indexOf('bscdChart_prepaid_recency');
     assert.ok(recency > seg && body.indexOf("<?php if ($sk === 'prepaid'): ?>") < recency, 'ancienneté after the segmentation, in Prepaid only');
+});
+
+test('css: comparative grid = 2 equal columns, each view a 3-row subgrid (header, card 1, card 2) whose body is display:contents on desktop', () => {
+    const css = fs.readFileSync(path.join(ROOT, 'public/assets/css/custom.css'), 'utf8');
+    const rule = (sel) => { const i = css.indexOf(sel + ' {'); assert.ok(i !== -1, sel); return css.slice(i, css.indexOf('}', i)); };
+    assert.match(rule('.bscd-compare'), /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/, 'Postpaid | Prepaid, same width');
+    assert.match(rule('.bscd-compare'), /grid-template-rows: auto auto auto auto/, 'grand total, headers, first cards, second cards');
+    assert.match(rule('.bscd-compare > .bscd-section'), /grid-row: span 3; grid-template-rows: subgrid/, 'cards of both views share their rows');
+    const desktop = css.slice(css.indexOf('@media (min-width: 1200px) {\n    .bscd-compare > .bscd-section > .bscd-section__body'));
+    assert.match(desktop.slice(0, 200), /\.bscd-section__body \{ display: contents; \}/, 'cards are items of the shared rows');
+    assert.ok(css.includes('@media (max-width: 1199.98px) {\n    .bscd-compare { display: block;'), 'stacked below xl');
 });

@@ -23,16 +23,12 @@ final class PrepaidRecencyTest extends CIUnitTestCase
             '29 jours'             => ['KNOWN', '29', 'D0_29'],
             '30 jours'             => ['KNOWN', '30', 'D30_59'],
             '59 jours'             => ['KNOWN', '59', 'D30_59'],
-            '60 jours'             => ['KNOWN', '60', 'D60_89'],
-            '89 jours'             => ['KNOWN', '89', 'D60_89'],
-            '90 jours'             => ['KNOWN', '90', 'D90_179'],
-            '179 jours'            => ['KNOWN', '179', 'D90_179'],
-            '180 jours'            => ['KNOWN', '180', 'D180_359'],
-            '359 jours'            => ['KNOWN', '359', 'D180_359'],
-            '360 jours'            => ['KNOWN', '360', 'D360_PLUS'],
-            '1 095 jours (fin de fenêtre du profil)' => ['KNOWN', '1095', 'D360_PLUS'],
-            '1 096 jours (ORDER_MASTER, hors fenêtre)' => ['KNOWN', '1096', 'D360_PLUS'],
-            '12 000 jours (jamais plafonné)' => ['KNOWN', '12000', 'D360_PLUS'],
+            '60 jours'             => ['KNOWN', '60', 'D60_PLUS'],
+            '89 jours'             => ['KNOWN', '89', 'D60_PLUS'],
+            '360 jours'            => ['KNOWN', '360', 'D60_PLUS'],
+            '1 095 jours (fin de fenêtre du profil)' => ['KNOWN', '1095', 'D60_PLUS'],
+            '1 096 jours (ORDER_MASTER, hors fenêtre)' => ['KNOWN', '1096', 'D60_PLUS'],
+            '12 000 jours (jamais plafonné)' => ['KNOWN', '12000', 'D60_PLUS'],
             'zéros en tête'        => ['KNOWN', '007', 'D0_29'],
             'espaces / casse'      => [' known ', ' 45 ', 'D30_59'],
             'aucun achat'          => ['NO_PURCHASE', '', 'NO_PURCHASE'],
@@ -69,22 +65,22 @@ final class PrepaidRecencyTest extends CIUnitTestCase
             $previousMax = $max ?? PHP_INT_MAX;
         }
         $bands = PrepaidRecency::BANDS;
-        $this->assertNull(end($bands)[1], '360 days and more has no upper bound');
+        $this->assertNull(end($bands)[1], '60 days and more has no upper bound');
 
         // Every day from 0 to 2 000 in exactly one band.
         for ($d = 0; $d <= 2000; $d++) {
             $hits = array_filter(PrepaidRecency::BANDS, static fn (array $b): bool => $d >= $b[0] && ($b[1] === null || $d <= $b[1]));
             $this->assertCount(1, $hits, "{$d} days");
         }
-        $this->assertSame(['D0_29', 'D30_59', 'D60_89', 'D90_179', 'D180_359', 'D360_PLUS', 'NO_PURCHASE', 'POST_REFERENCE', 'UNKNOWN'], PrepaidRecency::CLASSES);
+        $this->assertSame(['D0_29', 'D30_59', 'D60_PLUS', 'NO_PURCHASE', 'POST_REFERENCE', 'UNKNOWN'], PrepaidRecency::CLASSES);
     }
 
     public function testBreakdownReconcilesWithThePrepaidTotalAndStatesAnyGap(): void
     {
-        $b = PrepaidRecency::breakdown(['D0_29' => 5, 'D360_PLUS' => 2, 'NO_PURCHASE' => 1, 'UNKNOWN' => 1, 'INCONSISTENT' => 1], 10);
+        $b = PrepaidRecency::breakdown(['D0_29' => 5, 'D60_PLUS' => 2, 'NO_PURCHASE' => 1, 'UNKNOWN' => 1, 'INCONSISTENT' => 1], 10);
         $this->assertTrue($b['available']);
         $this->assertSame(PrepaidRecency::CLASSES, array_column($b['classes'], 'value'), 'every class, zeros included, in order');
-        $this->assertSame([5, 0, 0, 0, 0, 2, 1, 0, 2], array_column($b['classes'], 'count'), 'inconsistent pairs shown as unknown date');
+        $this->assertSame([5, 0, 2, 1, 0, 2], array_column($b['classes'], 'count'), 'inconsistent pairs shown as unknown date');
         $this->assertSame(10, $b['sum']);
         $this->assertSame(0, $b['difference']);
         $this->assertSame(1, $b['inconsistent']);

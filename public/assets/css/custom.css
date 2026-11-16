@@ -738,20 +738,21 @@ body.dark-mode {
     padding: 1rem; color: #9ca3af; font-size: .82rem;
 }
 /* ── Segmentation views: one comparative grid ─────────────────
-   Desktop (xl+): two equal columns, Postpaid left, Prepaid right. Each
-   section is a 2-row subgrid (header, body), so both headers share one row
-   and both bodies one row: the cards start on the same line and end on the
-   same line. In the Postpaid body the second card grows, the Prepaid card
-   fills its whole body — the Prepaid card is exactly the two Postpaid cards
-   plus the gap between them. Inside a card the chart area grows (the canvas
-   is absolutely positioned, so Chart.js follows the box and never pushes
-   it). Below xl: one column, Postpaid then Prepaid, natural heights. */
+   Desktop (xl+): two equal columns, Postpaid left, Prepaid right, two cards
+   stacked in each. Each section is a 3-row subgrid (header, card 1, card 2)
+   and its body is display:contents, so the cards are items of the shared
+   rows: both headers on one row, both first cards (segmentation) on the
+   next, both second cards (Défaillant / ancienneté) on the last. A row is as
+   tall as its taller card and both cards stretch to it: same width, same
+   top, same bottom. Inside a card the chart area grows (the canvas is
+   absolutely positioned, so Chart.js follows the box and never pushes it).
+   Below xl: one column, Postpaid then Prepaid, natural heights. */
 .bscd-compare {
-    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto 1fr;
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto auto auto;
     column-gap: 1.5rem; row-gap: .9rem; margin-top: 1.5rem;
 }
 .bscd-compare > .bscd-section {
-    display: grid; grid-row: span 2; grid-template-rows: subgrid; margin-top: 0; min-width: 0;
+    display: grid; grid-row: span 3; grid-template-rows: subgrid; margin-top: 0; min-width: 0;
 }
 .bscd-compare > .bscd-section > .bscd-section__header { margin-bottom: 0; }
 /* "Total clients actifs" = Postpaid + Prepaid: one slim band over both
@@ -775,6 +776,10 @@ body.dark-mode {
 .bscd-section__body { display: flex; flex-direction: column; gap: .9rem; min-width: 0; }
 .bscd-section__body > .bscd-chart-card { display: flex; flex-direction: column; height: auto; min-width: 0; }
 .bscd-section__body > .bscd-chart-card:last-child { flex: 1 1 auto; }
+@media (min-width: 1200px) {
+    .bscd-compare > .bscd-section > .bscd-section__body { display: contents; }
+    .bscd-compare > .bscd-section > .bscd-section__body > .bscd-chart-card { margin: 0; }
+}
 
 .bscd-viz .bscd-chart-card__title { font-size: 1rem; }
 .bscd-viz .bscd-chart-card__subtitle { font-size: .76rem; color: #6b7280; }

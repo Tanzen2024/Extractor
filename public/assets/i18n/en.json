@@ -182,24 +182,12 @@
                     "range": "30 to 59 days",
                     "meaning": "Recent inactivity"
                 },
-                "D60_89": {
-                    "range": "60 to 89 days",
-                    "meaning": "Intermediate inactivity"
-                },
-                "D90_179": {
-                    "range": "90 to 179 days",
+                "D60_PLUS": {
+                    "range": "60 days and more",
                     "meaning": "Prolonged inactivity"
                 },
-                "D180_359": {
-                    "range": "180 to 359 days",
-                    "meaning": "Significant inactivity"
-                },
-                "D360_PLUS": {
-                    "range": "360 days and more",
-                    "meaning": "Very significant inactivity"
-                },
                 "NO_PURCHASE": {
-                    "range": "No purchase found",
+                    "range": "No purchase",
                     "meaning": "Never purchased"
                 },
                 "POST_REFERENCE": {

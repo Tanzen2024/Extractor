@@ -79,22 +79,19 @@
 
     // "Ancienneté du dernier achat" classes (PrepaidRecency::CLASSES, in that
     // order) — analysis of the PREPAID rows, never segments. Each label is a
-    // day range + its meaning (two tick lines). Colours: green (recent) to
-    // dark red (360 days and more); no purchase dark grey; post-reference
+    // day range + its meaning (two tick lines). Colours: green (recent),
+    // amber (30-59), red (60 days and more); no purchase dark grey; post-reference
     // buyers blue; unknown date light grey (OTHER_COLOR).
     var RECENCY_LABELS = {
         D0_29: function () { return [t('dashboard.recency.classes.D0_29.range'), t('dashboard.recency.classes.D0_29.meaning')]; },
         D30_59: function () { return [t('dashboard.recency.classes.D30_59.range'), t('dashboard.recency.classes.D30_59.meaning')]; },
-        D60_89: function () { return [t('dashboard.recency.classes.D60_89.range'), t('dashboard.recency.classes.D60_89.meaning')]; },
-        D90_179: function () { return [t('dashboard.recency.classes.D90_179.range'), t('dashboard.recency.classes.D90_179.meaning')]; },
-        D180_359: function () { return [t('dashboard.recency.classes.D180_359.range'), t('dashboard.recency.classes.D180_359.meaning')]; },
-        D360_PLUS: function () { return [t('dashboard.recency.classes.D360_PLUS.range'), t('dashboard.recency.classes.D360_PLUS.meaning')]; },
+        D60_PLUS: function () { return [t('dashboard.recency.classes.D60_PLUS.range'), t('dashboard.recency.classes.D60_PLUS.meaning')]; },
         NO_PURCHASE: function () { return [t('dashboard.recency.classes.NO_PURCHASE.range'), t('dashboard.recency.classes.NO_PURCHASE.meaning')]; },
         POST_REFERENCE: function () { return [t('dashboard.recency.classes.POST_REFERENCE.range'), t('dashboard.recency.classes.POST_REFERENCE.meaning')]; },
         UNKNOWN: function () { return [t('dashboard.recency.classes.UNKNOWN.range'), t('dashboard.recency.classes.UNKNOWN.meaning')]; }
     };
     var RECENCY_COLORS = {
-        D0_29: '#1a7f4d', D30_59: '#7aa63a', D60_89: '#d4a017', D90_179: '#d97706', D180_359: '#e0605a', D360_PLUS: '#991b1b',
+        D0_29: '#1a7f4d', D30_59: '#d4a017', D60_PLUS: '#c0392b',
         NO_PURCHASE: '#4b5563', POST_REFERENCE: '#1f6fb2', UNKNOWN: '#c7ccd6'
     };
     function recencyLines(value) { return RECENCY_LABELS[value] ? RECENCY_LABELS[value]() : [value]; }

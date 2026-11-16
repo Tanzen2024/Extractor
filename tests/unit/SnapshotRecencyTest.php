@@ -154,7 +154,7 @@ final class SnapshotRecencyTest extends CIUnitTestCase
         ksort($actual);
         $this->assertSame($expected, $actual);
         $this->assertArrayHasKey(PrepaidRecency::INCONSISTENT, $actual, 'pairs breaking the contract are counted apart');
-        $this->assertArrayHasKey('D360_PLUS', $actual, '4 000 days stays in 360 and more');
+        $this->assertArrayHasKey('D60_PLUS', $actual, '4 000 days stays in 60 and more');
     }
 
     public function testTwoContractsOnOneMeterAreTwoCustomers(): void
