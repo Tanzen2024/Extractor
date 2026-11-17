@@ -95,17 +95,96 @@ final class OracleSnapshotExtractor
         return array_values(array_filter(self::OPTIONAL_COLUMNS, static fn (string $c): bool => in_array($c, $names, true)));
     }
 
-    /** @param list<string> $optional what optionalColumns() found */
-    public static function selectSql(array $optional = []): string
+    /**
+     * The columns of the file: the exported ones, then the OPTIONAL_COLUMNS
+     * the table has. FAILURE_SUBCATEGORY is always there: read when the table
+     * carries it, computed by the extraction query otherwise ($derived).
+     *
+     * @param list<string> $found what optionalColumns() found
+     *
+     * @return array{0: list<string>, 1: bool} columns, FAILURE_SUBCATEGORY derived
+     */
+    public static function plannedColumns(array $found): array
+    {
+        $derived = ! in_array(FailureSubcategories::COLUMN, $found, true);
+        $wanted  = $derived ? array_merge([FailureSubcategories::COLUMN], $found) : $found;
+        $ordered = array_values(array_filter(self::OPTIONAL_COLUMNS, static fn (string $c): bool => in_array($c, $wanted, true)));
+
+        return [array_merge(CustomerListExportService::COLUMNS, $ordered), $derived];
+    }
+
+    /**
+     * @param list<string> $optional       OPTIONAL_COLUMNS to select, in that order
+     * @param bool         $deriveFailure  compute FailureSubcategories::COLUMN instead of
+     *                                     reading it (the table does not carry it)
+     */
+    public static function selectSql(array $optional = [], bool $deriveFailure = false): string
     {
         $columns = [];
         foreach (array_merge(CustomerListExportService::COLUMNS, $optional) as $column) {
-            $columns[] = in_array($column, self::DATE_COLUMNS, true)
-                ? sprintf("TO_CHAR(%s, '%s') AS %s", $column, self::DATE_SQL_FORMAT, $column)
-                : $column;
+            if ($deriveFailure && $column === FailureSubcategories::COLUMN) {
+                $columns[] = self::failureSql() . ' AS ' . $column;
+            } elseif (in_array($column, self::DATE_COLUMNS, true)) {
+                $columns[] = sprintf("TO_CHAR(t.%s, '%s') AS %s", $column, self::DATE_SQL_FORMAT, $column);
+            } else {
+                $columns[] = 't.' . $column;
+            }
         }
 
-        return "SELECT\n    " . implode(",\n    ", $columns) . "\nFROM " . CustomerListExportService::SQL_TABLE;
+        $sql = "SELECT\n    " . implode(",\n    ", $columns) . "\nFROM " . CustomerListExportService::SQL_TABLE . ' t';
+        if ($deriveFailure) {
+            // One row per SERVICE_NO on the right: the row count is unchanged
+            // (checked against COUNT(*) after the extraction anyway). Same
+            // join as customers_list.sql (SERVICE_NO = CONTRACT).
+            $sql .= "\nLEFT JOIN " . FailureSubcategories::oracleLastRows() . ' pp ON pp.SERVICE_NO = t.CONTRACT';
+        }
+
+        return $sql;
+    }
+
+    /**
+     * Column 28 of customers_list.sql: the component for every 6 Défaillant
+     * row (any spelling folded into the profile, so exactly the chart's
+     * total), NULL for every other row.
+     */
+    public static function failureSql(): string
+    {
+        $labels = array_map(self::oracleText(...), FailureSubcategories::defaillantLabels());
+
+        return "CASE WHEN t.SEGMENTATION IN (" . implode(', ', $labels) . ")\n        THEN "
+            . FailureSubcategories::oracleRule('pp') . "\n    END";
+    }
+
+    /**
+     * A text literal written in ASCII only, so the session character set can
+     * never alter it: non-ASCII characters go through UNISTR (the corrupted
+     * "6 D\u{FFFD}\u{FFFD}faillant" is matched byte for byte this way, a
+     * plain literal is not).
+     */
+    public static function oracleText(string $value): string
+    {
+        $parts = [];
+        $ascii = '';
+        foreach (mb_str_split($value, 1, 'UTF-8') as $char) {
+            if (strlen($char) === 1) {
+                $ascii .= $char;
+
+                continue;
+            }
+            if ($ascii !== '') {
+                $parts[] = "'" . str_replace("'", "''", $ascii) . "'";
+                $ascii   = '';
+            }
+            $cp = mb_ord($char, 'UTF-8');
+            $parts[] = $cp > 0xFFFF
+                ? sprintf("UNISTR('\\%04X\\%04X')", 0xD800 + (($cp - 0x10000) >> 10), 0xDC00 + (($cp - 0x10000) & 0x3FF))
+                : sprintf("UNISTR('\\%04X')", $cp);
+        }
+        if ($ascii !== '' || $parts === []) {
+            $parts[] = "'" . str_replace("'", "''", $ascii) . "'";
+        }
+
+        return implode(' || ', $parts);
     }
 
     public static function countSql(): string
@@ -160,8 +239,11 @@ final class OracleSnapshotExtractor
 
             ($this->log)('info', sprintf('Oracle connection OK — %s lignes attendues, MAX(UPDATED_AT)=%s (%.1fs)', number_format($expected, 0, '.', ' '), $sourceUpdated ?? 'n/d', $countSeconds));
 
-            $optional = $this->optionalColumns();
-            $columns  = array_merge(CustomerListExportService::COLUMNS, $optional);
+            [$columns, $deriveFailure] = self::plannedColumns($this->optionalColumns());
+            $optional = array_slice($columns, count(CustomerListExportService::COLUMNS));
+            if ($deriveFailure) {
+                ($this->log)('info', FailureSubcategories::COLUMN . ' absente de la table : calculée par la requête d\'extraction (' . FailureSubcategories::SOURCE_TABLE . ')');
+            }
             $header   = implode(self::DELIMITER, $columns);
             $hash   = hash_init('sha256');
             $buffer = $header . "\n";
@@ -186,7 +268,7 @@ final class OracleSnapshotExtractor
 
             ($this->log)('info', 'Requête d\'extraction démarrée');
 
-            $this->oracle->stream(self::selectSql($optional), function (array $row) use (&$buffer, &$rows, &$dirty, $flush, $every, $expected, $t1, $columns): void {
+            $this->oracle->stream(self::selectSql($optional, $deriveFailure), function (array $row) use (&$buffer, &$rows, &$dirty, $flush, $every, $expected, $t1, $columns): void {
                 $fields = [];
                 foreach ($columns as $column) {
                     $value = (string) ($row[$column] ?? '');

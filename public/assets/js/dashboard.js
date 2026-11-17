@@ -1082,17 +1082,16 @@
         var rows = view.rows;
         state.failureView = view;
 
-        // Défaillant customers without a component (FAILURE_SUBCATEGORY empty)
-        // are never a fourth category nor put in a component: they stay in the
-        // centre total and are mentioned on one line outside the chart.
-        var note = root && root.querySelector('[data-failure-unassigned]');
-        if (note) {
-            note.textContent = view.unassigned > 0 ? t('dashboard.failure.unassigned', { count: fmt(view.unassigned) }) : '';
-            note.classList.toggle('d-none', !(view.unassigned > 0));
-        }
-
         // Drawn whenever the profile has customers, so the three components
         // always show (at zero too); empty message only without any Défaillant.
+        // The control: drawn only when the three components add up exactly to
+        // the centre total. Otherwise (a data version produced before the
+        // components were computed) a message replaces the chart: never a
+        // fourth category, never a remainder put in a component.
+        if (view.total > 0 && !view.consistent) {
+            setChartMessage(canvasId, t('dashboard.failure.unavailable'));
+            return;
+        }
         setChartMessage(canvasId, view.total > 0 ? null : CHART_EMPTY);
         if (!(view.total > 0)) return;
         chartPairs[canvasId] = rows.map(function (r) { return { value: dimLabel('failure_subcategory', r.value), count: r.count }; });

@@ -206,17 +206,14 @@ $sections = [
         <?php if ($sk === 'postpaid'): ?>
         <?php // 2. Décomposition du profil Défaillant: exactly 3 analytic components, never
               // profiles; counts in the legend, a slice or legend item opens its customers.
-              // data-failure-unassigned: one secondary line, outside the chart, for the
-              // Défaillant customers without a component (filled by dashboard.js). ?>
+              // Their sum is the centre total, or the chart is not drawn (dashboard.js). ?>
         <div class="bscd-chart-card bscd-viz bscd-failure">
             <div class="bscd-chart-card__header">
                 <h3 class="bscd-chart-card__title"><?= esc(lang('Dashboard.failure.title')) ?></h3>
                 <div class="bscd-chart-card__subtitle"><?= esc(lang('Dashboard.failure.subtitle')) ?></div>
                 <div class="bscd-cx" data-chart-export="postpaid-failure"></div>
             </div>
-            <div class="bscd-chart-card__body bscd-viz__chart bscd-viz__chart--doughnut" data-chart-wrap="failure"><canvas id="bscdChart_postpaid_failure"></canvas></div>
-            <p class="bscd-failure-unassigned d-none" data-failure-unassigned></p>
-        </div>
+            <div class="bscd-chart-card__body bscd-viz__chart bscd-viz__chart--doughnut" data-chart-wrap="failure"><canvas id="bscdChart_postpaid_failure"></canvas></div>        </div>
         <?php endif; ?>
 
         <?php if ($sk === 'prepaid'): ?>

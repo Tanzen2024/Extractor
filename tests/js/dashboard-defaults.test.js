@@ -278,11 +278,11 @@ test('Défaillant breakdown: Postpaid only, one doughnut, counts in its legend, 
     assert.deepEqual(new URLSearchParams(ctx.requests[ctx.requests.length - 1].split('?')[1]).getAll('failure_subcategory[]'), ['ALWAYS_LATE']);
 });
 
-// 2026-11-13 real figures: the corrupted "6 D��faillant" folded into 6 Défaillant
-// (PostpaidSegmentations::DEFAILLANT_CORRUPTED) brings 366 864 customers without a component.
-test('Défaillant breakdown: exactly the 3 components (zeros shown), real total in the centre, customers without a component on one line outside the chart', async () => {
-    const failureBreakdown = { total: 492776, unassigned: 366864, components: [
-        { value: 'ALWAYS_LATE', count: 0 }, { value: 'NEVER_PAID', count: 125912 }, { value: 'SOMETIME_PAID', count: 0 },
+// 2026-11-17 real figures, components computed by customers:refresh from
+// POSTPAID_PROFILE_P (rule of customers_list.sql col. 28): 46 195 + 310 007 + 135 921 = 492 123.
+test('Défaillant breakdown: exactly the 3 components, their sum in the centre, no 4th entry and no "non décomposés" line', async () => {
+    const failureBreakdown = { total: 492123, unassigned: 0, consistent: true, components: [
+        { value: 'ALWAYS_LATE', count: 46195 }, { value: 'NEVER_PAID', count: 310007 }, { value: 'SOMETIME_PAID', count: 135921 },
     ] };
     const ctx = bootDashboard({
         '/dashboard/stats': { totalRows: 1342920, kpis: { total: 1342920 }, charts: { region: [], status: [], segmentation: [], meterType: [], failureBreakdown } },
@@ -292,21 +292,26 @@ test('Défaillant breakdown: exactly the 3 components (zeros shown), real total 
     const plain = (v) => JSON.parse(JSON.stringify(v));
     const fr = (n) => n.toLocaleString('fr-FR');
 
-    // Exactly three categories, fixed order, zeros kept, the three business colours.
+    // Exactly three categories, fixed order, the three business colours.
     assert.deepEqual(plain(chart.data.labels), ['Always Late', 'Never Paid', 'Sometime Paid']);
-    assert.deepEqual(plain(chart.data.datasets[0].data), [0, 125912, 0]);
+    assert.deepEqual(plain(chart.data.datasets[0].data), [46195, 310007, 135921]);
     assert.deepEqual(plain(chart.data.datasets[0].backgroundColor), ['#d97706', '#c0392b', '#1f6fb2']);
     const items = plain(chart.options.plugins.legend.labels.generateLabels({ data: chart.data }));
-    assert.deepEqual(items.map((i) => i.text), ['Always Late : 0', 'Never Paid : ' + fr(125912), 'Sometime Paid : 0']);
+    assert.deepEqual(items.map((i) => i.text), ['Always Late : ' + fr(46195), 'Never Paid : ' + fr(310007), 'Sometime Paid : ' + fr(135921)]);
 
-    // Centre = the real Défaillant total, the customers without a component included.
-    assert.deepEqual(plain(chart.options.plugins.bscdValueLabels.center), { label: 'TOTAL DÉFAILLANT', value: fr(492776) });
-    assert.equal(chart.options.plugins.tooltip.callbacks.label({ label: 'Never Paid', parsed: 125912, dataIndex: 1 }), 'Never Paid: ' + fr(125912));
+    // Centre = the Défaillant total = the sum of the three components.
+    assert.deepEqual(plain(chart.options.plugins.bscdValueLabels.center), { label: 'TOTAL DÉFAILLANT', value: fr(492123) });
+    assert.equal(chart.data.datasets[0].data.reduce((s, n) => s + n, 0), 492123);
+    assert.equal(chart.options.plugins.tooltip.callbacks.label({ label: 'Never Paid', parsed: 310007, dataIndex: 1 }), 'Never Paid: ' + fr(310007));
 
-    // The customers without a component: one secondary line outside the chart, not a 4th entry.
-    const note = inSection(ctx.document, 'postpaid', '[data-failure-unassigned]');
-    assert.equal(note.textContent, 'Dont ' + fr(366864) + ' clients non décomposés (sous-catégorie non renseignée), inclus dans le total.');
-    assert.equal(note.classList.contains('d-none'), false);
+    // The former "Dont … clients non décomposés" line is gone.
+    const read = (f) => fs.readFileSync(path.join(__dirname, '..', '..', f), 'utf8');
+    assert.equal(read('app/Views/dashboard/index.php').includes('data-failure-unassigned'), false);
+    assert.equal(read('public/assets/js/dashboard.js').includes('failure.unassigned'), false);
+    for (const f of ['public/assets/i18n/fr.json', 'public/assets/i18n/en.json']) {
+        assert.equal(/non décomposés|not broken down/.test(read(f)), false, f);
+    }
+    assert.equal(ctx.document.getElementById('bscdChart_postpaid_failure').parentNode.dataset.chartMsg, undefined);
 
     // Interactions unchanged: a slice / legend item still opens its component.
     chart.options.onClick(null, [{ index: 1 }]);
@@ -317,27 +322,34 @@ test('Défaillant breakdown: exactly the 3 components (zeros shown), real total 
     assert.deepEqual(new URLSearchParams(ctx.requests[ctx.requests.length - 1].split('?')[1]).getAll('failure_subcategory[]'), ['ALWAYS_LATE']);
 });
 
-test('Défaillant breakdown: the three components stay drawn at zero; no line when every customer has a component; empty message only without Défaillant', async () => {
+test('Défaillant breakdown control: drawn only when the 3 components add up to the total (zeros kept); otherwise a message, never a partial chart; empty message without Défaillant', async () => {
     const plain = (v) => JSON.parse(JSON.stringify(v));
     const stats = (failureBreakdown) => ({ '/dashboard/stats': { totalRows: 10, kpis: { total: 10 }, charts: { region: [], status: [], segmentation: [], meterType: [], failureBreakdown } } });
+    const msg = (ctx) => ctx.document.getElementById('bscdChart_postpaid_failure').parentNode.dataset.chartMsg;
 
-    // Only customers without a component: the chart is still drawn with its 3 components at 0.
-    let ctx = bootDashboard(stats({ total: 5, unassigned: 5, components: [
-        { value: 'ALWAYS_LATE', count: 0 }, { value: 'NEVER_PAID', count: 0 }, { value: 'SOMETIME_PAID', count: 0 },
+    // Sum = total, one component at 0: drawn, the zero kept.
+    let ctx = bootDashboard(stats({ total: 8, unassigned: 0, consistent: true, components: [
+        { value: 'ALWAYS_LATE', count: 0 }, { value: 'NEVER_PAID', count: 6 }, { value: 'SOMETIME_PAID', count: 2 },
     ] }));
     await settle();
-    assert.deepEqual(plain(ctx.charts.bscdChart_postpaid_failure.data.labels), ['Always Late', 'Never Paid', 'Sometime Paid']);
-    assert.deepEqual(plain(ctx.charts.bscdChart_postpaid_failure.data.datasets[0].data), [0, 0, 0]);
-    assert.equal(plain(ctx.charts.bscdChart_postpaid_failure.options.plugins.bscdValueLabels.center).value, '5');
+    assert.deepEqual(plain(ctx.charts.bscdChart_postpaid_failure.data.datasets[0].data), [0, 6, 2]);
+    assert.equal(msg(ctx), undefined);
 
-    // Everyone has a component: the secondary line is hidden and empty.
-    ctx = bootDashboard(stats({ total: 8, unassigned: 0, components: [
+    // 2026-11-17 before the fix (data version without components): 125 348 placed out of
+    // 492 123. Not drawn: the gap is neither a 4th slice nor balanced into a component.
+    ctx = bootDashboard(stats({ total: 492123, unassigned: 366775, consistent: false, components: [
+        { value: 'ALWAYS_LATE', count: 0 }, { value: 'NEVER_PAID', count: 125348 }, { value: 'SOMETIME_PAID', count: 0 },
+    ] }));
+    await settle();
+    assert.equal(ctx.charts.bscdChart_postpaid_failure, undefined);
+    assert.equal(msg(ctx), 'Décomposition indisponible pour cette version des données : elle sera disponible après la prochaine actualisation.');
+
+    // Checked in the browser too, whatever the server flag says.
+    ctx = bootDashboard(stats({ total: 9, unassigned: 0, components: [
         { value: 'ALWAYS_LATE', count: 2 }, { value: 'NEVER_PAID', count: 4 }, { value: 'SOMETIME_PAID', count: 2 },
     ] }));
     await settle();
-    const note = inSection(ctx.document, 'postpaid', '[data-failure-unassigned]');
-    assert.equal(note.textContent, '');
-    assert.equal(note.classList.contains('d-none'), true);
+    assert.equal(ctx.charts.bscdChart_postpaid_failure, undefined);
 
     // No Défaillant at all: no chart.
     ctx = bootDashboard(stats({ total: 0, unassigned: 0, components: [

@@ -170,7 +170,7 @@
             "alwaysLate": "Always Late",
             "sometimePaid": "Sometime Paid",
             "neverPaid": "Never Paid",
-            "unassigned": "Including {count} customers not broken down (no sub-category), counted in the total."
+            "unavailable": "Breakdown unavailable for this data version: it will be available after the next refresh."
         },
         "recency": {
             "classes": {

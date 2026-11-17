@@ -32,7 +32,11 @@ test('Défaillant breakdown: shares of the Défaillant total, 100 % together; no
     assert.deepEqual(view.rows.map((r) => r.share), [12.5, 50, 37.5]);
     assert.equal(view.rows.reduce((s, r) => s + r.count, 0), view.total);
     assert.equal(view.rows.reduce((s, r) => s + r.share, 0), 100);
-    assert.deepEqual(failureBreakdown(undefined), { total: 0, unassigned: 0, rows: [] });
+    assert.equal(view.consistent, true);
+    assert.deepEqual(failureBreakdown(undefined), { total: 0, unassigned: 0, consistent: true, rows: [] });
+    // The control: sum ≠ total, or the server says so.
+    assert.equal(failureBreakdown({ total: 9, components: [{ value: 'NEVER_PAID', count: 8 }] }).consistent, false);
+    assert.equal(failureBreakdown({ total: 8, consistent: false, components: [{ value: 'NEVER_PAID', count: 8 }] }).consistent, false);
     assert.deepEqual(failureBreakdown({ total: 0, components: [{ value: 'NEVER_PAID', count: 0 }] }).rows[0].share, 0);
 });
 

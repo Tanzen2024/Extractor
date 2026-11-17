@@ -184,6 +184,67 @@ car les conditions se chevauchent :
 Il n'y a plus de composante `OTHER` (décision du 09/11/2026) : son effectif est
 rangé dans `NEVER_PAID`, et les trois composantes totalisent exactement le profil.
 
+#### Depuis le 17/11/2026 : calculée par `customers:refresh`
+
+Le 16/11/2026, la table source est revenue au modèle à 27 colonnes, par
+décision métier : elle ne porte donc pas `FAILURE_SUBCATEGORY`. Le 17/11, le
+graphique affichait 125 348 clients répartis pour un total Défaillant de
+492 123. Les 366 775 clients restants n'étaient pas décomposés.
+
+**Cause.** Sans la colonne, l'application déduisait la composante du libellé
+brut de `SEGMENTATION` (`FailureSubcategories::LEGACY`) :
+
+| Libellé brut (4 statuts actifs) | Clients | Composante déduite |
+|---|---|---|
+| `8 Autre` (ancien non classé) | 125 348 | `NEVER_PAID` (dernier recours) |
+| `6 D��faillant` (« é » corrompu en amont, 2 × U+FFFD) | 366 775 | aucune : ce libellé ne dit pas laquelle |
+
+Les 366 775 n'étaient ni NULL ni vides par erreur de lecture : leur libellé ne
+porte tout simplement pas l'information, qui vit dans `POSTPAID_PROFILE_P`.
+
+**Correction.** Quand la table n'a pas la colonne, la requête d'extraction de
+`customers:refresh` la calcule
+(`OracleSnapshotExtractor::selectSql(…, deriveFailure: true)`) :
+
+* jointure externe sur la dernière ligne de `CMS_RFC.POSTPAID_PROFILE_P` de chaque
+  contrat (`ROW_NUMBER() … ORDER BY DATE_ DESC NULLS LAST`, `RN = 1`, sur
+  `SERVICE_NO = CONTRACT`), comme la CTE `calculated` de `customers_list.sql` ;
+* règle ci-dessus, mot pour mot (`FailureSubcategories::oracleRule()`). Un test
+  vérifie qu'elle reste identique à la colonne 28 de `customers_list.sql` ;
+* appliquée aux seules lignes dont `SEGMENTATION` est lue comme `6 Défaillant`,
+  toutes graphies confondues (`FailureSubcategories::defaillantLabels()` :
+  `6 Défaillant`, la graphie corrompue, `8 Autre` et les anciens libellés) ;
+  `NULL` pour toutes les autres. La population décomposée est donc exactement
+  celle du total au centre du graphique.
+
+Si la table porte un jour la colonne, elle est lue telle quelle, sans
+jointure.
+
+Mesure du 17/11/2026, en lecture seule (requête d'extraction réelle, statuts
+actifs) : 3 333 493 lignes, autant de contrats distincts, donc aucun doublon
+créé par la jointure. Le moteur a attribué une composante aux lignes suivantes :
+
+| Composante | Graphie corrompue | `8 Autre` | Total |
+|---|---|---|---|
+| `ALWAYS_LATE` | 46 195 | 0 | **46 195** |
+| `NEVER_PAID` (règle) | 182 011 | 0 | 182 011 |
+| `NEVER_PAID` (dernier recours : `BILL_NUMBER = 0` ou aucune ligne) | 2 648 | 125 348 | 128 007 |
+| `SOMETIME_PAID` | 135 921 | 0 | **135 921** |
+| **Total** | 366 775 | 125 348 | **492 123** |
+
+Le total `NEVER_PAID` est donc de 310 007 clients. Aucun écart n'a été affecté
+arbitrairement : chaque client reçoit la composante que lui donne la règle.
+
+**Contrôle.** `FailureSubcategories::breakdown()` renvoie `consistent = true`
+seulement si les trois composantes totalisent exactement le profil, calculées
+par la même requête et avec les mêmes filtres. Sinon, il écrit l'écart dans
+le journal, et le navigateur affiche « Décomposition indisponible… » à la place
+du graphique. Il n'y a jamais de quatrième catégorie ni de reliquat versé dans
+une composante. C'est le cas d'une version de données produite avant cette
+correction : la prochaine actualisation la remplace.
+
+#### Mise en production de la colonne dans la table (abandonnée le 16/11/2026)
+
 Mise en production, dans cet ordre, sur le serveur source :
 
 0. contrôle à blanc, sans écriture : `./validate_customers_list.sh customers_list.sql CMS_RFC@cmsprod` ;
@@ -204,12 +265,13 @@ Ordre de grandeur attendu (règle appliquée en lecture seule aux données du
 de profil ou `BILL_NUMBER = 0`), Sometime Paid 134 600 ; total 492 776, égal au
 profil `6 Défaillant`.
 
-`customers:refresh` lit la colonne dès qu'elle existe dans la table, sans autre
-changement. Les snapshots antérieurs restent décomposés à partir des anciens
-libellés (`FailureSubcategories::LEGACY`). Sur un index DuckDB construit sans
-l'information, l'écran affiche une note au lieu d'une répartition inexacte :
-`php spark snapshot:index --rebuild` la rétablit, tant que le CSV porte les
-anciens libellés ou la colonne.
+`customers:refresh` lit la colonne dès qu'elle existe dans la table, et la
+calcule sinon (voir plus haut). Les snapshots antérieurs restent décomposés à
+partir des anciens libellés (`FailureSubcategories::LEGACY`) quand ils le
+permettent. Si leur décomposition est incomplète, le graphique est remplacé
+par un message. `php spark snapshot:index --rebuild` reconstruit un index
+DuckDB construit sans l'information, tant que le CSV porte les anciens
+libellés ou la colonne.
 
 ## 0 quater. Segments PREPAID
 

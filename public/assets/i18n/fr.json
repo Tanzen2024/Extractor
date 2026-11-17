@@ -170,7 +170,7 @@
             "alwaysLate": "Always Late",
             "sometimePaid": "Sometime Paid",
             "neverPaid": "Never Paid",
-            "unassigned": "Dont {count} clients non décomposés (sous-catégorie non renseignée), inclus dans le total."
+            "unavailable": "Décomposition indisponible pour cette version des données : elle sera disponible après la prochaine actualisation."
         },
         "recency": {
             "classes": {

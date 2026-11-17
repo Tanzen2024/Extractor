@@ -807,8 +807,6 @@ body.dark-mode {
 .dark-mode .bscd-recency__note { color: var(--bscd-muted); }
 .dark-mode .bscd-recency__note.is-warning { color: #fbbf24; }
 /* Secondary line under the Défaillant doughnut: customers without a component (never a 4th slice). */
-.bscd-failure-unassigned { margin: .4rem 1rem .8rem; font-size: .72rem; color: #6b7280; text-align: center; }
-.dark-mode .bscd-failure-unassigned { color: var(--bscd-muted); }
 /* ── Data table ──────────────────────────────────────────── */
 .bscd-table-card {
     background: #fff; border: 1px solid #e3e6ec; border-radius: 8px;

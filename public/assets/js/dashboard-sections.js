@@ -92,13 +92,17 @@
      */
     function failureBreakdown(data) {
         var total = (data && Number(data.total)) || 0;
+        var rows = ((data && data.components) || []).map(function (c) {
+            var count = Number(c.count) || 0;
+            return { value: c.value, count: count, share: total ? count / total * 100 : 0 };
+        });
+        var sum = rows.reduce(function (s, r) { return s + r.count; }, 0);
         return {
             total: total,
             unassigned: (data && Number(data.unassigned)) || 0,
-            rows: ((data && data.components) || []).map(function (c) {
-                var count = Number(c.count) || 0;
-                return { value: c.value, count: count, share: total ? count / total * 100 : 0 };
-            })
+            // Checked here too: the three components must add up to the total.
+            consistent: sum === total && !(data && data.consistent === false),
+            rows: rows
         };
     }
 

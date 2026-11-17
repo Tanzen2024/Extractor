@@ -318,10 +318,163 @@ final class FailureSubcategoriesTest extends CIUnitTestCase
         }
     }
 
-    public function testRefreshReadsTheColumnOnlyWhenTheTableHasIt(): void
+    public function testRefreshReadsTheColumnWhenTheTableHasItAndComputesItOtherwise(): void
     {
         $this->assertStringNotContainsString(FailureSubcategories::COLUMN, OracleSnapshotExtractor::selectSql());
-        $this->assertStringContainsString(FailureSubcategories::COLUMN, OracleSnapshotExtractor::selectSql([FailureSubcategories::COLUMN]));
         $this->assertNotContains(FailureSubcategories::COLUMN, CustomerListExportService::COLUMNS);
+
+        // Table carrying the column (32-column model): read as is, no join.
+        [$columns, $derived] = OracleSnapshotExtractor::plannedColumns([FailureSubcategories::COLUMN, 'PREPAID_RECENCY_DAYS']);
+        $this->assertFalse($derived);
+        $this->assertSame([FailureSubcategories::COLUMN, 'PREPAID_RECENCY_DAYS'], array_slice($columns, count(CustomerListExportService::COLUMNS)));
+        $read = OracleSnapshotExtractor::selectSql([FailureSubcategories::COLUMN]);
+        $this->assertStringContainsString('t.' . FailureSubcategories::COLUMN, $read);
+        $this->assertStringNotContainsString('JOIN', $read);
+
+        // 27-column table (model in production since 2026-11-16): computed,
+        // always right after the exported columns (OPTIONAL_COLUMNS order).
+        [$columns, $derived] = OracleSnapshotExtractor::plannedColumns(['PREPAID_RECENCY_DAYS']);
+        $this->assertTrue($derived);
+        $this->assertSame([FailureSubcategories::COLUMN, 'PREPAID_RECENCY_DAYS'], array_slice($columns, count(CustomerListExportService::COLUMNS)));
+        [$columns, $derived] = OracleSnapshotExtractor::plannedColumns([]);
+        $this->assertTrue($derived);
+        $this->assertSame(array_merge(CustomerListExportService::COLUMNS, [FailureSubcategories::COLUMN]), $columns);
+
+        $sql = OracleSnapshotExtractor::selectSql([FailureSubcategories::COLUMN], true);
+        $this->assertMatchesRegularExpression('/\bEND AS ' . FailureSubcategories::COLUMN . '\b/', $sql);
+        $this->assertStringNotContainsString('t.' . FailureSubcategories::COLUMN, $sql, 'not read: the table has no such column');
+        $this->assertStringContainsString('FROM CMS_RFC.TB_CUSTOMERS_LIST t', $sql);
+        $this->assertStringContainsString('ROW_NUMBER() OVER (PARTITION BY SERVICE_NO ORDER BY DATE_ DESC NULLS LAST) AS RN', $sql);
+        $this->assertStringContainsString('FROM ' . FailureSubcategories::SOURCE_TABLE, $sql);
+        $this->assertStringContainsString('WHERE RN = 1', $sql, 'one row per contract: the join never multiplies a customer');
+        $this->assertStringContainsString('LEFT JOIN', $sql, 'a customer without history is kept (and gets the last resort)');
+        $this->assertStringContainsString('pp ON pp.SERVICE_NO = t.CONTRACT', $sql);
+        $this->assertStringContainsString(FailureSubcategories::oracleRule('pp'), $sql);
+        $this->assertSame(1, preg_match('/^[\x20-\x7E\n]*$/', $sql), 'ASCII only: no session character set can alter a label');
+
+        // The rows that get a component: every spelling of 6 Défaillant, nothing else.
+        $labels = FailureSubcategories::defaillantLabels();
+        $this->assertContains(PostpaidSegmentations::DEFAILLANT, $labels);
+        $this->assertContains(PostpaidSegmentations::DEFAILLANT_CORRUPTED, $labels);
+        $this->assertContains('8 Autre', $labels);
+        foreach (PostpaidSegmentations::VALUES as $profile) {
+            $this->assertSame($profile === PostpaidSegmentations::DEFAILLANT, in_array($profile, $labels, true), $profile);
+        }
+        foreach ($labels as $label) {
+            $this->assertStringContainsString(OracleSnapshotExtractor::oracleText($label), $sql, $label);
+            $this->assertSame(PostpaidSegmentations::DEFAILLANT, PostpaidSegmentations::LEGACY[$label] ?? $label, $label);
+        }
+    }
+
+    public function testOracleTextIsAsciiAndExact(): void
+    {
+        $this->assertSame("'8 Autre'", OracleSnapshotExtractor::oracleText('8 Autre'));
+        $this->assertSame("'6 D' || UNISTR('\\00E9') || 'faillant'", OracleSnapshotExtractor::oracleText('6 Défaillant'));
+        $this->assertSame("'6 D' || UNISTR('\\FFFD') || UNISTR('\\FFFD') || 'faillant'", OracleSnapshotExtractor::oracleText(PostpaidSegmentations::DEFAILLANT_CORRUPTED));
+        $this->assertSame("'l''an'", OracleSnapshotExtractor::oracleText("l'an"));
+        $this->assertSame("''", OracleSnapshotExtractor::oracleText(''));
+        $this->assertSame("UNISTR('\\D83D\\DE00')", OracleSnapshotExtractor::oracleText("\u{1F600}"));
+    }
+
+    /**
+     * The expression the refresh runs is the rule of customers_list.sql:
+     * same conditions, same order (the source's own CASE, once the profile
+     * test is set aside), and the same answer on every case of ruleCases().
+     *
+     * @dataProvider ruleCases
+     */
+    public function testTheComputedColumnIsTheSourceRule(?string $profile, ?int $bills, ?float $rate, ?int $bad, ?int $noPaid, ?string $expected): void
+    {
+        $norm = static fn (string $s): string => trim((string) preg_replace('/\s+/', ' ', $s));
+        $this->assertSame(1, preg_match('/THEN\s+(CASE\s+WHEN pp\.RATE.*?END)\s+END$/s', $this->rule(), $m));
+        $this->assertSame($norm($m[1]), $norm(FailureSubcategories::oracleRule('pp')));
+
+        if ($expected === null) {
+            $this->addToAssertionCount(1); // another profile: no component (the SEGMENTATION condition)
+
+            return;
+        }
+        if (! class_exists(SQLite3::class)) {
+            $this->markTestSkipped('sqlite3 extension absent.');
+        }
+        $db   = new SQLite3(':memory:');
+        $stmt = $db->prepare('SELECT ' . FailureSubcategories::oracleRule('pp') . ' AS c FROM '
+            . '(SELECT :bills AS BILL_NUMBER, :rate AS RATE, :bad AS BAD_COUNT, :np AS NO_PAID_COUNT) pp');
+        $stmt->bindValue(':bills', $bills, $bills === null ? SQLITE3_NULL : SQLITE3_INTEGER);
+        $stmt->bindValue(':rate', $rate, $rate === null ? SQLITE3_NULL : SQLITE3_FLOAT);
+        $stmt->bindValue(':bad', $bad, $bad === null ? SQLITE3_NULL : SQLITE3_INTEGER);
+        $stmt->bindValue(':np', $noPaid, $noPaid === null ? SQLITE3_NULL : SQLITE3_INTEGER);
+        $this->assertSame($expected, $stmt->execute()->fetchArray(SQLITE3_ASSOC)['c']);
+        $db->close();
+    }
+
+    /**
+     * Production shape of 2026-11-17 after the fix: the corrupted spelling
+     * and '8 Autre' carry the computed component. Every Défaillant customer
+     * counted once, in exactly one of the 3 components, sum = total, under
+     * any filter, in every engine; the export of a component = its figure.
+     */
+    public function testComputedComponentsAddUpToTheTotalUnderAnyFilter(): void
+    {
+        $bad  = PostpaidSegmentations::DEFAILLANT_CORRUPTED;
+        $rows = [];
+        foreach ([
+            [$bad, 'ALWAYS_LATE', 'DRC'], [$bad, 'NEVER_PAID', 'DRC'], [$bad, 'SOMETIME_PAID', 'DRC'], [$bad, 'SOMETIME_PAID', 'DRE'],
+            [$bad, 'NEVER_PAID', 'DRE'], ['8 Autre', 'NEVER_PAID', 'DRE'], ['8 Autre', 'NEVER_PAID', 'DRC'], ['6 Défaillant', 'ALWAYS_LATE', 'DRE'],
+            ['1 PERFECT', '', 'DRC'], ['4 At-Risk', '', 'DRE'],
+        ] as [$seg, $component, $region]) {
+            $rows[] = SnapshotFixture::row(count($rows) + 1, ['METER' => 'POSTPAID', 'SEGMENTATION' => $seg, 'STATUS' => 'ACTIVE', 'REGION' => $region, 'FAILURE_SUBCATEGORY' => $component]);
+        }
+        // Outside the active perimeter: never counted, component or not.
+        $rows[] = SnapshotFixture::row(11, ['METER' => 'POSTPAID', 'SEGMENTATION' => $bad, 'STATUS' => 'INACTIVE.', 'REGION' => 'DRC', 'FAILURE_SUBCATEGORY' => 'NEVER_PAID']);
+        $rows[] = SnapshotFixture::row(12, ['METER' => 'PREPAID', 'SEGMENTATION' => '3-At Risk', 'REGION' => 'DRC']);
+
+        $this->fx = new SnapshotFixture();
+        $this->fx->deliver(SnapshotFixture::csv($rows, array_merge(SnapshotFixture::HEADER, [FailureSubcategories::COLUMN])));
+        $r = (new SnapshotInstaller($this->fx->store))->install();
+        $this->assertSame(SnapshotInstaller::RESULT_ACTIVATED, $r['result'], (string) $r['message']);
+
+        $cases = [
+            'no filter'  => [FilterCriteria::none(), 8, [2, 4, 2]],
+            'region DRC' => [FilterCriteria::fromArray(['regions' => ['DRC']]), 4, [1, 2, 1]],
+            'region DRE' => [FilterCriteria::fromArray(['regions' => ['DRE']]), 4, [1, 2, 1]],
+            'Défaillant' => [FilterCriteria::fromArray(['segmentations' => [PostpaidSegmentations::DEFAILLANT]]), 8, [2, 4, 2]],
+            'other only' => [FilterCriteria::fromArray(['segmentations' => ['1 PERFECT']]), 0, [0, 0, 0]],
+        ];
+        foreach ($this->engines() as $name => [$engine, $source]) {
+            foreach ($cases as $case => [$criteria, $total, $counts]) {
+                $dist = $engine->distributions($criteria);
+                $out  = FailureSubcategories::breakdown($dist['segmentation'], $dist['failure']);
+                $this->assertSame($total, $out['total'], "{$name} / {$case}");
+                $this->assertSame($counts, array_column($out['components'], 'count'), "{$name} / {$case}");
+                $this->assertSame($out['total'], array_sum($counts), "{$name} / {$case}: sum = total");
+                $this->assertTrue($out['consistent'], "{$name} / {$case}");
+                $this->assertSame(0, $out['unassigned'], "{$name} / {$case}");
+            }
+
+            // Each customer once: the three lists are disjoint and together the profile.
+            $seen = [];
+            foreach (FailureSubcategories::VALUES as $value) {
+                $c    = FilterCriteria::fromArray(['failureSubcategories' => [$value]]);
+                $page = array_column($engine->page($c, '', null, 'asc', 0, 50), 'CONTRACT');
+                $this->assertSame($engine->count($c), count($page), "{$name} / {$value}");
+                $this->assertSame($source->count($c), count($page), "{$name} / {$value}: export = figure");
+                $seen = array_merge($seen, $page);
+            }
+            sort($seen);
+            $this->assertSame(['900001', '900002', '900003', '900004', '900005', '900006', '900007', '900008'], $seen, $name);
+        }
+    }
+
+    /** A snapshot produced before the column was computed: the control flags it, nothing is placed. */
+    public function testBreakdownWithoutComponentsIsFlaggedInconsistent(): void
+    {
+        $out = FailureSubcategories::breakdown(['6 Défaillant' => 492123], ['NEVER_PAID' => 125348]);
+        $this->assertFalse($out['consistent']);
+        $this->assertSame(366775, $out['unassigned']);
+        $this->assertSame([0, 125348, 0], array_column($out['components'], 'count'), 'never balanced into a component');
+
+        $this->assertTrue(FailureSubcategories::breakdown([], [])['consistent'], 'no Défaillant: nothing to break down');
+        $this->assertTrue(FailureSubcategories::breakdown(['6 Défaillant' => 3], ['ALWAYS_LATE' => 1, 'NEVER_PAID' => 1, 'SOMETIME_PAID' => 1])['consistent']);
     }
 }

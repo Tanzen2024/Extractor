@@ -2,6 +2,7 @@
 
 use App\Services\CustomerListExportService;
 use App\Services\CustomersList\BillingValue;
+use App\Services\CustomersList\FailureSubcategories;
 use App\Services\CustomersList\PrepaidRecency;
 use App\Services\CustomersList\FilterCriteria;
 use App\Services\OracleExtractionService;
@@ -95,7 +96,7 @@ final class CustomersRefreshTest extends TestCase
             $this->assertMatchesRegularExpression('/\b' . $column . '\b/', $sql);
         }
         foreach (OracleSnapshotExtractor::DATE_COLUMNS as $column) {
-            $this->assertStringContainsString("TO_CHAR({$column}, 'DD/MM/YYYY') AS {$column}", $sql);
+            $this->assertStringContainsString("TO_CHAR(t.{$column}, 'DD/MM/YYYY') AS {$column}", $sql);
         }
     }
 
@@ -177,7 +178,8 @@ final class CustomersRefreshTest extends TestCase
         $this->assertSame('oracle:CMS_RFC.TB_CUSTOMERS_LIST', $active->meta['manifest']['source']);
 
         $lines = file($active->csvPath, FILE_IGNORE_NEW_LINES);
-        $this->assertSame(implode('#', CustomerListExportService::COLUMNS), $lines[0]);
+        // 27-column table: FAILURE_SUBCATEGORY computed by the extraction query.
+        $this->assertSame(implode('#', CustomerListExportService::COLUMNS) . '#' . FailureSubcategories::COLUMN, $lines[0]);
         $this->assertCount(6, $lines);
         $this->assertStringContainsString('#15/04/2024#', $lines[1]);
         $this->assertFileDoesNotExist($this->fx->config->refreshTmpFile);
